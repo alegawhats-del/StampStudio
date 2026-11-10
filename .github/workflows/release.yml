@@ -78,7 +78,7 @@ jobs:
             $txt = Get-Content $out -Raw
             "$exe -> $txt"
             if ($txt -notmatch "^OK ${{ steps.ver.outputs.ver }} ") { Write-Error "$exe selftest wrong: $txt"; exit 1 }
-            if ($txt -notmatch "guide=11") { Write-Error "$exe: guide is not bundled: $txt"; exit 1 }
+            if ($txt -notmatch "guide=11") { Write-Error "guide is not bundled in ${exe} - $txt"; exit 1 }
           }
 
       - name: Inno Setup - both installers
