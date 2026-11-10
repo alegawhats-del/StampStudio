@@ -34,7 +34,7 @@ from PySide6.QtWidgets import (
     QSpinBox, QListWidget, QListWidgetItem, QGroupBox, QFormLayout,
     QProgressDialog, QDialog, QRadioButton, QDialogButtonBox, QInputDialog,
     QScrollArea, QSizePolicy, QFrame, QToolButton, QStatusBar, QLineEdit,
-    QTabBar, QSplitter, QMenu
+    QTabBar, QSplitter, QMenu, QToolBar
 )
 from PySide6.QtWidgets import (QProgressBar, QTableWidget, QTableWidgetItem, QHeaderView,
                                QAbstractItemView, QStackedWidget)
@@ -393,6 +393,13 @@ QListWidget#guidenav::item:selected { background: #2c3145; color: #e8b04b; }
 QListWidget#guidenav::item:hover { background: #232735; }
 QToolBar { padding: 4px 6px; spacing: 3px; }
 QToolBar QToolButton { min-height: 32px; max-height: 32px; padding: 0 6px; }
+QToolBar#tools { background: #171a22; border: none; border-right: 1px solid #262b39; padding: 6px 5px; spacing: 3px; }
+QToolBar#tools QToolButton { min-width: 30px; max-width: 30px; min-height: 30px; max-height: 30px; padding: 0;
+    background: transparent; border: 1px solid transparent; border-radius: 8px; }
+QToolBar#tools QToolButton:hover { background: #232735; border-color: #e8b04b; }
+QToolBar#tools QToolButton:checked { background: #3a321c; border-color: #e8b04b; }
+QToolBar#tools QToolButton:disabled { background: transparent; border-color: transparent; }
+QToolBar#tools::separator { background: #2a2f3d; height: 1px; margin: 4px 5px; }
 QMenuBar { background: #171a22; border-bottom: 1px solid #262b39; padding: 1px 6px; }
 QMenuBar::item { background: transparent; padding: 4px 12px; border-radius: 6px; color: #c9cddb; }
 QMenuBar::item:selected, QMenuBar::item:pressed { background: #2c3145; color: #e8b04b; }
@@ -456,6 +463,13 @@ QListWidget#guidenav::item:selected { background: #fbefd3; color: #8a5f0a; }
 QListWidget#guidenav::item:hover { background: #efeadf; }
 QToolBar { padding: 4px 6px; spacing: 3px; }
 QToolBar QToolButton { min-height: 32px; max-height: 32px; padding: 0 6px; }
+QToolBar#tools { background: #fbf9f4; border: none; border-right: 1px solid #e6e1d6; padding: 6px 5px; spacing: 3px; }
+QToolBar#tools QToolButton { min-width: 30px; max-width: 30px; min-height: 30px; max-height: 30px; padding: 0;
+    background: transparent; border: 1px solid transparent; border-radius: 8px; }
+QToolBar#tools QToolButton:hover { background: #ffffff; border-color: #d69a33; }
+QToolBar#tools QToolButton:checked { background: #fbefd3; border-color: #d69a33; }
+QToolBar#tools QToolButton:disabled { background: transparent; border-color: transparent; }
+QToolBar#tools::separator { background: #e6e1d6; height: 1px; margin: 4px 5px; }
 QMenuBar { background: #fbf9f4; border-bottom: 1px solid #e6e1d6; padding: 1px 6px; }
 QMenuBar::item { background: transparent; padding: 4px 12px; border-radius: 6px; color: #4a4636; }
 QMenuBar::item:selected, QMenuBar::item:pressed { background: #f4e3c2; color: #6b4a00; }
@@ -493,7 +507,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.4.1"
+APP_VERSION = "6.4.2"
 EDITION = "canon"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -1551,6 +1565,27 @@ def draw_icon(kind: str, color: str, size: int = 64) -> QIcon:
         path.quadTo(7.0 * u, 8.4 * u, 7.0 * u, 2.8 * u)
         p.drawPath(path)
         line(12.6, 2.2, 12.6, 5.0); line(11.2, 3.6, 14.0, 3.6)
+    elif kind in ("zoom_in", "zoom_out"):
+        p.drawEllipse(QPointF(7.0 * u, 7.0 * u), 4.4 * u, 4.4 * u)
+        line(10.3, 10.3, 13.6, 13.6)
+        line(5.0, 7.0, 9.0, 7.0)
+        if kind == "zoom_in":
+            line(7.0, 5.0, 7.0, 9.0)
+    elif kind == "fit":
+        for (x, y, dx, dy) in ((2.6, 2.6, 1, 1), (13.4, 2.6, -1, 1), (2.6, 13.4, 1, -1), (13.4, 13.4, -1, -1)):
+            line(x, y, x + 3.4 * dx, y); line(x, y, x, y + 3.4 * dy)
+        rect(5.6, 5.6, 4.8, 4.8, 0.8)
+    elif kind == "ocr":
+        for (x, y, dx, dy) in ((2.4, 2.4, 1, 1), (13.6, 2.4, -1, 1), (2.4, 13.6, 1, -1), (13.6, 13.6, -1, -1)):
+            line(x, y, x + 2.6 * dx, y); line(x, y, x, y + 2.6 * dy)
+        line(5.4, 5.4, 10.6, 5.4); line(8.0, 5.4, 8.0, 11.0)
+    elif kind == "aim":
+        p.drawEllipse(QPointF(8.0 * u, 8.0 * u), 4.6 * u, 4.6 * u)
+        line(8.0, 1.6, 8.0, 4.6); line(8.0, 11.4, 8.0, 14.4)
+        line(1.6, 8.0, 4.6, 8.0); line(11.4, 8.0, 14.4, 8.0)
+        p.setBrush(c)
+        p.drawEllipse(QPointF(8.0 * u, 8.0 * u), 0.9 * u, 0.9 * u)
+        p.setBrush(Qt.NoBrush)
     elif kind == "more":
         p.setBrush(c)
         for cx in (4.0, 8.0, 12.0):
@@ -5147,7 +5182,7 @@ class AiSettingsDialog(QDialog):
         self.models = dict(s.get("ai_models") or {})
         self.custom_url = s.get("ai_custom_url", "")
         self.chosen = s.get("ai_provider") or AI.default_provider(s)
-        self._row = -1
+        self._cur = None
         self._test_thread = None
 
         root = QVBoxLayout(self)
@@ -5191,6 +5226,9 @@ class AiSettingsDialog(QDialog):
         self.lbl_best = QLabel("")
         self.lbl_best.setObjectName("plain")
         self.lbl_best.setWordWrap(True)
+        self.lbl_best.setTextFormat(Qt.RichText)
+        self.lbl_best.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        self.lbl_best.setMinimumHeight(96)
         cl.addWidget(self.lbl_best)
         self.lbl_count = QLabel("")
         self.lbl_count.setObjectName("hint")
@@ -5352,8 +5390,7 @@ class AiSettingsDialog(QDialog):
         self._page(0)
         self._fill_list()
         self.lst.currentRowChanged.connect(self._show)
-        names = [p["name"] for p in AI.PROVIDERS]
-        self.lst.setCurrentRow(names.index(self.chosen) if self.chosen in names else 0)
+        self.select(self.chosen)
         self._sync_auto()
 
     def _page(self, n):
@@ -5373,23 +5410,52 @@ class AiSettingsDialog(QDialog):
             return "встроенный ключ"
         return "нужен ключ"
 
+    def _connected(self, p):
+        return self._state(p) not in ("нужен ключ", "не настроен")
+
     def _fill_list(self):
+        """Сначала подключённые (с ключом), потом доступные; внутри — по рейтингу."""
         self.lst.blockSignals(True)
-        row = self.lst.currentRow()
         self.lst.clear()
-        for p in AI.PROVIDERS:
-            st = self._state(p)
-            star = "★ " if p["name"] == self.chosen else ""
-            it = QListWidgetItem(f"{star}{p['name'].split(' (')[0]}\n{st}")
-            it.setData(Qt.UserRole, p["name"])
-            if st in ("нужен ключ", "не настроен"):
-                it.setForeground(QColor("#9a9486"))
-            self.lst.addItem(it)
-        self.lst.setCurrentRow(row)
+        ranked = sorted(AI.PROVIDERS, key=lambda p: -p["stars"])
+        groups = (("ПОДКЛЮЧЕНЫ", [p for p in ranked if self._connected(p)]),
+                  ("ДОСТУПНЫ — НУЖЕН КЛЮЧ", [p for p in ranked if not self._connected(p)]))
+        for title, items in groups:
+            if not items:
+                continue
+            head = QListWidgetItem(title)
+            head.setFlags(Qt.NoItemFlags)
+            head.setData(Qt.UserRole, None)
+            f = head.font()
+            f.setBold(True)
+            f.setPointSizeF(max(7.0, f.pointSizeF() - 1.5))
+            head.setFont(f)
+            head.setForeground(QColor("#b08a3c"))
+            self.lst.addItem(head)
+            for p in items:
+                on = self._connected(p)
+                stars = ("★" * p["stars"] + "☆" * (5 - p["stars"])) if p["stars"] else ""
+                mark = "✓ " if on else "+ "
+                main = "основной · " if p["name"] == self.chosen else ""
+                it = QListWidgetItem(f"{mark}{p['name'].split(' (')[0]}  {stars}\n     {main}{p['short']}")
+                it.setData(Qt.UserRole, p["name"])
+                it.setToolTip(f"{self._state(p)}\nЛучше всего для: {p['tasks']}\n{p['why']}")
+                if not on:
+                    it.setForeground(QColor("#9a9486"))
+                self.lst.addItem(it)
         self.lst.blockSignals(False)
+        self.select(self._cur, show=False)
+
+    def select(self, name, show=True):
+        for i in range(self.lst.count()):
+            if self.lst.item(i).data(Qt.UserRole) == name:
+                self.lst.blockSignals(not show)
+                self.lst.setCurrentRow(i)
+                self.lst.blockSignals(False)
+                return
 
     def _current(self):
-        return AI.PROVIDERS[self._row] if 0 <= self._row < len(AI.PROVIDERS) else None
+        return AI.provider(self._cur) if self._cur else None
 
     def _keep(self):
         """Запомнить то, что введено для открытого сервиса."""
@@ -5411,15 +5477,18 @@ class AiSettingsDialog(QDialog):
             self.custom_url = self.ed_url.text().strip()
 
     def _show(self, row):
-        self._keep()
-        self._row = row
-        p = self._current()
-        if p is None:
+        item = self.lst.item(row)
+        name = item.data(Qt.UserRole) if item is not None else None
+        if not name:
             return
-        name = p["name"]
-        self.lbl_name.setText(name + ("   ★ основной" if name == self.chosen else ""))
-        stars = "★" * p["stars"] + "☆" * (5 - p["stars"]) if p["stars"] else ""
-        self.lbl_best.setText((stars + " — " if stars else "") + p["best"])
+        self._keep()
+        self._cur = name
+        p = self._current()
+        self.lbl_name.setText(name.split(" (")[0] + ("   · основной" if name == self.chosen else ""))
+        stars = ("★" * p["stars"] + "☆" * (5 - p["stars"]) + "   ") if p["stars"] else ""
+        state = self._state(p)
+        self.lbl_best.setText(f"{stars}{state}<br><b>Лучше всего для:</b> {p['tasks']}<br>"
+                              f"<b>Почему:</b> {p['why']}")
         self.lbl_count.setText(AI.count_text(name))
         custom, nokey = bool(p.get("custom")), bool(p.get("nokey"))
         self.lbl_url.setVisible(custom)
@@ -5456,7 +5525,7 @@ class AiSettingsDialog(QDialog):
         self._keep()
         self.chosen = p["name"]
         self._fill_list()
-        self._show(self._row)
+        self._show(self.lst.currentRow())
 
     def _sync_auto(self):
         on = self.chk_auto.isChecked()
@@ -5951,7 +6020,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle(f"{APP_TITLE} {APP_VERSION}")
         self.resize(1400, 860)
-        self.setMinimumSize(1180, 640)
+        self.setMinimumSize(1180, 680)
 
         self.doc = None
         self.doc_path = None
@@ -6172,6 +6241,19 @@ class MainWindow(QMainWindow):
             settings_save(s)
         except Exception:
             pass
+        for th in getattr(self, "_ai_threads", []):     # не бросать запросы ИИ на полуслове
+            try:
+                th.cancelled = True
+                th.done.disconnect()
+                th.failed.disconnect()
+            except Exception:
+                pass
+        for th in getattr(self, "_ai_threads", []):
+            try:
+                if th.isRunning() and not th.wait(1500):
+                    th.setParent(None)                  # сетевой запрос сам закончится по таймауту
+            except Exception:
+                pass
         super().closeEvent(event)
 
     # ====================================================================== меню и ИИ
@@ -6213,13 +6295,18 @@ class MainWindow(QMainWindow):
         m.addAction(self.act_pen)
         m.addAction(self.act_delete)
         m.addSeparator()
-        m.addAction(act("Повернуть страницу влево", lambda: self.rotate_page(-90), "Ctrl+L", doc=True))
-        m.addAction(act("Повернуть страницу вправо", lambda: self.rotate_page(90), "Ctrl+Shift+L", doc=True))
-        m.addAction(act("Обрезать поля…", self.crop_page, None, "Убрать лишние поля по краям", doc=True))
-        m.addAction(act("Кадрировать рамкой…", self.frame_crop_page, None,
-                        "Оставить от страницы только область в рамке", doc=True))
-        m.addAction(act("Разрезать на две бумаги…", self.split_page_two, None,
-                        "Разложить два документа со страницы как два листа на стекле сканера", doc=True))
+        self.act_rot_l = act("Повернуть страницу влево", lambda: self.rotate_page(-90), "Ctrl+L", doc=True)
+        m.addAction(self.act_rot_l)
+        self.act_rot_r = act("Повернуть страницу вправо", lambda: self.rotate_page(90), "Ctrl+Shift+L", doc=True)
+        m.addAction(self.act_rot_r)
+        self.act_crop = act("Обрезать поля…", self.crop_page, None, "Убрать лишние поля по краям", doc=True)
+        m.addAction(self.act_crop)
+        self.act_frame = act("Кадрировать рамкой…", self.frame_crop_page, None,
+                             "Оставить от страницы только область в рамке", doc=True)
+        m.addAction(self.act_frame)
+        self.act_split = act("Разрезать на две бумаги…", self.split_page_two, None,
+                             "Разложить два документа со страницы как два листа на стекле сканера", doc=True)
+        m.addAction(self.act_split)
         m.addAction(self.act_scanlook)
         m.addSeparator()
         m.addAction(self.act_org)
@@ -6230,10 +6317,13 @@ class MainWindow(QMainWindow):
 
         # ---- Вид
         m = mb.addMenu("Вид")
-        m.addAction(act("Увеличить", lambda: self._zoom(1.2), "Ctrl+=", "Приблизить страницу", doc=True))
-        m.addAction(act("Уменьшить", lambda: self._zoom(1 / 1.2), "Ctrl+-", "Отдалить страницу", doc=True))
-        m.addAction(act("Страница целиком", lambda: self._zoom(0), "Ctrl+0",
-                        "Показать страницу целиком", doc=True))
+        self.act_zoom_in = act("Увеличить", lambda: self._zoom(1.2), "Ctrl+=", "Приблизить страницу", doc=True)
+        m.addAction(self.act_zoom_in)
+        self.act_zoom_out = act("Уменьшить", lambda: self._zoom(1 / 1.2), "Ctrl+-", "Отдалить страницу", doc=True)
+        m.addAction(self.act_zoom_out)
+        self.act_fit = act("Страница целиком", lambda: self._zoom(0), "Ctrl+0",
+                           "Показать страницу целиком", doc=True)
+        m.addAction(self.act_fit)
         m.addSeparator()
         m.addAction(act("Следующая страница", lambda: self._step_page(1), "Ctrl+PgDown", doc=True))
         m.addAction(act("Предыдущая страница", lambda: self._step_page(-1), "Ctrl+PgUp", doc=True))
@@ -6252,6 +6342,38 @@ class MainWindow(QMainWindow):
                         "Проверить, не вышла ли новая версия"))
         m.addSeparator()
         m.addAction(act("О программе", self.show_about))
+        self._build_toolstrip()
+
+    def _build_toolstrip(self):
+        """Вертикальная панель инструментов у левого края, как в графических редакторах:
+        те же действия, что в меню «Правка», «Вид» и «ИИ», — одним щелчком."""
+        tb = QToolBar("Инструменты", self)
+        tb.setObjectName("tools")
+        tb.setMovable(False)
+        tb.setOrientation(Qt.Vertical)
+        tb.setToolButtonStyle(Qt.ToolButtonIconOnly)
+        tb.setIconSize(QSize(18, 18))
+        self.addToolBar(Qt.LeftToolBarArea, tb)
+        self.tool_strip = tb
+        known = {a: k for a, k in self._themed_actions}
+        groups = [
+            [(self.act_place, "stamp"), (self.act_pen, "pen"), (self.act_ai_place, "aim"), (self.act_delete, "trash")],
+            [(self.act_rot_l, "rot_left"), (self.act_rot_r, "rot_right"), (self.act_crop, "crop"),
+             (self.act_frame, "frame"), (self.act_split, "split")],
+            [(self.act_scanlook, "scanlook"), (self.act_ai_ocr, "ocr")],
+            [(self.act_zoom_in, "zoom_in"), (self.act_zoom_out, "zoom_out"), (self.act_fit, "fit")],
+        ]
+        for n, group in enumerate(groups):
+            if n:
+                tb.addSeparator()
+            for a, kind in group:
+                if a not in known:
+                    self._themed_actions.append((a, kind))
+                key = a.shortcut().toString()
+                name = a.text().replace("…", "")
+                tip = a.statusTip() if a.statusTip() and a.statusTip() != name else ""
+                a.setToolTip(name + (f"  ({key})" if key else "") + (f"\n{tip}" if tip and name not in tip else ""))
+                tb.addAction(a)
 
     def _build_ai_menu(self):
         """Меню «ИИ»: пять помощников, галочка «автоматически», настройки."""
