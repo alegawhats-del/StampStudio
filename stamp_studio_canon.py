@@ -391,8 +391,8 @@ QListWidget#guidenav { background: #1b1e27; border: none; border-right: 1px soli
 QListWidget#guidenav::item { padding: 9px 12px; border-radius: 8px; margin: 1px 0; }
 QListWidget#guidenav::item:selected { background: #2c3145; color: #e8b04b; }
 QListWidget#guidenav::item:hover { background: #232735; }
-QToolBar { padding: 4px 6px; }
-QToolBar QToolButton { min-height: 32px; max-height: 32px; }
+QToolBar { padding: 4px 6px; spacing: 3px; }
+QToolBar QToolButton { min-height: 32px; max-height: 32px; padding: 0 6px; }
 QMenuBar { background: #171a22; border-bottom: 1px solid #262b39; padding: 1px 6px; }
 QMenuBar::item { background: transparent; padding: 4px 12px; border-radius: 6px; color: #c9cddb; }
 QMenuBar::item:selected, QMenuBar::item:pressed { background: #2c3145; color: #e8b04b; }
@@ -454,8 +454,8 @@ QListWidget#guidenav { background: #f6f3ec; border: none; border-right: 1px soli
 QListWidget#guidenav::item { padding: 9px 12px; border-radius: 8px; margin: 1px 0; }
 QListWidget#guidenav::item:selected { background: #fbefd3; color: #8a5f0a; }
 QListWidget#guidenav::item:hover { background: #efeadf; }
-QToolBar { padding: 4px 6px; }
-QToolBar QToolButton { min-height: 32px; max-height: 32px; }
+QToolBar { padding: 4px 6px; spacing: 3px; }
+QToolBar QToolButton { min-height: 32px; max-height: 32px; padding: 0 6px; }
 QMenuBar { background: #fbf9f4; border-bottom: 1px solid #e6e1d6; padding: 1px 6px; }
 QMenuBar::item { background: transparent; padding: 4px 12px; border-radius: 6px; color: #4a4636; }
 QMenuBar::item:selected, QMenuBar::item:pressed { background: #f4e3c2; color: #6b4a00; }
@@ -493,7 +493,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.4.0"
+APP_VERSION = "6.4.1"
 EDITION = "canon"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -6049,6 +6049,18 @@ class MainWindow(QMainWindow):
                                 "Сжать PDF — уменьшить размер файла")
         tb.addSeparator()
 
+        # картинки ↔ PDF: на панели значки с подсказкой, в меню «Файл» — с полным названием
+        self.act_images = add("images", "Открыть картинки как документ…", self.open_images_as_doc, None,
+                              "Открыть картинки PNG/JPG как страницы документа")
+        tb.widgetForAction(self.act_images).setToolButtonStyle(Qt.ToolButtonIconOnly)
+        self.act_topdf = add("to_pdf", "Собрать PDF из картинок…", self.images_to_pdf, None,
+                             "Собрать PDF из готовых картинок")
+        tb.widgetForAction(self.act_topdf).setToolButtonStyle(Qt.ToolButtonIconOnly)
+        self.act_png = add("to_png", "Сохранить страницы картинками PNG…", self.export_pngs, None,
+                           "Сохранить все страницы картинками PNG")
+        tb.widgetForAction(self.act_png).setToolButtonStyle(Qt.ToolButtonIconOnly)
+        tb.addSeparator()
+
         # ИИ-помощник: то же меню стоит в строке меню сверху
         self.btn_ai = QToolButton()
         self.btn_ai.setText("ИИ")
@@ -6059,23 +6071,15 @@ class MainWindow(QMainWindow):
         tb.addWidget(self.btn_ai)
         self._themed_toolbtns = [(self.btn_ai, "ai")]
 
-        # редкие действия живут только в меню «Файл»
-        self.act_images = add("images", "Открыть картинки как документ…", self.open_images_as_doc, None,
-                              "Открыть картинки PNG/JPG как страницы документа", target=self)
-        self.act_topdf = add("to_pdf", "Собрать PDF из картинок…", self.images_to_pdf, None,
-                             "Собрать PDF из готовых картинок", target=self)
-        self.act_png = add("to_png", "Сохранить страницы картинками PNG…", self.export_pngs, None,
-                           "Сохранить все страницы картинками PNG", target=self)
         self.act_meta = add("meta", "Метаданные PDF…", self.show_metadata, None,
                             "Посмотреть и очистить метаданные PDF", target=self)
         self.act_close = add("close", "Закрыть документ", self.close_document, "Ctrl+W",
                              "Закрыть открытый документ", target=self)
 
-        spacer = QWidget()
-        spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        tb.addWidget(spacer)
+        tb.addSeparator()      # всё стоит плотно слева — вид панели не зависит от ширины окна
         self.act_help = add("help", "Справка", self.show_guide, "F1",
                             "Как пользоваться программой — с картинками")
+        tb.widgetForAction(self.act_help).setToolButtonStyle(Qt.ToolButtonIconOnly)
         self.theme_action = add("moon", "", self.toggle_theme, None, "Светлая / тёмная тема")
 
         # Удаление выбранной печати — по Del
