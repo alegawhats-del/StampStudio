@@ -22,7 +22,8 @@ except ImportError:       # старые версии PyMuPDF
 from PIL import Image, ImageChops, ImageDraw, ImageEnhance, ImageFilter, ImageStat
 from PySide6.QtCore import Qt, QRect, QRectF, QSize, QThread, Signal, QEvent, QObject
 from PySide6.QtCore import QTimer, QPropertyAnimation
-from PySide6.QtWidgets import QGraphicsOpacityEffect
+from PySide6.QtWidgets import (QGraphicsOpacityEffect, QGraphicsObject,
+                               QGraphicsDropShadowEffect, QTextBrowser, QGridLayout)
 from PySide6.QtGui import (QAction, QIcon, QImage, QPixmap, QTransform, QPainter,
                            QKeySequence, QPen, QColor)
 from PySide6.QtWidgets import (
@@ -82,8 +83,8 @@ QToolBar {{
 }}
 QToolBar QToolButton {{
     background: #232735; color: #e8e6e1; border: 1px solid #2e3345;
-    border-radius: 9px; padding: 0 12px; margin: 0 1px;
-    min-height: 36px; max-height: 36px; min-width: 24px;
+    border-radius: 9px; padding: 0 9px; margin: 0;
+    min-height: 36px; max-height: 36px; min-width: 22px;
 }}
 QToolBar QToolButton:pressed {{ background: #2c3145; }}
 QToolBar QToolButton:disabled {{ color: #565c70; border-color: #262a37; }}
@@ -221,8 +222,8 @@ QToolBar {{
 }}
 QToolBar QToolButton {{
     background: #faf8f4; color: #2b2a26; border: 1px solid #e2ddd2;
-    border-radius: 9px; padding: 0 12px; margin: 0 1px;
-    min-height: 36px; max-height: 36px; min-width: 24px;
+    border-radius: 9px; padding: 0 9px; margin: 0;
+    min-height: 36px; max-height: 36px; min-width: 22px;
 }}
 QToolBar QToolButton:pressed {{ background: #f0e6d2; }}
 QToolBar QToolButton:disabled {{ color: #b8b2a4; border-color: #ece7db; }}
@@ -355,10 +356,69 @@ QCheckBox:hover {{ color: #8a5f0a; }}
 QGroupBox::title {{ letter-spacing: 0.4px; }}
 """
 
+
+
+# Дополнения к темам: ручка, компактные «золотые» кнопки, справка, сворачиваемый блок
+EXTRA_QSS_DARK = """
+QFrame#penbar { background: #1f2330; border: 1px solid #3a4057; border-radius: 14px; }
+QLabel#pencap { color: #8a8fa3; font-size: 11px; }
+QLabel#penval { color: #e8b04b; font-size: 11px; font-weight: bold; }
+QPushButton#primary {
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #f0be62, stop:1 #d69a33);
+    color: #1b1300; font-weight: bold; border: none; border-radius: 9px; padding: 6px 16px;
+}
+QPushButton#primary:hover { background: #ffd27a; }
+QPushButton#primary:disabled { background: #2a2e3b; color: #5a6072; }
+QToolButton#section {
+    background: transparent; border: none; color: #8a8fa3; font-weight: bold;
+    font-size: 12px; letter-spacing: 0.6px; text-align: left; padding: 6px 4px;
+}
+QToolButton#section:hover { color: #e8b04b; }
+QToolBar QToolButton::menu-indicator { image: none; width: 0; }
+QScrollArea { background: transparent; border: none; }
+QScrollArea > QWidget > QWidget { background: transparent; }
+QPushButton#verbtn { color: #8a8fa3; border: none; background: transparent; padding: 2px 10px; }
+QPushButton#verbtn:hover { color: #e8b04b; }
+QTextBrowser#guide { background: #171a22; border: none; padding: 6px 18px; font-size: 14px; }
+QListWidget#guidenav { background: #1b1e27; border: none; border-right: 1px solid #2a2f3d;
+    padding: 10px 6px; font-size: 13px; outline: none; }
+QListWidget#guidenav::item { padding: 9px 12px; border-radius: 8px; margin: 1px 0; }
+QListWidget#guidenav::item:selected { background: #2c3145; color: #e8b04b; }
+QListWidget#guidenav::item:hover { background: #232735; }
+"""
+
+EXTRA_QSS_LIGHT = """
+QFrame#penbar { background: #ffffff; border: 1px solid #d9d3c5; border-radius: 14px; }
+QLabel#pencap { color: #8a8474; font-size: 11px; }
+QLabel#penval { color: #a8730c; font-size: 11px; font-weight: bold; }
+QPushButton#primary {
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #f0be62, stop:1 #d69a33);
+    color: #2a1e00; font-weight: bold; border: none; border-radius: 9px; padding: 6px 16px;
+}
+QPushButton#primary:hover { background: #ffd27a; }
+QPushButton#primary:disabled { background: #ece7db; color: #b8b2a4; }
+QToolButton#section {
+    background: transparent; border: none; color: #8a8474; font-weight: bold;
+    font-size: 12px; letter-spacing: 0.6px; text-align: left; padding: 6px 4px;
+}
+QToolButton#section:hover { color: #a8730c; }
+QToolBar QToolButton::menu-indicator { image: none; width: 0; }
+QScrollArea { background: transparent; border: none; }
+QScrollArea > QWidget > QWidget { background: transparent; }
+QPushButton#verbtn { color: #8a8474; border: none; background: transparent; padding: 2px 10px; }
+QPushButton#verbtn:hover { color: #a8730c; }
+QTextBrowser#guide { background: #ffffff; border: none; padding: 6px 18px; font-size: 14px; }
+QListWidget#guidenav { background: #f6f3ec; border: none; border-right: 1px solid #e6e1d6;
+    padding: 10px 6px; font-size: 13px; outline: none; }
+QListWidget#guidenav::item { padding: 9px 12px; border-radius: 8px; margin: 1px 0; }
+QListWidget#guidenav::item:selected { background: #fbefd3; color: #8a5f0a; }
+QListWidget#guidenav::item:hover { background: #efeadf; }
+"""
+
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.2.0"
+APP_VERSION = "6.3.0"
 EDITION = "main"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -564,6 +624,8 @@ class ColumnGrid(QListWidget):
         super().__init__(parent)
         self.columns = columns
         self.min_cell = min_cell
+        self.max_icon = 512         # потолок размера иконки
+        self.min_rows = 0           # сколько рядов должно быть видно всегда
         self.setViewMode(QListWidget.IconMode)
         self.setResizeMode(QListWidget.Adjust)
         self.setMovement(QListWidget.Static)
@@ -578,9 +640,11 @@ class ColumnGrid(QListWidget):
         gap = self.spacing() * 2
         cell = max(self.min_cell, (vp - 4) // self.columns - gap)
         if self.gridSize().width() != cell:
-            icon = max(44, cell - gap - 20)
+            icon = max(44, min(self.max_icon, cell - gap - 20))
             self.setGridSize(QSize(cell, icon + 26))
             self.setIconSize(QSize(icon, icon))
+            if self.min_rows:
+                self.setMinimumHeight(self.min_rows * (icon + 26) + 2 * self.spacing() + 4)
 
     def sizeHint(self):
         # по умолчанию QListWidget просит 192px — из-за этого панель
@@ -748,6 +812,220 @@ class MascotOverlay(QLabel):
         return False
 
 
+
+# ======================================================================
+#  Ручка: подпись рисуется мышью прямо на странице
+# ======================================================================
+
+PEN_INKS = [("Синяя", (27, 54, 168)), ("Тёмно-синяя", (22, 32, 104)), ("Чёрная", (28, 28, 32))]
+
+
+def pen_dense_points(pts):
+    """Сглаженная ломаная: квадратичные кривые через середины отрезков,
+    с шагом около 0.7 px. pts — [(x, y, w)], возвращает такие же тройки."""
+    n = len(pts)
+    if n == 0:
+        return []
+    if n == 1:
+        return [pts[0]]
+    if n == 2:
+        pts = [pts[0], ((pts[0][0] + pts[1][0]) / 2, (pts[0][1] + pts[1][1]) / 2,
+                        (pts[0][2] + pts[1][2]) / 2), pts[1]]
+        n = 3
+
+    def mid(a, b):
+        return ((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2)
+
+    out = [pts[0]]
+    start = pts[0]
+    for i in range(1, n - 1):
+        ctrl = pts[i]
+        end = mid(pts[i], pts[i + 1]) if i < n - 2 else pts[n - 1]
+        length = (abs(ctrl[0] - start[0]) + abs(ctrl[1] - start[1])
+                  + abs(end[0] - ctrl[0]) + abs(end[1] - ctrl[1]))
+        steps = max(2, int(length / 0.7))
+        for s in range(1, steps + 1):
+            t = s / steps
+            a, b, c = (1 - t) ** 2, 2 * (1 - t) * t, t * t
+            out.append((a * start[0] + b * ctrl[0] + c * end[0],
+                        a * start[1] + b * ctrl[1] + c * end[1],
+                        a * start[2] + b * ctrl[2] + c * end[2]))
+        start = end
+    return out
+
+
+def pen_paint_strokes(painter, strokes, color):
+    """Нарисовать штрихи переменной толщины (как шариковая ручка)."""
+    r, g, b = color
+    painter.setRenderHint(QPainter.Antialiasing, True)
+    col = QColor(r, g, b, 238)
+    for st in strokes:
+        dense = st.get("dense") or pen_dense_points(st["pts"])
+        if not dense:
+            continue
+        if len(dense) == 1:
+            x, y, w = dense[0]
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(col)
+            painter.drawEllipse(QPointF(x, y), w / 2, w / 2)
+            continue
+        pen = QPen(col, 1.0)
+        pen.setCapStyle(Qt.RoundCap)
+        pen.setJoinStyle(Qt.RoundJoin)
+        px, py, pw = dense[0]
+        for x, y, w in dense[1:]:
+            pen.setWidthF(max(0.3, (pw + w) / 2))
+            painter.setPen(pen)
+            painter.drawLine(QPointF(px, py), QPointF(x, y))
+            px, py, pw = x, y, w
+
+
+class PenLayer(QGraphicsObject):
+    """Слой поверх страницы, на котором видно, что рисуется."""
+
+    def __init__(self, rect):
+        super().__init__()
+        self._rect = QRectF(rect)
+        self.strokes = []
+        self.color = PEN_INKS[0][1]
+        self.setZValue(50)
+
+    def boundingRect(self):
+        return self._rect
+
+    def paint(self, painter, option, widget=None):
+        pen_paint_strokes(painter, self.strokes, self.color)
+
+
+class PenBar(QFrame):
+    """Плавающая панель ручки над страницей."""
+
+    def __init__(self, parent, on_change, on_undo, on_clear, on_done, on_cancel):
+        super().__init__(parent)
+        self.setObjectName("penbar")
+        self.on_change = on_change
+        st = settings_load().get("pen", {})
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(14, 10, 14, 10)
+        outer.setSpacing(8)
+        lay = QHBoxLayout()
+        lay.setSpacing(12)
+        outer.addLayout(lay)
+        try:
+            sh = QGraphicsDropShadowEffect(self)
+            sh.setBlurRadius(28)
+            sh.setOffset(0, 6)
+            sh.setColor(QColor(0, 0, 0, 70))
+            self.setGraphicsEffect(sh)
+        except Exception:
+            pass
+
+        def labelled(text, slider, value_label):
+            box = QVBoxLayout()
+            box.setSpacing(1)
+            top = QHBoxLayout()
+            cap = QLabel(text)
+            cap.setObjectName("pencap")
+            top.addWidget(cap)
+            top.addStretch(1)
+            value_label.setObjectName("penval")
+            top.addWidget(value_label)
+            box.addLayout(top)
+            box.addWidget(slider)
+            return box
+
+        self.sl_width = QSlider(Qt.Horizontal)
+        self.sl_width.setRange(2, 30)                       # 0.2 … 3.0 мм
+        self.sl_width.setValue(int(st.get("width", 6)))
+        self.sl_width.setFixedWidth(120)
+        self.sl_width.setToolTip("Толщина линии ручки")
+        self.lbl_width = QLabel()
+        lay.addLayout(labelled("Толщина", self.sl_width, self.lbl_width))
+
+        self.sl_smooth = QSlider(Qt.Horizontal)
+        self.sl_smooth.setRange(0, 100)
+        self.sl_smooth.setValue(int(st.get("smooth", 55)))
+        self.sl_smooth.setFixedWidth(120)
+        self.sl_smooth.setToolTip("Влево — линия резкая, точно за мышью.\n"
+                                  "Вправо — плавная, дрожание руки сглаживается.")
+        self.lbl_smooth = QLabel()
+        lay.addLayout(labelled("Плавность", self.sl_smooth, self.lbl_smooth))
+
+        self.ink_index = int(st.get("ink", 0)) % len(PEN_INKS)
+        self.ink_btns = []
+        inks = QHBoxLayout()
+        inks.setSpacing(6)
+        for i, (name, rgb) in enumerate(PEN_INKS):
+            b = QPushButton()
+            b.setCheckable(True)
+            b.setFixedSize(26, 26)
+            b.setToolTip(f"Цвет ручки: {name.lower()}")
+            b.setCursor(Qt.PointingHandCursor)
+            b.setStyleSheet(
+                "QPushButton { background: rgb(%d,%d,%d); border: 2px solid transparent; "
+                "border-radius: 13px; min-height: 0; padding: 0; }"
+                "QPushButton:checked { border: 2px solid #e8b04b; }" % rgb)
+            b.clicked.connect(lambda _=False, i=i: self._pick_ink(i))
+            self.ink_btns.append(b)
+            inks.addWidget(b)
+        lay.addLayout(inks)
+        lay.addStretch(1)
+
+        lay = QHBoxLayout()                    # второй ряд — действия
+        lay.setSpacing(8)
+        outer.addLayout(lay)
+
+        def btn(text, tip, slot, accent=False):
+            b = QPushButton(text)
+            b.setToolTip(tip)
+            b.setMinimumHeight(32)
+            b.setCursor(Qt.PointingHandCursor)
+            if accent:
+                b.setObjectName("primary")
+            b.clicked.connect(slot)
+            lay.addWidget(b)
+            return b
+
+        self.b_undo = btn("↶ Отменить штрих", "Убрать последний штрих  (Ctrl+Z)", on_undo)
+        self.b_clear = btn("Очистить", "Стереть всё нарисованное", on_clear)
+        lay.addStretch(1)
+        self.b_cancel = btn("Отмена", "Выйти без подписи  (Esc)", on_cancel)
+        self.b_done = btn("Готово", "Оставить подпись на странице  (Enter)", on_done, accent=True)
+
+        self.sl_width.valueChanged.connect(self._changed)
+        self.sl_smooth.valueChanged.connect(self._changed)
+        self._pick_ink(self.ink_index, notify=False)
+        self._changed()
+
+    def _pick_ink(self, i, notify=True):
+        self.ink_index = i
+        for k, b in enumerate(self.ink_btns):
+            b.setChecked(k == i)
+        if notify:
+            self._changed()
+
+    def _changed(self, *_):
+        self.lbl_width.setText(f"{self.sl_width.value() / 10:.1f} мм")
+        v = self.sl_smooth.value()
+        self.lbl_smooth.setText("резко" if v < 15 else ("плавно" if v > 70 else "средне"))
+        try:
+            s = settings_load()
+            s["pen"] = {"width": self.sl_width.value(), "smooth": v, "ink": self.ink_index}
+            settings_save(s)
+        except Exception:
+            pass
+        self.on_change()
+
+    def width_px(self):
+        return mm_to_preview_px(self.sl_width.value() / 10.0)
+
+    def smooth(self):
+        return self.sl_smooth.value() / 100.0
+
+    def ink(self):
+        return PEN_INKS[self.ink_index][1]
+
+
 class EditorView(QGraphicsView):
     def __init__(self, scene):
         super().__init__(scene)
@@ -767,6 +1045,99 @@ class EditorView(QGraphicsView):
         else:
             super().wheelEvent(event)
 
+
+    # ---------------- ручка ----------------
+    pen_layer = None
+    pen_bar = None
+
+    def pen_active(self):
+        return self.pen_layer is not None
+
+    def _pen_scene_pos(self, event):
+        return self.mapToScene(event.position().toPoint())
+
+    def mousePressEvent(self, event):
+        if not self.pen_active():
+            return super().mousePressEvent(event)
+        if event.button() != Qt.LeftButton:
+            return
+        p = self._pen_scene_pos(event)
+        self._pen_brush = (p.x(), p.y())
+        self._pen_target = (p.x(), p.y())
+        self._pen_t = time.time()
+        self._pen_w = self.pen_bar.width_px()
+        self._pen_stroke = {"pts": [(p.x(), p.y(), self._pen_w)], "dense": None}
+        self.pen_layer.strokes.append(self._pen_stroke)
+        self.pen_layer.update()
+        event.accept()
+
+    def mouseMoveEvent(self, event):
+        if not self.pen_active():
+            return super().mouseMoveEvent(event)
+        st = getattr(self, "_pen_stroke", None)
+        if st is None or not (event.buttons() & Qt.LeftButton):
+            return
+        p = self._pen_scene_pos(event)
+        self._pen_target = (p.x(), p.y())
+        self._pen_advance(st, finishing=False)
+        event.accept()
+
+    def _pen_advance(self, st, finishing):
+        """«Ленивая кисть»: перо тянется к мыши; чем больше плавность, тем сильнее отстаёт."""
+        smooth = self.pen_bar.smooth()
+        alpha = 1.0 - 0.9 * smooth                    # доля пути за одно событие
+        base = self.pen_bar.width_px()
+        bx, by = self._pen_brush
+        tx, ty = self._pen_target
+        steps = 1 if not finishing else 14
+        for _ in range(steps):
+            a = alpha if not finishing else max(alpha, 0.35)
+            nx, ny = bx + (tx - bx) * a, by + (ty - by) * a
+            dist = ((nx - bx) ** 2 + (ny - by) ** 2) ** 0.5
+            if dist < 0.35:
+                if finishing:
+                    break
+                continue
+            now = time.time()
+            dt = max(0.004, now - self._pen_t)
+            self._pen_t = now
+            speed = dist / dt / PREVIEW_DPI * 25.4        # мм/с
+            # быстро — тоньше, медленно — жирнее (как у шариковой ручки)
+            k = 1.18 - 0.5 * min(1.0, speed / 320.0)
+            w = self._pen_w + (base * k - self._pen_w) * 0.35
+            self._pen_w = w
+            st["pts"].append((nx, ny, w))
+            bx, by = nx, ny
+        self._pen_brush = (bx, by)
+        st["dense"] = None
+        self.pen_layer.update()
+
+    def mouseReleaseEvent(self, event):
+        if not self.pen_active():
+            return super().mouseReleaseEvent(event)
+        st = getattr(self, "_pen_stroke", None)
+        if st is not None:
+            self._pen_advance(st, finishing=True)
+            last = st["pts"][-1]
+            st["pts"].append((last[0], last[1], last[2] * 0.7))    # перо отрывается — хвостик тоньше
+            st["dense"] = pen_dense_points(st["pts"])
+            self.pen_layer.update()
+        self._pen_stroke = None
+        event.accept()
+
+    def keyPressEvent(self, event):
+        if self.pen_active():
+            cb = getattr(self, "on_pen_key", None)
+            if cb is not None and cb(event):
+                return
+        super().keyPressEvent(event)
+
+    def place_pen_bar(self):
+        if self.pen_bar is not None:
+            self.pen_bar.adjustSize()
+            self.pen_bar.move(max(8, (self.width() - self.pen_bar.width()) // 2), 12)
+            self.pen_bar.raise_()
+
     def _notify(self):
         cb = getattr(self, "on_view_changed", None)
         if cb is not None:
@@ -774,6 +1145,7 @@ class EditorView(QGraphicsView):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        self.place_pen_bar()
         self._notify()
 
     def scrollContentsBy(self, dx, dy):
@@ -1073,6 +1445,32 @@ def draw_icon(kind: str, color: str, size: int = 64) -> QIcon:
         path.lineTo(11.4 * u, 2.4 * u); path.lineTo(11.4 * u, 6.0 * u)
         p.drawPath(path)
         line(5.0, 12.0, 5.0, 14.0); line(11.0, 12.0, 11.0, 14.0)
+    elif kind == "pen":
+        path = QPainterPath()
+        path.moveTo(3.0 * u, 13.0 * u); path.lineTo(3.8 * u, 9.8 * u)
+        path.lineTo(10.6 * u, 3.0 * u); path.lineTo(13.0 * u, 5.4 * u)
+        path.lineTo(6.2 * u, 12.2 * u); path.closeSubpath()
+        p.drawPath(path)
+        line(9.2, 4.4, 11.6, 6.8)
+    elif kind == "help":
+        p.drawEllipse(int(2.4 * u), int(2.4 * u), int(11.2 * u), int(11.2 * u))
+        path = QPainterPath()
+        path.moveTo(6.2 * u, 6.4 * u)
+        path.cubicTo(6.2 * u, 4.2 * u, 9.9 * u, 4.2 * u, 9.9 * u, 6.5 * u)
+        path.cubicTo(9.9 * u, 7.9 * u, 8.0 * u, 7.8 * u, 8.0 * u, 9.4 * u)
+        p.drawPath(path)
+        p.setBrush(c)
+        p.drawEllipse(QPointF(8.0 * u, 11.4 * u), 0.5 * u, 0.5 * u)
+        p.setBrush(Qt.NoBrush)
+    elif kind == "more":
+        p.setBrush(c)
+        for cx in (4.0, 8.0, 12.0):
+            p.drawEllipse(QPointF(cx * u, 8.0 * u), 0.9 * u, 0.9 * u)
+        p.setBrush(Qt.NoBrush)
+    elif kind == "chev_down":
+        line(4.5, 6.5, 8.0, 10.0); line(8.0, 10.0, 11.5, 6.5)
+    elif kind == "chev_right":
+        line(6.5, 4.5, 10.0, 8.0); line(10.0, 8.0, 6.5, 11.5)
     elif kind == "pages":
         rect(2.4, 3.4, 5.6, 9.2)
         rect(8.4, 3.4, 5.2, 9.2)
@@ -3957,21 +4355,52 @@ def page_cropbox_for_visible_rect(page, rect):
 
 SCAN_LOOK_PRESETS = {
     # угол°, размытие, зерно бумаги, самый тёмный тон, затемнение края, сдвиг мм, jpeg
-    "light":  dict(angle=0.15, blur=0.45, grain=2.0, ink=52, edge=0.02, shift=0.6, q=82),
-    "normal": dict(angle=0.30, blur=0.65, grain=3.0, ink=64, edge=0.04, shift=1.2, q=78),
-    "strong": dict(angle=0.70, blur=0.90, grain=4.5, ink=80, edge=0.07, shift=2.5, q=70),
+    "light":  dict(angle=0.12, blur=0.40, grain=1.6, ink=50, edge=0.000, shift=0.5, q=84),
+    "normal": dict(angle=0.25, blur=0.55, grain=2.2, ink=62, edge=0.006, shift=1.0, q=80),
+    "strong": dict(angle=0.60, blur=0.85, grain=3.6, ink=78, edge=0.020, shift=2.2, q=72),
 }
 SCAN_PAPER_TONE = (231, 234, 239)     # тон бумаги на настоящем скане (образец договора)
 
 
+def parse_pages(text, n):
+    """«1-3, 5, 7» → [0, 1, 2, 4, 6]. Пустой список, если ничего годного."""
+    out = []
+    for part in str(text).replace(";", ",").replace(" ", "").split(","):
+        if not part:
+            continue
+        try:
+            if "-" in part:
+                a, b = part.split("-", 1)
+                a, b = int(a), int(b)
+                if a > b:
+                    a, b = b, a
+                rng = range(a, b + 1)
+            else:
+                rng = [int(part)]
+        except ValueError:
+            return []
+        for p in rng:
+            if 1 <= p <= n and (p - 1) not in out:
+                out.append(p - 1)
+    return sorted(out)
+
+
+def pages_to_text(pages):
+    """[0, 1, 2, 4] → «1-3, 5»."""
+    pages = sorted(set(pages))
+    parts, i = [], 0
+    while i < len(pages):
+        j = i
+        while j + 1 < len(pages) and pages[j + 1] == pages[j] + 1:
+            j += 1
+        parts.append(f"{pages[i] + 1}-{pages[j] + 1}" if j > i else f"{pages[i] + 1}")
+        i = j + 1
+    return ", ".join(parts)
+
+
 def scan_back_page(doc, i, enabled=True):
     """Что могло бы просвечивать с оборота листа: следующая страница (если есть)."""
-    if not enabled:
-        return None
-    try:
-        return doc[i + 1] if i + 1 < doc.page_count else (doc[i - 1] if i > 0 else None)
-    except Exception:
-        return None
+    return None      # просвет оборота отключён: он давал зеркальный текст и полосы
 
 
 def scan_look_page(page, dpi=190, preset="normal", color=True, seed=0, back_page=None,
@@ -4042,11 +4471,8 @@ def scan_look_page(page, dpi=190, preset="normal", color=True, seed=0, back_page
 
     # 3. фактура бумаги: крупные «облака» + мелкое зерно
     try:
-        cw, ch_ = max(4, W // 70), max(4, H // 70)
-        clouds = Image.effect_noise((cw, ch_), P["grain"] * 0.7).resize((W, H), Image.BICUBIC)
-        fine = Image.effect_noise((W, H), P["grain"] * 0.75)
-        for layer in (clouds, fine):
-            paper = ImageChops.add(paper, layer.convert("RGB"), 1.0, -128)
+        fine = Image.effect_noise((W, H), P["grain"])
+        paper = ImageChops.add(paper, fine.convert("RGB"), 1.0, -128)
     except Exception:
         pass
 
@@ -4058,8 +4484,12 @@ def scan_look_page(page, dpi=190, preset="normal", color=True, seed=0, back_page
             bed = bed.transpose(Image.FLIP_LEFT_RIGHT)
         if rnd.random() < 0.5:
             bed = bed.transpose(Image.FLIP_TOP_BOTTOM)
-        med = ImageStat.Stat(bed.convert("L")).median[0] or 233
-        dust = bed.convert("L").point(lambda v, m=med: min(255, int(255.0 * v / m)))
+        gray = bed.convert("L")
+        smooth = gray.filter(ImageFilter.GaussianBlur(14 * k))
+        # разница со сглаженной копией = только пылинки; полосы и тени стекла уходят
+        specks = ImageChops.subtract(smooth, gray)              # >0 там, где точка темнее фона
+        specks = specks.point(lambda v: 0 if v < 7 else min(255, int(v * 1.6)))
+        dust = ImageChops.invert(specks)
         paper = ImageChops.multiply(paper, Image.merge("RGB", (dust, dust, dust)))
 
     # 5. один край листа темнее (крышка сканера прижата неравномерно)
@@ -4075,6 +4505,17 @@ def scan_look_page(page, dpi=190, preset="normal", color=True, seed=0, back_page
         e = P["edge"]
         grad = grad.point(lambda v: int(255 * (1.0 - e * (v / 255.0) ** 3)))
         paper = ImageChops.multiply(paper, Image.merge("RGB", (grad, grad, grad)))
+    except Exception:
+        pass
+
+    try:
+        med = ImageStat.Stat(paper.resize((64, 64))).median
+        offs = [int(SCAN_PAPER_TONE[i] - med[i]) for i in range(3)]
+        if any(offs):
+            lut = []
+            for i in range(3):
+                lut += [max(0, min(255, v + offs[i])) for v in range(256)]
+            paper = paper.point(lut)
     except Exception:
         pass
 
@@ -4134,7 +4575,7 @@ def build_scan_look_doc(src_doc, pages=None, dpi=190, preset="normal", color=Tru
 class ScanLookDialog(QDialog):
     """Окно «Сделать как скан» с живым превью текущей страницы."""
 
-    def __init__(self, src_doc, page_index, parent=None, base_doc=None):
+    def __init__(self, src_doc, page_index, parent=None, base_doc=None, preselect=None):
         super().__init__(parent)
         self.setWindowTitle("Сделать как скан")
         self.src_doc = src_doc
@@ -4153,9 +4594,9 @@ class ScanLookDialog(QDialog):
 
         side = QVBoxLayout()
         side.setSpacing(8)
-        hint = QLabel("Сначала поставьте печать и подпись, потом жмите сюда: документ "
-                      "станет выглядеть так, будто его распечатали, заверили и "
-                      "отсканировали. Печати окажутся «на бумаге».")
+        hint = QLabel("Порядок как в жизни: документ напечатан → на нём печать и подпись "
+                      "→ скан. Поэтому сначала поставьте печать и подпись, потом жмите "
+                      "сюда — они окажутся на бумаге и «отсканируются» вместе с листом.")
         hint.setObjectName("hint")
         hint.setWordWrap(True)
         side.addWidget(hint)
@@ -4177,10 +4618,6 @@ class ScanLookDialog(QDialog):
             self.cmb_dpi.addItem(t, d)
         form.addRow("Качество:", self.cmb_dpi)
         side.addWidget(box)
-        self.chk_back = QCheckBox("слегка просвечивает оборот листа")
-        self.chk_back.setChecked(bool(st.get("back", True)))
-        self.chk_back.toggled.connect(self.update_preview)
-        side.addWidget(self.chk_back)
         self.chk_bed = QCheckBox("видно стекло сканера по краям листа")
         self.chk_bed.setChecked(bool(st.get("bed", False)))
         self.chk_bed.toggled.connect(self.update_preview)
@@ -4198,14 +4635,40 @@ class ScanLookDialog(QDialog):
         b_again.clicked.connect(self._reroll)
         side.addWidget(b_again)
 
-        self.chk_all = QCheckBox("ко всем страницам документа")
-        self.chk_all.setChecked(bool(st.get("all", True)))
-        side.addWidget(self.chk_all)
+        pbox = QGroupBox("Какие страницы")
+        pl = QVBoxLayout(pbox)
+        pl.setSpacing(6)
+        n = self.src_doc.page_count
+        self.cmb_pages = QComboBox()
+        self.cmb_pages.addItem(f"все страницы ({n})", "all")
+        self.cmb_pages.addItem(f"только текущая (стр. {self.page_index + 1})", "current")
+        self.cmb_pages.addItem("выбранные…", "custom")
+        pl.addWidget(self.cmb_pages)
+        self.ed_pages = QLineEdit()
+        self.ed_pages.setPlaceholderText("например: 1-3, 5, 7")
+        self.ed_pages.setMinimumHeight(28)
+        self.ed_pages.setToolTip("Номера страниц через запятую, диапазоны через дефис")
+        pl.addWidget(self.ed_pages)
+        self.lbl_pages = QLabel("")
+        self.lbl_pages.setObjectName("hint")
+        pl.addWidget(self.lbl_pages)
+        side.addWidget(pbox)
+        if preselect and len(preselect) > 1:
+            self.cmb_pages.setCurrentIndex(2)
+            self.ed_pages.setText(pages_to_text(preselect))
+        elif n > 1 and st.get("pages_mode") == "current":
+            self.cmb_pages.setCurrentIndex(1)
+        self.cmb_pages.currentIndexChanged.connect(self._pages_changed)
+        self.ed_pages.textChanged.connect(self._pages_changed)
+        self._pages_changed()
         side.addStretch(1)
 
         bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         bb.button(QDialogButtonBox.Ok).setText("Сделать как скан")
         bb.button(QDialogButtonBox.Cancel).setText("Отмена")
+        self._ok_btn = bb.button(QDialogButtonBox.Ok)
+        self._ok_btn.setObjectName("primary")
+        self._pages_changed()
         bb.accepted.connect(self._ok)
         bb.rejected.connect(self.reject)
         side.addWidget(bb)
@@ -4227,6 +4690,28 @@ class ScanLookDialog(QDialog):
         self.seed = (self.seed * 7 + 13) % 100000
         self.update_preview()
 
+    def selected_pages(self):
+        """Список индексов страниц (с нуля) или None, если ввод неверный."""
+        mode = self.cmb_pages.currentData()
+        n = self.src_doc.page_count
+        if mode == "all":
+            return list(range(n))
+        if mode == "current":
+            return [self.page_index]
+        return parse_pages(self.ed_pages.text(), n)
+
+    def _pages_changed(self, *_):
+        custom = self.cmb_pages.currentData() == "custom"
+        self.ed_pages.setVisible(custom)
+        pages = self.selected_pages()
+        ok_btn = getattr(self, "_ok_btn", None)
+        if pages:
+            self.lbl_pages.setText(f"будет обработано страниц: {len(pages)}")
+        else:
+            self.lbl_pages.setText("введите номера страниц, например 1-3, 5")
+        if ok_btn is not None:
+            ok_btn.setEnabled(bool(pages))
+
     def update_preview(self, *_):
         try:
             QApplication.setOverrideCursor(Qt.WaitCursor)
@@ -4234,8 +4719,7 @@ class ScanLookDialog(QDialog):
                                 self.cmb_preset.currentData(),
                                 bool(self.cmb_color.currentData()),
                                 self.seed * 1000 + self.page_index,
-                                scan_back_page(self.src_doc, self.page_index,
-                                               self.chk_back.isChecked()),
+                                None,
                                 self.chk_bed.isChecked(),
                                 self.base_doc[self.page_index] if self.base_doc is not None else None)
             data = im.tobytes("raw", "RGB")
@@ -4260,7 +4744,9 @@ class ScanLookDialog(QDialog):
     def _ok(self):
         try:
             s = settings_load()
-            s["scan_look"] = self.options()
+            o = self.options()
+            o.pop("pages", None)
+            s["scan_look"] = o
             settings_save(s)
         except Exception:
             pass
@@ -4270,8 +4756,8 @@ class ScanLookDialog(QDialog):
         return {"preset": self.cmb_preset.currentData(),
                 "color": bool(self.cmb_color.currentData()),
                 "dpi": int(self.cmb_dpi.currentData()),
-                "all": self.chk_all.isChecked(),
-                "back": self.chk_back.isChecked(),
+                "pages": self.selected_pages(),
+                "pages_mode": self.cmb_pages.currentData(),
                 "bed": self.chk_bed.isChecked(),
                 "seed": self.seed}
 
@@ -4370,7 +4856,7 @@ class UpdateDialog(QDialog):
         bb = QDialogButtonBox()
         self.b_now = bb.addButton("Обновить сейчас", QDialogButtonBox.AcceptRole)
         self.b_later = bb.addButton("Позже", QDialogButtonBox.RejectRole)
-        self.b_now.setObjectName("accent")
+        self.b_now.setObjectName("primary")
         for b in (self.b_now, self.b_later):
             b.setMinimumHeight(34)
         bb.accepted.connect(self.accept)
@@ -4397,6 +4883,66 @@ def apply_update_installer(path):
                 f'start "" "{exe}"\r\ndel "{path}" 2>nul\r\ndel "%%~f0"\r\n'.replace("%%", "%"))
     subprocess.Popen(["cmd", "/c", bat],
                      creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+
+
+
+# ======================================================================
+#  Справка: иллюстрированное руководство внутри программы
+# ======================================================================
+
+class GuideDialog(QDialog):
+    """Окно справки: слева разделы, справа страница с картинками."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Stamp Studio — как пользоваться")
+        self.resize(1080, 760)
+        self.setMinimumSize(820, 560)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        self.nav = QListWidget()
+        self.nav.setObjectName("guidenav")
+        self.nav.setFixedWidth(250)
+        self.nav.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        lay.addWidget(self.nav)
+        self.view = QTextBrowser()
+        self.view.setObjectName("guide")
+        self.view.setOpenExternalLinks(True)
+        lay.addWidget(self.view, 1)
+
+        self.sections = []
+        index = find_resource(os.path.join("docs", "guide.json"))
+        base = os.path.dirname(index) if index else ""
+        try:
+            with open(index, encoding="utf-8") as f:
+                self.sections = json.load(f)
+        except Exception:
+            self.sections = []
+        if base:
+            self.view.setSearchPaths([base])
+        if not self.sections:
+            self.view.setHtml("<h2>Справка не найдена</h2><p>Файлы руководства лежат в папке "
+                              "<b>docs</b> рядом с программой. Переустановите программу или "
+                              f"откройте руководство на сайте: <a href='{GITHUB_URL}'>{GITHUB_URL}</a></p>")
+            return
+        for sec in self.sections:
+            self.nav.addItem(sec.get("title", ""))
+        self.nav.currentRowChanged.connect(self._show)
+        self.nav.setCurrentRow(0)
+
+    def _show(self, row):
+        if not (0 <= row < len(self.sections)):
+            return
+        dark = settings_load().get("theme", "light") == "dark"
+        fg, mute, gold, card = (("#e8e6e1", "#9aa0b4", "#e8b04b", "#232735") if dark
+                                else ("#2b2820", "#6b6553", "#a8730c", "#f6f3ec"))
+        css = (f"<style>body {{ color: {fg}; }} h1 {{ color: {gold}; font-size: 22px; margin-top: 14px; }}"
+               f" h2 {{ font-size: 16px; margin-top: 18px; }} p, li {{ line-height: 150%; }}"
+               f" .note {{ color: {mute}; }} .key {{ color: {gold}; font-weight: bold; }}"
+               f" td.tip {{ background: {card}; padding: 10px 14px; }}</style>")
+        self.view.setHtml(css + self.sections[row].get("html", ""))
+        self.view.verticalScrollBar().setValue(0)
 
 
 class MetadataDialog(QDialog):
@@ -4466,6 +5012,7 @@ class MainWindow(QMainWindow):
         self.stamp_raw = None
         self.stamp_pixmap = None
         self.stamp_src_path = None
+        self.current_lib_file = None      # печать из библиотеки, за которой запоминается размер
         self.page_item = None
 
         self.scene = QGraphicsScene()
@@ -4491,6 +5038,7 @@ class MainWindow(QMainWindow):
                       f"subcontrol-position: right; margin-right: 6px; }}"
                       f"\nQTabBar::close-button:hover {{ background: rgba(200,130,20,0.25); "
                       f"border-radius: 7px; }}")
+        style += EXTRA_QSS_DARK if self.theme == "dark" else EXTRA_QSS_LIGHT
         QApplication.instance().setStyleSheet(style)
         self.view.set_theme(self.theme)
         self._retint_icons()
@@ -4506,12 +5054,13 @@ class MainWindow(QMainWindow):
         tb = self.addToolBar("Главная")
         tb.setMovable(False)
         tb.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
-        tb.setIconSize(QSize(20, 20))
+        tb.setIconSize(QSize(18, 18))
         self._themed_actions = []   # (QAction, kind) — перекрашиваются при смене темы
 
-        def add(kind, text, slot, shortcut=None, tip=None, compact=False):
-            a = QAction(text if not compact else "", self)
+        def add(kind, text, slot, shortcut=None, tip=None, target=None, checkable=False):
+            a = QAction(text, self)
             a.triggered.connect(slot)
+            a.setCheckable(checkable)
             if shortcut:
                 a.setShortcut(QKeySequence(shortcut))
             full_tip = tip or text
@@ -4519,40 +5068,62 @@ class MainWindow(QMainWindow):
                 full_tip = f"{full_tip}  ({shortcut})"
             a.setToolTip(full_tip)
             a.setStatusTip(full_tip)
-            tb.addAction(a)
+            (target or tb).addAction(a)
+            if target is not None:
+                self.addAction(a)                 # чтобы горячая клавиша работала всегда
             self._themed_actions.append((a, kind))
             return a
 
-        # основное — с подписями
+        # файл
         add("folder", "Открыть", self.open_pdf, "Ctrl+O", "Открыть PDF-документ")
         add("scanner", "Сканер", self.scan_document, None,
             "Отсканировать документ со сканера")
         self.act_save = add("save", "Сохранить", self.save_pdf, "Ctrl+S",
                             "Записать изменения в открытый файл")
-        self.act_save_as = add("save_as", "", self.export_pdf, "Ctrl+Shift+S",
-                               "Сохранить как новый файл…", compact=True)
+        self.act_save_as = add("save_as", "Сохранить как", self.export_pdf, "Ctrl+Shift+S",
+                               "Сохранить под новым именем")
         tb.addSeparator()
+        # заверение документа
+        self.act_pen = add("pen", "Ручка", self.toggle_pen, "Ctrl+R",
+                           "Подписать от руки синей ручкой — рисуется мышью на странице",
+                           checkable=True)
+        self.act_scanlook = add("scanlook", "Как скан", self.scan_look, None,
+                                "Сделать документ таким, будто его распечатали и отсканировали")
+        tb.addSeparator()
+        # страницы и размер файла
         self.act_org = add("pages", "Страницы", self.organize_pages, "Ctrl+P",
                            "Порядок страниц, поворот, добавление из другого PDF")
-        add("meta", "Метаданные", self.show_metadata, None,
-            "Посмотреть и очистить метаданные PDF")
-        tb.addSeparator()
-        # вспомогательное — компактно, подписи во всплывающих подсказках
-        add("images", "", self.open_images_as_doc, None,
-            "Открыть картинки PNG/JPG как страницы документа", compact=True)
-        self.act_png = add("to_png", "", self.export_pngs, None,
-                           "Сохранить все страницы картинками PNG", compact=True)
-        add("to_pdf", "", self.images_to_pdf, None,
-            "Собрать PDF из готовых картинок", compact=True)
-        add("compress", "", self.compress_pdf, None,
-            "Сжать PDF — уменьшить размер файла", compact=True)
-        self.act_close = add("close", "", self.close_document, "Ctrl+W",
-                             "Закрыть открытый документ", compact=True)
+        self.act_compress = add("compress", "Сжать", self.compress_pdf, None,
+                                "Сжать PDF — уменьшить размер файла")
+
+        # остальное — в подписанном меню «Ещё»
+        more = QMenu(self)
+        add("images", "Открыть картинки как документ…", self.open_images_as_doc, None,
+            "Открыть картинки PNG/JPG как страницы документа", target=more)
+        add("to_pdf", "Собрать PDF из картинок…", self.images_to_pdf, None,
+            "Собрать PDF из готовых картинок", target=more)
+        self.act_png = add("to_png", "Сохранить страницы картинками PNG…", self.export_pngs, None,
+                           "Сохранить все страницы картинками PNG", target=more)
+        more.addSeparator()
+        add("meta", "Метаданные PDF…", self.show_metadata, None,
+            "Посмотреть и очистить метаданные PDF", target=more)
+        more.addSeparator()
+        self.act_close = add("close", "Закрыть документ", self.close_document, "Ctrl+W",
+                             "Закрыть открытый документ", target=more)
+        self.btn_more = QToolButton()
+        self.btn_more.setText("Ещё")
+        self.btn_more.setToolTip("Картинки ↔ PDF, метаданные, закрыть документ")
+        self.btn_more.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.btn_more.setPopupMode(QToolButton.InstantPopup)
+        self.btn_more.setMenu(more)
+        tb.addWidget(self.btn_more)
+        self._themed_toolbtns = [(self.btn_more, "more")]
 
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         tb.addWidget(spacer)
-        self.theme_action = add("moon", "", self.toggle_theme, None, "Переключить тему")
+        add("help", "Справка", self.show_guide, "F1", "Как пользоваться программой — с картинками")
+        self.theme_action = add("moon", "", self.toggle_theme, None, "Светлая / тёмная тема")
 
         # Удаление выбранной печати — по Del (без кнопки в тулбаре)
         del_act = QAction(self)
@@ -4653,6 +5224,10 @@ class MainWindow(QMainWindow):
             a.setIcon(draw_icon(kind, col))
         for b, kind, accent in getattr(self, "_themed_buttons", []):
             b.setIcon(draw_icon(kind, "#2a1e00" if accent else col))
+        for b, kind in getattr(self, "_themed_toolbtns", []):
+            b.setIcon(draw_icon(kind, col))
+        if hasattr(self, "btn_adv"):
+            self._adv_toggle(self.btn_adv.isChecked(), save=False)
         if hasattr(self, "theme_action"):
             self.theme_action.setIcon(draw_icon(
                 "sun" if self.theme == "dark" else "moon", col))
@@ -4786,6 +5361,7 @@ class MainWindow(QMainWindow):
         self.setStatusBar(QStatusBar())
         self.btn_version = QPushButton(f" v{APP_VERSION} ")
         self.btn_version.setFlat(True)
+        self.btn_version.setObjectName("verbtn")
         self.btn_version.setCursor(Qt.PointingHandCursor)
         self.btn_version.setToolTip("Проверить обновления")
         self.btn_version.clicked.connect(lambda: self.check_updates(silent=False))
@@ -4860,6 +5436,7 @@ class MainWindow(QMainWindow):
         self.page_list.setGridSize(QSize(140, 170))
         self.page_list.setResizeMode(QListWidget.Adjust)
         self.page_list.setMovement(QListWidget.Snap)
+        self.page_list.setSelectionMode(QListWidget.ExtendedSelection)
         self.page_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.page_list.setSpacing(2)
         self.page_list.currentRowChanged.connect(self.show_page)
@@ -4887,45 +5464,25 @@ class MainWindow(QMainWindow):
             btns.addWidget(b)
         lay.addLayout(btns)
 
-        b_crop = QPushButton(" Обрезать страницу…")
-        b_crop.setIconSize(QSize(15, 15))
-        b_crop.setMinimumHeight(30)
-        b_crop.setToolTip("Обрезать поля скана с любой стороны")
-        b_crop.clicked.connect(self.crop_page)
-        self._themed_buttons.append((b_crop, "crop", False))
-        lay.addWidget(b_crop)
-
-        b_frame = QPushButton(" Кадрировать рамкой…")
-        b_frame.setIconSize(QSize(15, 15))
-        b_frame.setMinimumHeight(30)
-        b_frame.setToolTip("Выделить нужную область мышью; размер можно сохранить как шаблон")
-        b_frame.clicked.connect(self.frame_crop_page)
-        self._themed_buttons.append((b_frame, "frame", False))
-        lay.addWidget(b_frame)
-
-        b_split = QPushButton(" Разрезать на две бумаги…")
-        b_split.setIconSize(QSize(15, 15))
-        b_split.setMinimumHeight(30)
-        b_split.setToolTip("Разрезать страницу на две бумаги и разложить их на одном скане с фоном сканера")
-        b_split.clicked.connect(self.split_page_two)
-        self._themed_buttons.append((b_split, "split", False))
-        lay.addWidget(b_split)
-
-        b_scanlook = QPushButton(" Сделать как скан…")
-        b_scanlook.setIconSize(QSize(15, 15))
-        b_scanlook.setMinimumHeight(30)
-        b_scanlook.setToolTip("Цифровой документ → будто распечатали и отсканировали")
-        b_scanlook.clicked.connect(self.scan_look)
-        self._themed_buttons.append((b_scanlook, "scanlook", False))
-        lay.addWidget(b_scanlook)
-
-        b_org = QPushButton(" Упорядочить страницы…")
-        b_org.setIconSize(QSize(15, 15))
-        b_org.setMinimumHeight(32)
-        b_org.setToolTip("Отдельное окно: порядок, поворот, добавление страниц из другого PDF")
-        b_org.clicked.connect(self.organize_pages)
-        self._themed_buttons.append((b_org, "pages", False))
-        lay.addWidget(b_org)
+        tools = QGridLayout()
+        tools.setSpacing(4)
+        for n, (kind, text, tip, slot) in enumerate([
+                ("crop", " Обрезать поля", "Обрезать поля скана с любой стороны (в мм)",
+                 self.crop_page),
+                ("frame", " Кадрировать", "Выделить нужную область мышью; размер можно "
+                 "сохранить как шаблон", self.frame_crop_page),
+                ("split", " Разрезать на 2", "Разрезать страницу на две бумаги и разложить их "
+                 "на одном скане с фоном сканера", self.split_page_two),
+                ("scanlook", " Как скан", "Сделать документ таким, будто его распечатали "
+                 "и отсканировали", self.scan_look)]):
+            b = QPushButton(text)
+            b.setIconSize(QSize(15, 15))
+            b.setMinimumHeight(32)
+            b.setToolTip(tip)
+            b.clicked.connect(slot)
+            self._themed_buttons.append((b, kind, False))
+            tools.addWidget(b, n // 2, n % 2)
+        lay.addLayout(tools)
         splitter.addWidget(bot)
 
         splitter.setSizes([340, 430])
@@ -5318,12 +5875,14 @@ class MainWindow(QMainWindow):
                     base = None
             except Exception:
                 base = None
-        dlg = ScanLookDialog(src, min(idx, src.page_count - 1), self, base_doc=base)
+        pre = sorted({self.page_list.row(it) for it in self.page_list.selectedItems()})
+        dlg = ScanLookDialog(src, min(idx, src.page_count - 1), self, base_doc=base,
+                             preselect=pre)
         if dlg.exec() != QDialog.Accepted:
             src.close()
             return
         o = dlg.options()
-        pages = None if o["all"] else [idx]
+        pages = o["pages"] or [idx]
         prog = QProgressDialog("Делаю «скан»…", None, 0, src.page_count, self)
         prog.setWindowModality(Qt.WindowModal)
         prog.setMinimumDuration(0)
@@ -5331,7 +5890,7 @@ class MainWindow(QMainWindow):
             new = build_scan_look_doc(src, pages, o["dpi"], o["preset"], o["color"], o["seed"],
                                       progress=lambda i: (prog.setValue(i),
                                                           QApplication.processEvents()),
-                                      show_bed=o["bed"], show_back=o["back"], base_doc=base)
+                                      show_bed=o["bed"], show_back=False, base_doc=base)
         except Exception as e:
             prog.close()
             src.close()
@@ -5353,7 +5912,209 @@ class MainWindow(QMainWindow):
         self.refresh_page_list(idx)
         self.show_page(idx)
         self._update_ui_state()
-        self.show_toast("✔  Готово — документ выглядит как скан. Сохраните (Ctrl+S)")
+        self.show_toast(f"✔  Готово — страниц «как скан»: {len(pages)}. Сохраните (Ctrl+S)")
+
+
+    # ---------------------------------------------------------- ручка
+    def toggle_pen(self):
+        if self.view.pen_active():
+            self.pen_finish(commit=True)
+        else:
+            self.pen_start()
+
+    def pen_start(self):
+        if self.doc is None:
+            QMessageBox.information(self, "Нет документа",
+                                    "Сначала откройте PDF или отсканируйте документ.")
+            self.act_pen.setChecked(False)
+            return
+        layer = PenLayer(self.scene.sceneRect())
+        self.scene.addItem(layer)
+        self.scene.clearSelection()
+        bar = PenBar(self.view, self._pen_changed, self.pen_undo, self.pen_clear,
+                     lambda: self.pen_finish(True), lambda: self.pen_finish(False))
+        self.view.pen_layer = layer
+        self.view.pen_bar = bar
+        self.view.on_pen_key = self._pen_key
+        layer.color = bar.ink()
+        self.view.setDragMode(QGraphicsView.NoDrag)
+        self.view.viewport().setCursor(Qt.CrossCursor)
+        bar.show()
+        self.view.place_pen_bar()
+        self.view.setFocus()
+        self.act_pen.setChecked(True)
+        self.statusBar().showMessage(
+            "Ручка: ведите мышью с зажатой левой кнопкой • Ctrl+Z — отменить штрих • "
+            "Enter — готово • Esc — выйти")
+
+    def _pen_changed(self):
+        layer = self.view.pen_layer
+        if layer is not None and self.view.pen_bar is not None:
+            layer.color = self.view.pen_bar.ink()
+            layer.update()
+
+    def _pen_key(self, event):
+        if event.key() == Qt.Key_Escape:
+            self.pen_finish(False)
+            return True
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter):
+            self.pen_finish(True)
+            return True
+        if event.key() == Qt.Key_Z and (event.modifiers() & Qt.ControlModifier):
+            self.pen_undo()
+            return True
+        return False
+
+    def pen_undo(self):
+        layer = self.view.pen_layer
+        if layer is not None and layer.strokes:
+            layer.strokes.pop()
+            layer.update()
+
+    def pen_clear(self):
+        layer = self.view.pen_layer
+        if layer is not None:
+            layer.strokes = []
+            layer.update()
+
+    def pen_finish(self, commit=True):
+        """Выйти из режима ручки; commit — оставить нарисованное как подпись."""
+        layer, bar = self.view.pen_layer, self.view.pen_bar
+        if layer is None:
+            return
+        made = None
+        if commit and layer.strokes:
+            try:
+                made = self._pen_to_stamp(layer)
+            except Exception as e:
+                QMessageBox.warning(self, "Ручка", f"Не удалось сохранить подпись:\n{e}")
+        self.view.pen_layer = None
+        self.view.pen_bar = None
+        self.scene.removeItem(layer)
+        if bar is not None:
+            bar.hide()
+            bar.deleteLater()
+        self.view.setDragMode(QGraphicsView.RubberBandDrag)
+        self.view.viewport().unsetCursor()
+        self.act_pen.setChecked(False)
+        self._update_ui_state()
+        if made is not None:
+            self.scene.clearSelection()
+            made.setSelected(True)
+            self.show_toast("✔  Подпись на странице. Чтобы ставить её снова — «В библиотеку»")
+
+    def _pen_to_stamp(self, layer):
+        """Нарисованные штрихи → прозрачная картинка → обычная «печать» на странице."""
+        xs, ys, pad = [], [], 4.0
+        for st in layer.strokes:
+            st["dense"] = st.get("dense") or pen_dense_points(st["pts"])
+            for x, y, wd in st["dense"]:
+                xs += [x - wd, x + wd]
+                ys += [y - wd, y + wd]
+        if not xs:
+            return None
+        x0, y0, x1, y1 = min(xs) - pad, min(ys) - pad, max(xs) + pad, max(ys) + pad
+        scale = 3.0                                    # 450 dpi — линия гладкая при любом зуме
+        w_px, h_px = max(4, int((x1 - x0) * scale)), max(4, int((y1 - y0) * scale))
+        img = QImage(w_px, h_px, QImage.Format_ARGB32_Premultiplied)
+        img.fill(Qt.transparent)
+        p = QPainter(img)
+        p.scale(scale, scale)
+        p.translate(-x0, -y0)
+        pen_paint_strokes(p, layer.strokes, layer.color)
+        p.end()
+        img = img.convertToFormat(QImage.Format_RGBA8888)
+        pil = Image.frombuffer("RGBA", (img.width(), img.height()),
+                               bytes(img.constBits()), "raw", "RGBA", img.bytesPerLine(), 1).copy()
+        mm_w = (x1 - x0) / PREVIEW_DPI * 25.4
+        mm_h = (y1 - y0) / PREVIEW_DPI * 25.4
+        pm = self._pixmap_from_pil(pil)
+        item = StampItem(pm, pil, mm_w, mm_h, self.current_page)
+        item.opacity_value = 1.0
+        item.setOpacity(1.0)
+        self.scene.addItem(item)
+        item.setPos(x0, y0)
+        self.stamps.append(item)
+        # подпись становится «текущей печатью» — её можно сохранить в библиотеку
+        self.stamp_raw = pil
+        self.stamp_src_path = None
+        self.current_lib_file = None
+        self.stamp_pil = pil
+        self.stamp_pixmap = pm
+        self.stamp_status = "подпись ручкой"
+        for sp, v in ((self.spin_w, mm_w), (self.spin_h, mm_h)):
+            sp.blockSignals(True)
+            sp.setValue(v)
+            sp.blockSignals(False)
+        self.slider_op.blockSignals(True)
+        self.slider_op.setValue(100)
+        self.slider_op.blockSignals(False)
+        self.lbl_op.setText("Непрозрачность: 100%")
+        self.stamp_info.setText("подпись ручкой")
+        try:
+            self.preview.setPixmap(pm.scaled(64, 64, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        except Exception:
+            pass
+        return item
+
+
+    # ---------------------------------------------------------- память размера печати
+    def _lib_target_file(self):
+        """Чью запись в библиотеке обновлять: выделенной на странице печати или текущей."""
+        try:
+            sel = [i for i in self.scene.selectedItems() if isinstance(i, StampItem)]
+        except RuntimeError:
+            sel = []
+        if sel:
+            return getattr(sel[0], "lib_file", None)
+        return getattr(self, "current_lib_file", None)
+
+    def _remember_stamp_later(self):
+        """Отложенная запись — чтобы не писать на диск на каждое движение ползунка."""
+        if not self._lib_target_file():
+            return
+        t = getattr(self, "_remember_timer", None)
+        if t is None:
+            t = QTimer(self)
+            t.setSingleShot(True)
+            t.timeout.connect(self._remember_stamp_now)
+            self._remember_timer = t
+        t.start(500)
+
+    def _remember_stamp_now(self):
+        """Записать в библиотеку текущие размер/поворот/непрозрачность этой печати."""
+        target = self._lib_target_file()
+        if not target:
+            return
+        try:
+            items = lib_load()
+            changed = None
+            for e in items:
+                if e.get("file") == target:
+                    new = {"mm_w": round(self.spin_w.value(), 1),
+                           "mm_h": round(self.spin_h.value(), 1),
+                           "rot": int(self.slider_rot.value()),
+                           "opacity": int(self.slider_op.value())}
+                    if any(e.get(k) != v for k, v in new.items()):
+                        e.update(new)
+                        changed = e
+                    break
+            if changed is None:
+                return
+            lib_save(items)
+            for i in range(self.lib_list.count()):
+                it = self.lib_list.item(i)
+                d = it.data(Qt.UserRole)
+                if d and d.get("file") == target:
+                    it.setData(Qt.UserRole, changed)
+                    it.setToolTip(f"{changed['name']} — {changed['mm_w']:g}×{changed['mm_h']:g} мм\n"
+                                  f"категория: {changed.get('category') or 'Без категории'}\n"
+                                  "размер запоминается за этой печатью")
+            self.statusBar().showMessage(
+                f"Размер {changed['mm_w']:g}×{changed['mm_h']:g} мм запомнен за печатью "
+                f"«{changed['name']}»", 3500)
+        except Exception:
+            pass
 
     def rotate_page(self, delta, all_pages=False):
         """Повернуть страницу (или все) на 90°. Печати поворачиваются вместе."""
@@ -5502,8 +6263,10 @@ class MainWindow(QMainWindow):
 
         self.lib_list = ColumnGrid(columns=3, min_cell=84)
         self.lib_list.setSpacing(3)
-        self.lib_list.setMinimumHeight(96)      # на маленьком экране ужимается
-        self.lib_list.setMaximumHeight(240)
+        self.lib_list.max_icon = 58
+        self.lib_list.min_rows = 2              # два ряда печатей видны всегда
+        self.lib_list.setWordWrap(False)
+        self.lib_list.setMinimumHeight(178)
         self.lib_list.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
         self.lib_list.itemDoubleClicked.connect(self.lib_pick)
         self.lib_list.itemClicked.connect(self.lib_pick)
@@ -5533,7 +6296,8 @@ class MainWindow(QMainWindow):
         lay.addWidget(gb_lib, 1)
 
         # === текущая печать: превью слева, параметры справа ===
-        gb_stamp = QGroupBox("Файл и фон")
+        gb_stamp = QGroupBox("Файл, фон и краска")
+        self.gb_stamp = gb_stamp
         gb_stamp.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
         sl = QVBoxLayout(gb_stamp)
         sl.setContentsMargins(8, 4, 8, 6)
@@ -5590,7 +6354,6 @@ class MainWindow(QMainWindow):
         self.combo_ink.addItem("Чёрная", "black")
         self.combo_ink.currentIndexChanged.connect(self.reprocess_stamp)
         sl.addLayout(hrow(cap("Краска:"), self.combo_ink))
-        lay.addWidget(gb_stamp)
 
         # === размер и вид ===
         gb_geom = QGroupBox("Размер и наклон")
@@ -5637,6 +6400,22 @@ class MainWindow(QMainWindow):
         gl.addLayout(hrow(self.lbl_op, self.slider_op))
         lay.addWidget(gb_geom)
 
+        # редкие настройки свёрнуты: готовым печатям они не нужны
+        self.btn_adv = QToolButton()
+        self.btn_adv.setObjectName("section")
+        self.btn_adv.setText(" ФАЙЛ, ФОН И КРАСКА ПЕЧАТИ")
+        self.btn_adv.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.btn_adv.setIconSize(QSize(12, 12))
+        self.btn_adv.setCheckable(True)
+        self.btn_adv.setCursor(Qt.PointingHandCursor)
+        self.btn_adv.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.btn_adv.setToolTip("Загрузить печать из файла, убрать фон, перекрасить")
+        self.btn_adv.setChecked(bool(settings_load().get("stamp_adv_open", False)))
+        self.btn_adv.toggled.connect(lambda on: self._adv_toggle(on))
+        lay.addWidget(self.btn_adv)
+        lay.addWidget(gb_stamp)
+        gb_stamp.setVisible(self.btn_adv.isChecked())
+
         # === главная кнопка ===
         self.btn_add = QPushButton("  ПОСТАВИТЬ ПЕЧАТЬ")
         self.btn_add.setObjectName("accent")
@@ -5679,13 +6458,39 @@ class MainWindow(QMainWindow):
         dock.setFixedWidth(372)
         self.addDockWidget(Qt.RightDockWidgetArea, dock)
 
+    def _adv_toggle(self, on, save=True):
+        """Свернуть/развернуть блок «Файл, фон и краска»."""
+        self.gb_stamp.setVisible(bool(on))
+        self.btn_adv.setIcon(draw_icon("chev_down" if on else "chev_right", self._icon_color()))
+        if save:
+            try:
+                st = settings_load()
+                st["stamp_adv_open"] = bool(on)
+                settings_save(st)
+            except Exception:
+                pass
+
+    def show_guide(self):
+        """Открыть иллюстрированное руководство."""
+        dlg = getattr(self, "_guide", None)
+        if dlg is None:
+            dlg = GuideDialog(self)
+            self._guide = dlg
+        else:
+            dlg._show(dlg.nav.currentRow())
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
+
     def _update_ui_state(self):
         has_doc = self.doc is not None
         has_stamp = self.stamp_pil is not None
         self.btn_add.setEnabled(has_doc and has_stamp)
         self.btn_save_lib.setEnabled(has_stamp)
         for act in (getattr(self, "act_save", None), getattr(self, "act_png", None),
-                    getattr(self, "act_org", None), getattr(self, "act_close", None)):
+                    getattr(self, "act_org", None), getattr(self, "act_close", None),
+                    getattr(self, "act_save_as", None), getattr(self, "act_pen", None),
+                    getattr(self, "act_scanlook", None)):
             if act is not None:
                 act.setEnabled(has_doc)
         if hasattr(self, "statusBar") and self.statusBar():
@@ -5729,7 +6534,8 @@ class MainWindow(QMainWindow):
             self.lib_list.addItem(empty)
             return
         for entry in entries:
-            name = entry['name'] if len(entry['name']) <= 12 else entry['name'][:11] + "…"
+            name = self.lib_list.fontMetrics().elidedText(
+                entry['name'], Qt.ElideRight, max(40, self.lib_list.gridSize().width() - 10))
             it = QListWidgetItem(name)
             it.setData(Qt.UserRole, entry)
             it.setTextAlignment(Qt.AlignHCenter | Qt.AlignBottom)
@@ -5737,9 +6543,20 @@ class MainWindow(QMainWindow):
                           f"категория: {entry.get('category') or 'Без категории'}")
             pm = QPixmap(entry["file"])
             if not pm.isNull():
-                side = max(48, self.lib_list.iconSize().width())
-                it.setIcon(QIcon(pm.scaled(side, side, Qt.KeepAspectRatio,
-                                           Qt.SmoothTransformation)))
+                side = max(48, self.lib_list.iconSize().width()) * 2      # ×2 — чётко на любом экране
+                chip = QPixmap(side, side)
+                chip.fill(Qt.transparent)
+                qp = QPainter(chip)
+                qp.setRenderHint(QPainter.Antialiasing)
+                qp.setRenderHint(QPainter.SmoothPixmapTransform)
+                qp.setPen(QPen(QColor(0, 0, 0, 28), 1))
+                qp.setBrush(QColor(255, 255, 255))
+                qp.drawRoundedRect(QRectF(1, 1, side - 2, side - 2), side * 0.14, side * 0.14)
+                inner = pm.scaled(int(side * 0.82), int(side * 0.82), Qt.KeepAspectRatio,
+                                  Qt.SmoothTransformation)
+                qp.drawPixmap((side - inner.width()) // 2, (side - inner.height()) // 2, inner)
+                qp.end()
+                it.setIcon(QIcon(chip))
             self.lib_list.addItem(it)
 
     def lib_pick(self, item):
@@ -5749,10 +6566,25 @@ class MainWindow(QMainWindow):
         if not entry:
             return
         self._load_stamp_file(entry["file"], from_library=True)
-        self.spin_w.blockSignals(True); self.spin_h.blockSignals(True)
+        self.current_lib_file = entry["file"]
+        self.scene.clearSelection()
+        ws = (self.spin_w, self.spin_h, self.slider_rot, self.slider_op)
+        for wd in ws:
+            wd.blockSignals(True)
         self.spin_w.setValue(entry["mm_w"]); self.spin_h.setValue(entry["mm_h"])
-        self.spin_w.blockSignals(False); self.spin_h.blockSignals(False)
-        self.stamp_info.setText(f"из библиотеки: {entry['name']}")
+        self.slider_rot.setValue(int(entry.get("rot", 0)))
+        self.slider_op.setValue(int(entry.get("opacity", 85)))
+        for wd in ws:
+            wd.blockSignals(False)
+        self.lbl_rot.setText(f"Поворот: {self.slider_rot.value()}°")
+        self.lbl_op.setText(f"Непрозрачность: {self.slider_op.value()}%")
+        self.stamp_info.setText(f"{entry['name']} · {entry['mm_w']:g}×{entry['mm_h']:g} мм\n"
+                                "размер запоминается за этой печатью")
+        try:
+            self.preview.setPixmap(self.stamp_pixmap.scaled(
+                64, 64, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        except Exception:
+            pass
         self._update_ui_state()
 
     def lib_menu(self, pos):
@@ -5839,16 +6671,19 @@ class MainWindow(QMainWindow):
         if not ok2:
             return
         try:
-            lib_add(name.strip(), mm_w, mm_h, pil_image=pil,
-                    category=(cat or "").strip())
+            entry = lib_add(name.strip(), mm_w, mm_h, pil_image=pil,
+                            category=(cat or "").strip())
+            if sel:
+                sel[0].lib_file = entry["file"]
+            else:
+                self.current_lib_file = entry["file"]
         except Exception as e:
             QMessageBox.critical(
                 self, "Не удалось сохранить",
                 f"Печать не сохранилась в библиотеку.\n\nПапка: {LIB_DIR}\nОшибка: {e}")
             return
         self.reload_library()
-        QMessageBox.information(self, "Сохранено",
-                                f"Печать «{name.strip()}» добавлена в «Мои печати».")
+        self.show_toast(f"✔  «{name.strip()}» в «Мои печати» — размер {mm_w:g}×{mm_h:g} мм запомнен")
 
     def add_file_to_library(self):
         """Добавить печать в библиотеку прямо из блока «Мои печати»."""
@@ -5916,6 +6751,8 @@ class MainWindow(QMainWindow):
     def close_document(self):
         if self.doc is None:
             return
+        if self.view.pen_active():
+            self.pen_finish(commit=True)
         if self.stamps:
             q = QMessageBox.question(
                 self, "Закрыть документ",
@@ -5944,6 +6781,8 @@ class MainWindow(QMainWindow):
     def show_page(self, index):
         if self.doc is None or index < 0 or index >= self.doc.page_count:
             return
+        if self.view.pen_active() and index != self.current_page:
+            self.pen_finish(commit=True)
         self.current_page = index
         pix = self.doc[index].get_pixmap(dpi=PREVIEW_DPI, alpha=False)
         img = QImage(pix.samples, pix.width, pix.height, pix.stride, QImage.Format_RGB888)
@@ -5953,6 +6792,8 @@ class MainWindow(QMainWindow):
         self.page_item = self.scene.addPixmap(pm)
         self.page_item.setZValue(-1)
         self.scene.setSceneRect(QRectF(0, 0, pm.width(), pm.height()))
+        if self.view.pen_layer is not None:
+            self.view.pen_layer._rect = QRectF(0, 0, pm.width(), pm.height())
         for s in self.stamps:
             s.setVisible(s.page_index == index)
         self.view.fitInView(self.scene.sceneRect(), Qt.KeepAspectRatio)
@@ -5968,6 +6809,8 @@ class MainWindow(QMainWindow):
             return False
         self.stamp_raw = im
         self.stamp_src_path = None if from_library else path
+        if not from_library:
+            self.current_lib_file = None
         self.reprocess_stamp()
         return True
 
@@ -6037,6 +6880,11 @@ class MainWindow(QMainWindow):
         if not self._load_stamp_file(path):
             return
         im = self.stamp_raw
+        try:
+            self.preview.setPixmap(self.stamp_pixmap.scaled(
+                64, 64, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        except Exception:
+            pass
         self.stamp_info.setText(f"{os.path.basename(path)} — {im.width}×{im.height}px\n"
                                 f"{getattr(self, 'stamp_status', '')}")
         self._update_ui_state()
@@ -6064,6 +6912,7 @@ class MainWindow(QMainWindow):
         self.preset_box.setCurrentIndex(self.preset_box.count() - 1)
         self.preset_box.blockSignals(False)
         self.apply_size_to_selection()
+        self._remember_stamp_later()
 
     def apply_size_to_selection(self):
         for it in self.scene.selectedItems():
@@ -6077,6 +6926,7 @@ class MainWindow(QMainWindow):
         for it in self.scene.selectedItems():
             if isinstance(it, StampItem):
                 it.setRotation(v)
+        self._remember_stamp_later()
 
     def opacity_changed(self, v):
         self.lbl_op.setText(f"Непрозрачность: {v}%")
@@ -6084,6 +6934,7 @@ class MainWindow(QMainWindow):
             if isinstance(it, StampItem):
                 it.opacity_value = v / 100.0
                 it.setOpacity(it.opacity_value)
+        self._remember_stamp_later()
 
     def add_stamp(self):
         if self.doc is None:
@@ -6094,8 +6945,11 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Нет печати",
                                     "Выберите печать в «Мои печати» или загрузите файл.")
             return
+        self.scene.clearSelection()
+        self._remember_stamp_now()
         item = StampItem(self.stamp_pixmap, self.stamp_pil,
                          self.spin_w.value(), self.spin_h.value(), self.current_page)
+        item.lib_file = getattr(self, "current_lib_file", None)
         item.setRotation(self.slider_rot.value())
         item.opacity_value = self.slider_op.value() / 100.0
         item.setOpacity(item.opacity_value)
@@ -6792,7 +7646,12 @@ def main():
         app.processEvents()
         with open(os.path.join(tempfile.gettempdir(), "stampstudio_selftest.txt"), "w",
                   encoding="utf-8") as f:
-            f.write(f"OK {APP_VERSION} {EDITION} scanner={scanner_backend()}")
+            try:
+                with open(find_resource(os.path.join("docs", "guide.json")), encoding="utf-8") as g:
+                    guide_n = len(json.load(g))
+            except Exception:
+                guide_n = 0
+            f.write(f"OK {APP_VERSION} {EDITION} scanner={scanner_backend()} guide={guide_n}")
         sys.exit(0)
     win = MainWindow()
     win.show()

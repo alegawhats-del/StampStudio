@@ -53,7 +53,7 @@ jobs:
         run: |
           $common = @(
             "--noconfirm", "--clean", "--windowed", "--onedir", "--log-level", "WARN",
-            "--icon", "icon.ico", "--add-data", "icon.png;.",
+            "--icon", "icon.ico", "--add-data", "icon.png;.", "--add-data", "docs;docs",
             "--hidden-import", "win32com.client", "--hidden-import", "pythoncom", "--hidden-import", "pywintypes",
             "--exclude-module", "torch", "--exclude-module", "torchvision", "--exclude-module", "tensorflow",
             "--exclude-module", "matplotlib", "--exclude-module", "scipy", "--exclude-module", "pandas",
@@ -78,6 +78,7 @@ jobs:
             $txt = Get-Content $out -Raw
             "$exe -> $txt"
             if ($txt -notmatch "^OK ${{ steps.ver.outputs.ver }} ") { Write-Error "$exe selftest wrong: $txt"; exit 1 }
+            if ($txt -notmatch "guide=11") { Write-Error "$exe: guide is not bundled: $txt"; exit 1 }
           }
 
       - name: Inno Setup - both installers

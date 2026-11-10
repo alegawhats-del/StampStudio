@@ -1,0 +1,456 @@
+# -*- coding: utf-8 -*-
+"""Собирает иллюстрированное руководство: запускает программу без экрана, снимает
+настоящие окна, ставит на снимки номера-выноски и пишет docs/guide.json + docs/img/*.png.
+
+Запуск из корня репозитория:  python tools/make_guide.py
+Все документы и печати на картинках — выдуманные, для примера."""
+import json
+import math
+import os
+import shutil
+import sys
+import tempfile
+import time
+
+os.environ["QT_QPA_PLATFORM"] = "offscreen"
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+HOME = tempfile.mkdtemp(prefix="guide_home_")
+os.environ["HOME"] = HOME
+os.environ["USERPROFILE"] = HOME
+sys.path.insert(0, ROOT)
+
+import stamp_studio as S                                    # noqa: E402
+from PIL import Image, ImageDraw, ImageFont                 # noqa: E402
+from PySide6.QtCore import QEvent, QPoint, QPointF, Qt, QTimer   # noqa: E402
+from PySide6.QtGui import QMouseEvent                       # noqa: E402
+from PySide6.QtWidgets import QApplication, QDialog, QMessageBox, QToolBar   # noqa: E402
+
+IMG = os.path.join(ROOT, "docs", "img")
+os.makedirs(IMG, exist_ok=True)
+app = QApplication.instance() or QApplication([])
+QMessageBox.information = staticmethod(lambda *a, **k: None)
+GOLD = (214, 154, 51)
+
+
+def pump(sec=0.25):
+    t = time.time()
+    while time.time() - t < sec:
+        app.processEvents()
+        time.sleep(0.01)
+
+
+def font(size):
+    for name in ("Inter-Bold.otf", "DejaVuSans-Bold.ttf"):
+        try:
+            return ImageFont.truetype(name, size)
+        except Exception:
+            continue
+    return ImageFont.load_default()
+
+
+def grab(widget):
+    pm = widget.grab()
+    path = os.path.join(HOME, "tmp.png")
+    pm.save(path)
+    return Image.open(path).convert("RGB")
+
+
+def callouts(im, marks):
+    """marks: [(номер, x, y)] — золотые кружки с цифрами."""
+    d = ImageDraw.Draw(im, "RGBA")
+    f = font(17)
+    for n, x, y in marks:
+        r = 15
+        d.ellipse((x - r - 3, y - r - 3, x + r + 3, y + r + 3), fill=(255, 255, 255, 235))
+        d.ellipse((x - r, y - r, x + r, y + r), fill=GOLD + (255,))
+        t = str(n)
+        tw = d.textlength(t, font=f)
+        d.text((x - tw / 2, y - 11), t, font=f, fill=(40, 28, 0, 255))
+    return im
+
+
+def save(im, name, max_w=760):
+    if im.width > max_w:
+        im = im.resize((max_w, int(im.height * max_w / im.width)), Image.LANCZOS)
+    im.save(os.path.join(IMG, name), optimize=True)
+    return f"<p><img src='img/{name}' width='{im.width}'></p>"
+
+
+def center(widget, win, dx=0, dy=0):
+    p = widget.mapTo(win, widget.rect().center())
+    return p.x() + dx, p.y() + dy
+
+
+def corner(widget, win):
+    """Правый верхний угол виджета — выноска не закрывает его содержимое."""
+    p = widget.mapTo(win, widget.rect().topRight())
+    return p.x() - 4, p.y() - 2
+
+
+# ------------------------------------------------------------ демо-данные
+def demo_pdf(path):
+    d = S.fitz.open()
+    body = ("<div style='font-family:serif;font-size:11pt;line-height:1.45'>"
+            "<p style='text-align:center'><b>ДОГОВОР № 615</b><br>на оказание услуг</p>"
+            "<p>г. Примерск &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;"
+            "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;"
+            "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; 26 сентября 2026 г.</p>"
+            + "".join(f"<p>{n}. {t}</p>" for n, t in [
+                ("1.1", "Исполнитель обязуется по заданию Заказчика оказать услуги, указанные в Приложении № 1, "
+                        "а Заказчик обязуется принять и оплатить эти услуги в порядке и сроки, установленные настоящим Договором."),
+                ("1.2", "Срок оказания услуг — тридцать календарных дней с даты подписания настоящего Договора обеими сторонами."),
+                ("2.1", "Стоимость услуг определяется Приложением № 1 и включает все расходы Исполнителя, связанные с исполнением Договора."),
+                ("2.2", "Оплата производится Заказчиком путём перечисления денежных средств на расчётный счёт Исполнителя."),
+                ("3.1", "Стороны несут ответственность за неисполнение обязательств в соответствии с действующим законодательством."),
+                ("3.2", "Все споры решаются путём переговоров, а при недостижении согласия — в установленном порядке."),
+                ("4.1", "Договор составлен в двух экземплярах, имеющих равную силу, по одному для каждой из сторон."),
+            ])
+            + "</div>")
+    for n in range(3):
+        p = d.new_page(width=595, height=842)
+        p.insert_htmlbox(S.fitz.Rect(64, 56, 531, 640), body)
+        p.insert_htmlbox(S.fitz.Rect(64, 690, 531, 760),
+                         "<div style='font-family:serif;font-size:11pt'>Исполнитель: ООО «Пример»"
+                         "<br><br>Директор ______________ / Иванов И. И. &nbsp;&nbsp;&nbsp;&nbsp; М.П.</div>")
+    d.save(path)
+    d.close()
+
+
+def demo_stamp(text, color=(30, 60, 170), kind="round"):
+    s = 600
+    im = Image.new("RGBA", (s, s), (0, 0, 0, 0))
+    d = ImageDraw.Draw(im)
+    c = color + (255,)
+    if kind == "round":
+        d.ellipse((12, 12, s - 12, s - 12), outline=c, width=14)
+        d.ellipse((34, 34, s - 34, s - 34), outline=c, width=4)
+        d.ellipse((150, 150, s - 150, s - 150), outline=c, width=6)
+        f = font(34)
+        for i, ch in enumerate(text):
+            a = math.radians(-200 + i * (220 / max(1, len(text) - 1)))
+            x, y = s / 2 + 222 * math.cos(a), s / 2 + 222 * math.sin(a)
+            g = Image.new("RGBA", (60, 60), (0, 0, 0, 0))
+            ImageDraw.Draw(g).text((14, 8), ch, font=f, fill=c)
+            g = g.rotate(-math.degrees(a) - 90, resample=Image.BICUBIC)
+            im.alpha_composite(g, (int(x - 30), int(y - 30)))
+        f2 = font(40)
+        tw = d.textlength("ПРИМЕР", font=f2)
+        d.text((s / 2 - tw / 2, s / 2 - 26), "ПРИМЕР", font=f2, fill=c)
+    elif kind == "rect":
+        d.rounded_rectangle((20, 190, s - 20, s - 190), radius=18, outline=c, width=14)
+        f = font(70)
+        tw = d.textlength(text, font=f)
+        d.text((s / 2 - tw / 2, s / 2 - 44), text, font=f, fill=c)
+    else:   # подпись
+        pts = [(60 + t * 4.6, 330 + 90 * math.sin(t / 9.0) * math.exp(-t / 140) - t * 0.5) for t in range(0, 105)]
+        d.line(pts, fill=c, width=9, joint="curve")
+        d.line([(110, 380), (520, 330)], fill=c, width=7)
+    return im
+
+
+st = S.settings_load()
+st.update(auto_update=False, theme="light")
+S.settings_save(st)
+S.lib_add("ООО «Пример»", 40, 40, pil_image=demo_stamp("ООО  ПРИМЕР  г. ПРИМЕРСК"), category="Печати компаний")
+S.lib_add("ИП Иванов", 38, 38, pil_image=demo_stamp("ИП  ИВАНОВ  И. И.", (104, 44, 150)), category="Печати компаний")
+S.lib_add("Подпись директора", 45, 22, pil_image=demo_stamp("", kind="sign").crop((40, 220, 560, 480)), category="Подписи")
+S.lib_add("ОПЛАЧЕНО", 50, 18, pil_image=demo_stamp("ОПЛАЧЕНО", (170, 40, 40), "rect").crop((0, 170, 600, 430)), category="Штампы")
+S.lib_add("Банк", 35, 35, pil_image=demo_stamp("БАНК  ПРИМЕР  ОТДЕЛЕНИЕ 1", (20, 90, 60)), category="Банковские")
+
+work = os.path.join(HOME, "Документы")
+os.makedirs(work, exist_ok=True)
+pdf = os.path.join(work, "Договор 615.pdf")
+demo_pdf(pdf)
+demo_pdf(os.path.join(work, "Счёт 0042.pdf"))
+demo_pdf(os.path.join(work, "Акт 118.pdf"))
+
+w = S.MainWindow()
+w.resize(1366, 800)
+w.show()
+pump(0.4)
+w._dirs = [work]
+while w.dir_tabs.count():
+    w.dir_tabs.removeTab(0)
+w._dirs = []
+w._add_tab_silent(work)
+w.dir_tabs.setCurrentIndex(0)
+w.refresh_files()
+w.doc = S.fitz.open(pdf)
+w.doc_path = pdf
+w.refresh_page_list(0)
+w.show_page(0)
+w._update_ui_state()
+pump(0.5)
+sections = []
+
+
+def section(title, html):
+    sections.append({"title": title, "html": html})
+
+
+# ------------------------------------------------------------ 1. окно
+im = grab(w)
+tb = w.findChildren(QToolBar)[0]
+marks = [(1, *center(tb, w, dx=330)), (2, *center(w.dir_tabs, w, dx=60)),
+         (3, *center(w.file_list, w)), (4, *center(w.page_list, w)),
+         (5, *center(w.view, w, dy=-120)), (6, *center(w.lib_list, w)),
+         (7, *center(w.btn_add, w, dx=-140))]
+html = ("<h1>Окно программы</h1>"
+        "<p>Всё нужное на одном экране. Слева — файлы и страницы, посередине — документ, справа — печати.</p>"
+        + save(callouts(im, marks), "01_window.png") +
+        "<ol><li><b>Панель инструментов</b> — открыть, сканер, сохранить, ручка, «как скан», страницы, сжатие. "
+        "Редкие действия спрятаны в <b>Ещё</b>.</li>"
+        "<li><b>Вкладки папок</b> — несколько рабочих папок сразу. «+» добавляет папку, крестик закрывает.</li>"
+        "<li><b>Файлы в папке</b> — двойной щелчок открывает PDF или картинку.</li>"
+        "<li><b>Страницы документа</b> — щелчок переключает страницу, перетаскивание меняет порядок. "
+        "Ниже — поворот, перемещение, удаление и инструменты страницы.</li>"
+        "<li><b>Документ</b> — здесь двигаются печати. <span class='key'>Ctrl + колесо</span> — масштаб.</li>"
+        "<li><b>Мои печати</b> — ваша библиотека. Щелчок выбирает печать.</li>"
+        "<li><b>Поставить печать</b> — ставит выбранную печать на текущую страницу.</li></ol>")
+section("Окно программы", html)
+
+# ------------------------------------------------------------ 2. открыть / сканировать
+crop = grab(w).crop((0, 0, 760, 420))
+marks = [(1, 112, 8), (2, 222, 8), (3, 230, 190)]
+html = ("<h1>Открыть или отсканировать</h1>"
+        + save(callouts(crop, marks), "02_open.png") +
+        "<ol><li><b>Открыть</b> (<span class='key'>Ctrl+O</span>) — выбрать PDF на компьютере.</li>"
+        "<li><b>Сканер</b> — отсканировать бумагу прямо в программу. Выберите сканер, качество и нажмите "
+        "«Сканировать». Следующий скан можно добавить к этому же документу.</li>"
+        "<li>Или дважды щёлкните файл в списке слева.</li></ol>"
+        "<p class='note'>Картинки PNG/JPG тоже открываются: «Ещё → Открыть картинки как документ».</p>")
+section("Открыть или отсканировать", html)
+
+# ------------------------------------------------------------ 3. печать
+w.lib_pick(w.lib_list.item(0))
+pump(0.2)
+w.add_stamp()
+pump(0.2)
+it = w.stamps[-1]
+it.setPos(it.pos().x() + 250, it.pos().y() + 560)
+pump(0.3)
+im = grab(w)
+vc = w.view.mapTo(w, w.view.mapFromScene(it.center_scene_pos()))
+marks = [(1, *center(w.lib_list, w, dx=-110, dy=-40)), (2, *center(w.spin_w, w, dy=-26)),
+         (3, *center(w.btn_add, w, dx=-140)), (4, vc.x() + 70, vc.y() - 60)]
+html = ("<h1>Поставить печать</h1>"
+        + save(callouts(im, marks), "03_stamp.png") +
+        "<ol><li>Щёлкните печать в <b>Мои печати</b>.</li>"
+        "<li>Проверьте размер в миллиметрах. Он точный: 40 мм в программе — это 40 мм на бумаге.</li>"
+        "<li>Нажмите <b>Поставить печать</b> — она появится посередине страницы.</li>"
+        "<li>Перетащите её мышью на место. Поворот и непрозрачность — ползунками справа. "
+        "<span class='key'>Del</span> убирает выделенную печать.</li></ol>"
+        "<h2>Добавить свою печать</h2>"
+        "<p><b>Добавить</b> под списком — выбрать файл PNG/JPG с печатью. Если у печати есть фон, раскройте блок "
+        "<b>Файл, фон и краска печати</b>: там убирается фон и меняется цвет чернил.</p>")
+section("Поставить печать", html)
+
+# ------------------------------------------------------------ 4. размер за печатью
+panel = grab(w).crop((w.width() - 372, 90, w.width(), 660))
+marks = [(1, 70, 150), (2, 150, 444)]
+html = ("<h1>Размер запоминается за каждой печатью</h1>"
+        "<table><tr><td>" + save(callouts(panel, marks), "04_size.png", 372) + "</td><td class='tip'>"
+        "<p><b>Как это работает</b></p>"
+        "<ol><li>Выберите печать в библиотеке.</li>"
+        "<li>Поставьте нужный размер, поворот, непрозрачность.</li></ol>"
+        "<p>Больше ничего нажимать не надо: программа сама запоминает эти значения "
+        "<b>за этой печатью</b>. В следующий раз выберете её — размер уже тот.</p>"
+        "<p>У каждой печати размер свой: круглая 40 мм, подпись 45×22, штамп 50×18.</p>"
+        "<p class='note'>Внизу окна появляется строка «Размер … запомнен за печатью …».</p>"
+        "</td></tr></table>")
+section("Размер за печатью", html)
+
+# ------------------------------------------------------------ 5. ручка
+w.scene.clearSelection()
+w.toggle_pen()
+pump(0.3)
+v = w.view
+v.pen_bar.sl_width.setValue(7)
+v.pen_bar.sl_smooth.setValue(65)
+
+
+def drag(points):
+    vp = v.viewport()
+
+    def ev(t, p, btn, btns):
+        e = QMouseEvent(t, QPointF(p), QPointF(vp.mapToGlobal(p)), btn, btns, Qt.NoModifier)
+        {QEvent.MouseButtonPress: v.mousePressEvent, QEvent.MouseMove: v.mouseMoveEvent,
+         QEvent.MouseButtonRelease: v.mouseReleaseEvent}[t](e)
+    ev(QEvent.MouseButtonPress, points[0], Qt.LeftButton, Qt.LeftButton)
+    for p in points[1:]:
+        time.sleep(0.006)
+        ev(QEvent.MouseMove, p, Qt.NoButton, Qt.LeftButton)
+    ev(QEvent.MouseButtonRelease, points[-1], Qt.LeftButton, Qt.NoButton)
+
+
+line_pos = v.mapFromScene(QPointF(360, 1480))
+x0, y0 = line_pos.x(), line_pos.y()
+drag([QPoint(int(x0 + t * 0.9), int(y0 - 6 + 20 * math.sin(t / 7.0) * math.exp(-t / 90) - t * 0.12)) for t in range(0, 120)])
+drag([QPoint(int(x0 + 6 + t), int(y0 + 10 - t * 0.06)) for t in range(0, 96, 4)])
+pump(0.2)
+im = grab(w)
+bar = v.pen_bar
+marks = [(1, *corner(tb.widgetForAction(w.act_pen), w)), (2, *center(bar.sl_width, w, dy=-24)),
+         (3, *center(bar.sl_smooth, w, dy=-24)), (4, *center(bar.ink_btns[1], w, dy=-28)),
+         (5, x0 + w.view.mapTo(w, QPoint(0, 0)).x() + 130, y0 + w.view.mapTo(w, QPoint(0, 0)).y() - 44),
+         (6, *center(bar.b_done, w, dy=30))]
+html = ("<h1>Подпись синей ручкой</h1>"
+        "<p>Подпись рисуется мышью прямо на документе — там, где она должна стоять.</p>"
+        + save(callouts(im, marks), "05_pen.png") +
+        "<ol><li>Нажмите <b>Ручка</b> (<span class='key'>Ctrl+R</span>). Над страницей появится панель ручки.</li>"
+        "<li><b>Толщина</b> — от 0,2 до 3 мм. Для обычной шариковой ручки — 0,5–0,8 мм.</li>"
+        "<li><b>Плавность</b> — влево линия резкая и идёт точно за мышью; вправо — плавная, дрожание руки сглаживается.</li>"
+        "<li>Цвет: синяя, тёмно-синяя или чёрная ручка.</li>"
+        "<li>Ведите мышью с зажатой левой кнопкой. Быстрое движение даёт линию тоньше, медленное — жирнее, как у настоящей ручки. "
+        "Штрихов может быть сколько угодно.</li>"
+        "<li><b>Готово</b> (<span class='key'>Enter</span>) — подпись остаётся на странице. Её можно двигать и менять размер, как печать.</li></ol>"
+        "<p><span class='key'>Ctrl+Z</span> убирает последний штрих, <span class='key'>Esc</span> — выйти без подписи.</p>"
+        "<p class='note'>Удачную подпись сохраните кнопкой «В библиотеку» — потом ставится в один щелчок.</p>")
+section("Подпись ручкой", html)
+w.pen_finish(True)
+pump(0.3)
+
+# ------------------------------------------------------------ 6. как скан
+shots = {}
+
+
+def with_dialog(cls, action, setup=None, accept=False):
+    def go():
+        for top in app.topLevelWidgets():
+            if isinstance(top, cls) and top.isVisible():
+                if setup:
+                    setup(top)
+                pump(0.3)
+                shots["dlg"] = grab(top)
+                shots["obj"] = top
+                shots["marks"] = shots.get("mk", lambda d: [])(top)
+                top._ok() if (accept and hasattr(top, "_ok")) else (top.accept() if accept else top.reject())
+                return
+        QTimer.singleShot(60, go)
+    QTimer.singleShot(300, go)
+    action()
+    pump(0.3)
+
+
+before = Image.frombytes("RGB", *(lambda p: ((p.width, p.height), p.samples))(
+    S.fitz.open("pdf", w._stamped_pdf_bytes())[0].get_pixmap(dpi=110, clip=S.fitz.Rect(40, 600, 560, 800))))
+shots["mk"] = lambda d: [(1, d.preview.x() + 60, d.preview.y() + 60), (2, *corner(d.cmb_preset, d)),
+                         (3, *corner(d.cmb_pages, d)), (4, *center(d._ok_btn, d, dy=-30))]
+with_dialog(S.ScanLookDialog, w.scan_look, accept=True)
+dlg_im = callouts(shots["dlg"], shots["marks"])
+after_pix = w.doc[0].get_pixmap(dpi=110, clip=S.fitz.Rect(40, 600, 560, 800))
+after = Image.frombytes("RGB", (after_pix.width, after_pix.height), after_pix.samples)
+pair = Image.new("RGB", (before.width, before.height * 2 + 46), (255, 255, 255))
+d = ImageDraw.Draw(pair)
+f = font(16)
+d.text((8, 2), "до: файл из компьютера", font=f, fill=(90, 90, 90))
+pair.paste(before, (0, 22))
+d.text((8, before.height + 24), "после: как будто распечатали, заверили и отсканировали", font=f, fill=(90, 90, 90))
+pair.paste(after, (0, before.height + 46))
+html = ("<h1>Сделать «как скан»</h1>"
+        "<p>Порядок как в жизни: документ напечатали → поставили печать и расписались → отсканировали. "
+        "Поэтому <b>сначала печать и подпись, потом «Как скан»</b> — они окажутся на бумаге и «отсканируются» вместе с листом.</p>"
+        + save(dlg_im, "06_scanlook.png") +
+        "<ol><li>Слева — как будет выглядеть страница.</li>"
+        "<li><b>Эффект</b>: лёгкий, обычный или сильный. <b>Цвет</b>: цветной или чёрно-белый. "
+        "«Другой вариант наклона» — каждый скан чуть разный.</li>"
+        "<li><b>Какие страницы</b>: все, только текущая или выбранные — например <span class='key'>1-3, 5</span>. "
+        "Если выделить несколько страниц в списке слева (с <span class='key'>Ctrl</span>), они подставятся сами.</li>"
+        "<li><b>Сделать как скан</b>, затем сохраните документ.</li></ol>"
+        + save(pair, "06_before_after.png") +
+        "<p class='note'>После этого печати и подпись — уже часть листа, двигать их нельзя.</p>")
+section("Сделать «как скан»", html)
+
+# заново открыть чистый документ для остальных снимков
+demo_pdf(pdf)
+w.doc = S.fitz.open(pdf)
+w.doc_path = pdf
+w.stamps = []
+w.refresh_page_list(0)
+w.show_page(0)
+pump(0.3)
+
+# ------------------------------------------------------------ 7. обрезка и кадрирование
+shots["mk"] = lambda d: [(1, d.canvas.x() + d.canvas.width() // 2, d.canvas.y() + 120),
+                         (2, *corner(d.sp["w"], d)), (3, *corner(d.cmb_tpl, d))]
+
+
+def frame_setup(d):
+    from PySide6.QtCore import QRectF
+    d.canvas.set_area(0, QRectF(50, 40, 495, 330))
+
+
+with_dialog(S.FrameCropDialog, w.frame_crop_page, setup=frame_setup)
+html = ("<h1>Обрезать и кадрировать</h1>"
+        "<p>Кнопки под списком страниц: <b>Обрезать поля</b> — срезать поля в миллиметрах с любой стороны; "
+        "<b>Кадрировать</b> — выделить нужную область мышью.</p>"
+        + save(callouts(shots["dlg"], shots["marks"]), "07_frame.png") +
+        "<ol><li>Нарисуйте рамку мышью. Её можно двигать и тянуть за края и углы.</li>"
+        "<li>Точный размер рамки в миллиметрах можно вписать руками.</li>"
+        "<li><b>Шаблоны</b>: «Сохранить как шаблон…» запоминает размер и положение рамки под именем. "
+        "Для документов, которые режутся одинаково, в следующий раз достаточно выбрать шаблон.</li></ol>")
+section("Обрезать и кадрировать", html)
+
+# ------------------------------------------------------------ 8. две бумаги
+shots["mk"] = lambda d: [(1, d.canvas.x() + d.canvas.width() // 2, d.canvas.y() + 150),
+                         (2, *corner(d.chk_link, d)), (3, *corner(d.cmb_place, d)),
+                         (4, *corner(d.cmb_bg, d))]
+with_dialog(S.FrameCropDialog, w.split_page_two, setup=lambda d: d._halves(True))
+html = ("<h1>Разрезать на две бумаги</h1>"
+        "<p>Страница режется на две части, и обе кладутся на один скан — как будто на стекло сканера положили два отдельных листа.</p>"
+        + save(callouts(shots["dlg"], shots["marks"]), "08_split.png") +
+        "<ol><li>Две рамки — две будущие бумаги. «Найти два листа» ставит их сама, «Пополам» делит страницу.</li>"
+        "<li><b>Обе рамки одного размера</b> — меняете одну, вторая повторяет. Так не промахнуться с размерами.</li>"
+        "<li>Как разложить: рядом, друг под другом или оставить где были; при необходимости повернуть.</li>"
+        "<li><b>Фон</b> — настоящий скан пустого стекла сканера, уже встроен в программу.</li></ol>")
+section("Разрезать на две бумаги", html)
+
+# ------------------------------------------------------------ 9. сохранение и сжатие
+shots["mk"] = lambda d: [(1, *corner(d.combo_compress, d))]
+with_dialog(S.QuickSaveDialog, w.save_pdf)
+html = ("<h1>Сохранить и сжать</h1>"
+        "<p><b>Сохранить</b> (<span class='key'>Ctrl+S</span>) записывает изменения в тот же файл. Спрашивает только одно — сжимать ли:</p>"
+        + save(callouts(shots["dlg"], shots["marks"]), "09_save.png", 560) +
+        "<ul><li><b>Среднее</b> — картинки в JPEG, текст остаётся текстом. Стоит по умолчанию.</li>"
+        "<li><b>Сильное</b> — весь документ картинками, файл заметно меньше.</li>"
+        "<li><b>Минимальное</b> — 110 dpi, для отправки по почте и в мессенджерах: читаемо, файл маленький.</li>"
+        "<li><b>Лёгкое</b> — без потерь качества, экономия небольшая.</li></ul>"
+        "<p>После записи внизу окна появляется зелёная плашка «Сохранено».</p>"
+        "<p><b>Сохранить как</b> (<span class='key'>Ctrl+Shift+S</span>) — новый файл: имя по шаблону, папка, сжатие, очистка метаданных.</p>"
+        "<p><b>Сжать</b> на панели инструментов — отдельное окно сжатия с точными настройками.</p>")
+section("Сохранить и сжать", html)
+
+# ------------------------------------------------------------ 10. страницы
+html = ("<h1>Страницы</h1>"
+        "<p>В списке <b>Страницы документа</b> слева: щелчок — перейти, перетаскивание — поменять порядок. "
+        "С <span class='key'>Ctrl</span> и <span class='key'>Shift</span> выделяется несколько страниц.</p>"
+        "<p>Под списком — повернуть влево/вправо, поднять, опустить, удалить страницу.</p>"
+        "<p><b>Страницы</b> на панели инструментов (<span class='key'>Ctrl+P</span>) открывает большое окно: "
+        "порядок, поворот, удаление сразу нескольких страниц и добавление страниц из другого PDF.</p>")
+section("Страницы", html)
+
+# ------------------------------------------------------------ 11. обновления и клавиши
+html = ("<h1>Обновления и горячие клавиши</h1>"
+        "<h2>Обновления</h2>"
+        "<p>При запуске программа сама проверяет, не вышла ли новая версия. Если вышла — покажет, что изменилось; "
+        "<b>Обновить сейчас</b> скачает и установит её, программа перезапустится. Печати и настройки сохраняются.</p>"
+        "<p>Проверить вручную — щёлкните номер версии в правом нижнем углу окна.</p>"
+        "<h2>Клавиши</h2>"
+        "<table cellpadding='6'>"
+        + "".join(f"<tr><td class='key'>{k}</td><td>{v}</td></tr>" for k, v in [
+            ("Ctrl+O", "открыть PDF"), ("Ctrl+S", "сохранить в тот же файл"),
+            ("Ctrl+Shift+S", "сохранить как новый файл"), ("Ctrl+R", "ручка"),
+            ("Ctrl+P", "окно «Страницы»"), ("Ctrl+W", "закрыть документ"),
+            ("Ctrl + колесо", "масштаб документа"), ("Del", "удалить выделенную печать"),
+            ("Enter / Esc", "в режиме ручки: готово / выйти"), ("Ctrl+Z", "в режиме ручки: убрать штрих"),
+            ("F1", "эта справка")])
+        + "</table>"
+        "<h2>Где лежат ваши данные</h2>"
+        "<p>Печати, шаблоны и настройки хранятся в папке <b>.stamp_studio</b> в вашем профиле Windows. "
+        "При обновлении и переустановке программы они не трогаются.</p>")
+section("Обновления и клавиши", html)
+
+with open(os.path.join(ROOT, "docs", "guide.json"), "w", encoding="utf-8") as fh:
+    json.dump(sections, fh, ensure_ascii=False, indent=1)
+print("sections:", len(sections), "images:", sorted(os.listdir(IMG)))
+shutil.rmtree(HOME, ignore_errors=True)
