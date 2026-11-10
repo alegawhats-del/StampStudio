@@ -36,6 +36,11 @@ from PySide6.QtWidgets import (
     QScrollArea, QSizePolicy, QFrame, QToolButton, QStatusBar, QLineEdit,
     QTabBar, QSplitter, QMenu
 )
+from PySide6.QtWidgets import (QProgressBar, QTableWidget, QTableWidgetItem, QHeaderView,
+                               QAbstractItemView, QStackedWidget)
+from PySide6.QtGui import QDesktopServices
+from PySide6.QtCore import QUrl
+import stamp_ai as AI
 
 PREVIEW_DPI = 150          # DPI отрисовки страницы в редакторе
 EXPORT_STAMP_DPI = 300     # DPI растеризации печати при экспорте
@@ -377,7 +382,8 @@ QToolButton#section:hover { color: #e8b04b; }
 QToolBar QToolButton::menu-indicator { image: none; width: 0; }
 QScrollArea { background: transparent; border: none; }
 QScrollArea > QWidget > QWidget { background: transparent; }
-QPushButton#verbtn { color: #8a8fa3; border: none; background: transparent; padding: 2px 10px; }
+QPushButton#verbtn { color: #8a8fa3; border: none; background: transparent; padding: 0 10px; min-height: 18px; max-height: 18px; }
+QStatusBar { min-height: 24px; max-height: 24px; }
 QPushButton#verbtn:hover { color: #e8b04b; }
 QTextBrowser#guide { background: #171a22; border: none; padding: 6px 18px; font-size: 14px; }
 QListWidget#guidenav { background: #1b1e27; border: none; border-right: 1px solid #2a2f3d;
@@ -385,6 +391,40 @@ QListWidget#guidenav { background: #1b1e27; border: none; border-right: 1px soli
 QListWidget#guidenav::item { padding: 9px 12px; border-radius: 8px; margin: 1px 0; }
 QListWidget#guidenav::item:selected { background: #2c3145; color: #e8b04b; }
 QListWidget#guidenav::item:hover { background: #232735; }
+QToolBar { padding: 4px 6px; }
+QToolBar QToolButton { min-height: 32px; max-height: 32px; }
+QMenuBar { background: #171a22; border-bottom: 1px solid #262b39; padding: 1px 6px; }
+QMenuBar::item { background: transparent; padding: 4px 12px; border-radius: 6px; color: #c9cddb; }
+QMenuBar::item:selected, QMenuBar::item:pressed { background: #2c3145; color: #e8b04b; }
+QMenu::item:disabled { color: #5a6072; }
+QMenu::indicator { width: 13px; height: 13px; margin-left: 8px; border-radius: 4px; }
+QMenu::indicator:unchecked { border: 1px solid #4a5068; background: transparent; }
+QMenu::indicator:checked { border: 1px solid #e8b04b; background: #e8b04b; }
+QPushButton#seg { background: transparent; border: 1px solid #2e3345; border-radius: 9px; padding: 7px 16px; color: #9aa0b4; font-weight: bold; }
+QPushButton#seg:hover { color: #e8e6e1; }
+QPushButton#seg:checked { background: #2c3145; border-color: #e8b04b; color: #e8b04b; font-weight: bold; }
+QGroupBox QLabel#plain, QGroupBox QCheckBox { font-weight: normal; }
+QLabel#aihead { font-size: 15px; font-weight: bold; color: #f1efe9; }
+QPushButton#aichip { text-align: left; border: 1px solid #5a4a22; background: #2a2618; color: #e8b04b;
+    border-radius: 8px; padding: 6px 12px; }
+QPushButton#aichip:hover { background: #352f1c; }
+QPushButton#aichip:disabled { color: #8a8fa3; border-color: #2e3345; background: transparent; }
+QListWidget#ailist { background: #1b1e27; border: 1px solid #2a2f3d; border-radius: 10px; padding: 6px; outline: none; }
+QListWidget#ailist::item { padding: 8px 10px; border-radius: 8px; margin: 1px 0; }
+QListWidget#ailist::item:selected { background: #2c3145; color: #e8b04b; }
+QListWidget#ailist::item:hover { background: #232735; }
+QListWidget#aiissues { background: #1b1e27; border: 1px solid #2a2f3d; border-radius: 10px; padding: 6px; outline: none; }
+QListWidget#aiissues::item { padding: 8px 10px; border-radius: 8px; border-bottom: 1px solid #262b39; }
+QListWidget#aiissues::item:selected { background: #2c3145; color: #f1efe9; }
+QTableWidget#aitable { background: #1b1e27; alternate-background-color: #20232e; border: 1px solid #2a2f3d;
+    border-radius: 10px; gridline-color: #2a2f3d; }
+QTableWidget#aitable { outline: none; }
+QTableWidget#aitable::item { padding: 6px 8px; }
+QTableWidget#aitable::item:selected { background: #2c3145; color: #f1efe9; }
+QHeaderView::section { background: #232735; color: #8a8fa3; border: none; border-bottom: 1px solid #2e3345;
+    padding: 6px 8px; font-weight: bold; }
+QProgressBar { background: #262b39; border: none; border-radius: 3px; }
+QProgressBar::chunk { background: #e8b04b; border-radius: 3px; }
 """
 
 EXTRA_QSS_LIGHT = """
@@ -405,7 +445,8 @@ QToolButton#section:hover { color: #a8730c; }
 QToolBar QToolButton::menu-indicator { image: none; width: 0; }
 QScrollArea { background: transparent; border: none; }
 QScrollArea > QWidget > QWidget { background: transparent; }
-QPushButton#verbtn { color: #8a8474; border: none; background: transparent; padding: 2px 10px; }
+QPushButton#verbtn { color: #8a8474; border: none; background: transparent; padding: 0 10px; min-height: 18px; max-height: 18px; }
+QStatusBar { min-height: 24px; max-height: 24px; }
 QPushButton#verbtn:hover { color: #a8730c; }
 QTextBrowser#guide { background: #ffffff; border: none; padding: 6px 18px; font-size: 14px; }
 QListWidget#guidenav { background: #f6f3ec; border: none; border-right: 1px solid #e6e1d6;
@@ -413,12 +454,46 @@ QListWidget#guidenav { background: #f6f3ec; border: none; border-right: 1px soli
 QListWidget#guidenav::item { padding: 9px 12px; border-radius: 8px; margin: 1px 0; }
 QListWidget#guidenav::item:selected { background: #fbefd3; color: #8a5f0a; }
 QListWidget#guidenav::item:hover { background: #efeadf; }
+QToolBar { padding: 4px 6px; }
+QToolBar QToolButton { min-height: 32px; max-height: 32px; }
+QMenuBar { background: #fbf9f4; border-bottom: 1px solid #e6e1d6; padding: 1px 6px; }
+QMenuBar::item { background: transparent; padding: 4px 12px; border-radius: 6px; color: #4a4636; }
+QMenuBar::item:selected, QMenuBar::item:pressed { background: #f4e3c2; color: #6b4a00; }
+QMenu::item:disabled { color: #b8b2a4; }
+QMenu::indicator { width: 13px; height: 13px; margin-left: 8px; border-radius: 4px; }
+QMenu::indicator:unchecked { border: 1px solid #b8b2a4; background: transparent; }
+QMenu::indicator:checked { border: 1px solid #d69a33; background: #d69a33; }
+QPushButton#seg { background: transparent; border: 1px solid #e2ddd2; border-radius: 9px; padding: 7px 16px; color: #6b6553; font-weight: bold; }
+QPushButton#seg:hover { color: #2b2820; }
+QPushButton#seg:checked { background: #fbefd3; border-color: #d69a33; color: #6b4a00; font-weight: bold; }
+QGroupBox QLabel#plain, QGroupBox QCheckBox { font-weight: normal; }
+QLabel#aihead { font-size: 15px; font-weight: bold; color: #2b2820; }
+QPushButton#aichip { text-align: left; border: 1px solid #e3c98d; background: #fdf4dd; color: #7a5200;
+    border-radius: 8px; padding: 6px 12px; }
+QPushButton#aichip:hover { background: #fbeac0; }
+QPushButton#aichip:disabled { color: #8a8474; border-color: #e6e1d6; background: transparent; }
+QListWidget#ailist { background: #f6f3ec; border: 1px solid #e6e1d6; border-radius: 10px; padding: 6px; outline: none; }
+QListWidget#ailist::item { padding: 8px 10px; border-radius: 8px; margin: 1px 0; }
+QListWidget#ailist::item:selected { background: #fbefd3; color: #6b4a00; }
+QListWidget#ailist::item:hover { background: #efeadf; }
+QListWidget#aiissues { background: #ffffff; border: 1px solid #e6e1d6; border-radius: 10px; padding: 6px; outline: none; }
+QListWidget#aiissues::item { padding: 8px 10px; border-radius: 8px; border-bottom: 1px solid #efeadf; }
+QListWidget#aiissues::item:selected { background: #fbefd3; color: #2b2820; }
+QTableWidget#aitable { background: #ffffff; alternate-background-color: #faf7f0; border: 1px solid #e6e1d6;
+    border-radius: 10px; gridline-color: #ece7db; }
+QTableWidget#aitable { outline: none; }
+QTableWidget#aitable::item { padding: 6px 8px; }
+QTableWidget#aitable::item:selected { background: #fbefd3; color: #2b2820; }
+QHeaderView::section { background: #f6f3ec; color: #8a8474; border: none; border-bottom: 1px solid #e6e1d6;
+    padding: 6px 8px; font-weight: bold; }
+QProgressBar { background: #ece7db; border: none; border-radius: 3px; }
+QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 """
 
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.3.0"
+APP_VERSION = "6.4.0"
 EDITION = "main"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -1242,6 +1317,11 @@ def find_resource(name: str):
     return None
 
 
+AI.SETTINGS_LOAD = settings_load
+AI.SETTINGS_SAVE = settings_save
+AI.FIND_RESOURCE = find_resource
+
+
 def write_file_safely(path: str, data: bytes, owner=None) -> str:
     """Записать файл, даже если он сейчас открыт в самой программе.
 
@@ -1462,6 +1542,15 @@ def draw_icon(kind: str, color: str, size: int = 64) -> QIcon:
         p.setBrush(c)
         p.drawEllipse(QPointF(8.0 * u, 11.4 * u), 0.5 * u, 0.5 * u)
         p.setBrush(Qt.NoBrush)
+    elif kind == "ai":
+        path = QPainterPath()
+        path.moveTo(7.0 * u, 2.8 * u)
+        path.quadTo(7.0 * u, 8.4 * u, 12.6 * u, 8.4 * u)
+        path.quadTo(7.0 * u, 8.4 * u, 7.0 * u, 14.0 * u)
+        path.quadTo(7.0 * u, 8.4 * u, 1.4 * u, 8.4 * u)
+        path.quadTo(7.0 * u, 8.4 * u, 7.0 * u, 2.8 * u)
+        p.drawPath(path)
+        line(12.6, 2.2, 12.6, 5.0); line(11.2, 3.6, 14.0, 3.6)
     elif kind == "more":
         p.setBrush(c)
         for cx in (4.0, 8.0, 12.0):
@@ -2053,6 +2142,14 @@ class SaveDialog(QDialog):
         name_row.addWidget(self.edit_name, 1)
         name_row.addWidget(QLabel(".pdf"))
         lay.addLayout(name_row)
+        self.btn_ai = QPushButton("")
+        self.btn_ai.setObjectName("aichip")
+        self.btn_ai.setCursor(Qt.PointingHandCursor)
+        self.btn_ai.setVisible(False)
+        self.btn_ai.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        self.btn_ai.clicked.connect(self._use_ai_name)
+        lay.addWidget(self.btn_ai)
+        self._ai_name = None
 
         # --- шаблоны
         lay.addWidget(QLabel("<b>Готовые шаблоны</b> — нажмите, чтобы подставить имя"))
@@ -2060,6 +2157,8 @@ class SaveDialog(QDialog):
         tpl_row.setSpacing(6)
         self.combo_tpl = QComboBox()
         self.combo_tpl.setMinimumHeight(30)
+        self.combo_tpl.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.combo_tpl.setMinimumContentsLength(18)
         user_tpls = s.get("name_templates", [])
         for tpl in user_tpls + [t for t in self.DEFAULT_TEMPLATES if t not in user_tpls]:
             self.combo_tpl.addItem(self.resolve(tpl), tpl)
@@ -2163,7 +2262,34 @@ class SaveDialog(QDialog):
         if idx >= 0:
             self.combo_tpl.setCurrentIndex(idx)
         self.edit_name.setText(self.resolve(last))
+        self._initial_name = self.edit_name.text()
         self.check_state()
+
+    # ---- имя от ИИ (автоматический режим) ----
+    def set_ai_wait(self):
+        self.btn_ai.setText("✨  ИИ читает документ и подбирает имя…")
+        self.btn_ai.setEnabled(False)
+        self.btn_ai.setVisible(True)
+
+    def set_ai_name(self, name):
+        self._ai_name = name
+        shown = name if len(name) <= 60 else name[:59] + "…"
+        self.btn_ai.setText(f"✨  ИИ предлагает: {shown}")
+        self.btn_ai.setToolTip(f"Нажмите, чтобы подставить имя:\n{name}")
+        self.btn_ai.setEnabled(True)
+        self.btn_ai.setVisible(True)
+        if self.edit_name.text() == self._initial_name:      # имя ещё не трогали руками
+            self.edit_name.setText(name)
+
+    def set_ai_fail(self, msg):
+        self.btn_ai.setText("ИИ не подобрал имя — введите вручную")
+        self.btn_ai.setToolTip(msg)
+        self.btn_ai.setEnabled(False)
+        self.btn_ai.setVisible(True)
+
+    def _use_ai_name(self):
+        if self._ai_name:
+            self.edit_name.setText(self._ai_name)
 
     # ---- шаблоны ----
     def resolve(self, tpl: str) -> str:
@@ -4945,6 +5071,831 @@ class GuideDialog(QDialog):
         self.view.verticalScrollBar().setValue(0)
 
 
+# ====================================================================== ИИ-помощник: окна
+
+class AiThread(QThread):
+    """Запрос к ИИ в фоне: fn(status, cancelled) → результат."""
+    done = Signal(object)
+    failed = Signal(str)
+    status = Signal(str)
+
+    def __init__(self, fn, parent=None):
+        super().__init__(parent)
+        self.fn = fn
+        self.cancelled = False
+
+    def run(self):
+        try:
+            res = self.fn(self.status.emit, lambda: self.cancelled)
+            if not self.cancelled:
+                self.done.emit(res)
+        except AI.AiCancelled:
+            pass
+        except AI.AiError as e:
+            if not self.cancelled:
+                self.failed.emit(str(e))
+        except Exception as e:
+            if not self.cancelled:
+                self.failed.emit(f"{type(e).__name__}: {e}")
+
+
+class AiBusyDialog(QDialog):
+    """Небольшое окно ожидания с кнопкой «Отмена»."""
+
+    def __init__(self, title, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("ИИ-помощник")
+        self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
+        self.setModal(True)
+        self.setMinimumWidth(420)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(20, 18, 20, 16)
+        lay.setSpacing(10)
+        head = QLabel(title)
+        head.setObjectName("aihead")
+        head.setWordWrap(True)
+        lay.addWidget(head)
+        self.bar = QProgressBar()
+        self.bar.setRange(0, 0)
+        self.bar.setTextVisible(False)
+        self.bar.setFixedHeight(6)
+        lay.addWidget(self.bar)
+        self.lbl = QLabel("Готовлю документ…")
+        self.lbl.setObjectName("hint")
+        lay.addWidget(self.lbl)
+        row = QHBoxLayout()
+        row.addStretch(1)
+        b = QPushButton("Отмена")
+        b.clicked.connect(self.reject)
+        row.addWidget(b)
+        lay.addLayout(row)
+
+    def set_status(self, text):
+        self.lbl.setText(text)
+
+
+class AiSettingsDialog(QDialog):
+    """Ключи и поведение ИИ: провайдеры, проверка ключа, автоматический режим."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Настройки ИИ")
+        self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
+        self.resize(860, 600)
+        self.setMinimumSize(820, 580)
+        s = settings_load()
+        self.keys = dict(s.get("ai_keys") or {})
+        self.models = dict(s.get("ai_models") or {})
+        self.custom_url = s.get("ai_custom_url", "")
+        self.chosen = s.get("ai_provider") or AI.default_provider(s)
+        self._row = -1
+        self._test_thread = None
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(16, 14, 16, 14)
+        root.setSpacing(12)
+
+        # ---- переключатель страниц
+        seg = QHBoxLayout()
+        seg.setSpacing(6)
+        self.seg_btns = []
+        for i, text in enumerate(("Сервисы и ключи", "Автоматика и правила")):
+            b = QPushButton(text)
+            b.setObjectName("seg")
+            b.setCheckable(True)
+            b.setCursor(Qt.PointingHandCursor)
+            b.clicked.connect(lambda _=False, n=i: self._page(n))
+            seg.addWidget(b)
+            self.seg_btns.append(b)
+        seg.addStretch(1)
+        root.addLayout(seg)
+        self.stack = QStackedWidget()
+        root.addWidget(self.stack, 1)
+
+        # ================= страница 1: сервисы
+        page1 = QWidget()
+        top = QHBoxLayout(page1)
+        top.setContentsMargins(0, 0, 0, 0)
+        top.setSpacing(14)
+        self.lst = QListWidget()
+        self.lst.setObjectName("ailist")
+        self.lst.setFixedWidth(250)
+        self.lst.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        top.addWidget(self.lst)
+
+        card = QGroupBox("Сервис")
+        cl = QVBoxLayout(card)
+        cl.setSpacing(8)
+        self.lbl_name = QLabel("")
+        self.lbl_name.setObjectName("aihead")
+        cl.addWidget(self.lbl_name)
+        self.lbl_best = QLabel("")
+        self.lbl_best.setObjectName("plain")
+        self.lbl_best.setWordWrap(True)
+        cl.addWidget(self.lbl_best)
+        self.lbl_count = QLabel("")
+        self.lbl_count.setObjectName("hint")
+        cl.addWidget(self.lbl_count)
+        cl.addSpacing(4)
+
+        self.lbl_url = QLabel("Адрес сервиса")
+        self.lbl_url.setObjectName("plain")
+        cl.addWidget(self.lbl_url)
+        self.ed_url = QLineEdit()
+        self.ed_url.setPlaceholderText("https://…/v1/chat/completions")
+        self.ed_url.setMinimumHeight(32)
+        cl.addWidget(self.ed_url)
+
+        self.lbl_key = QLabel("Ключ API")
+        self.lbl_key.setObjectName("plain")
+        cl.addWidget(self.lbl_key)
+        krow = QHBoxLayout()
+        krow.setSpacing(6)
+        self.ed_key = QLineEdit()
+        self.ed_key.setEchoMode(QLineEdit.Password)
+        self.ed_key.setMinimumHeight(32)
+        krow.addWidget(self.ed_key, 1)
+        self.btn_eye = QPushButton("Показать")
+        self.btn_eye.setCheckable(True)
+        self.btn_eye.toggled.connect(self._eye)
+        krow.addWidget(self.btn_eye)
+        self.btn_get = QPushButton("Получить ключ ↗")
+        self.btn_get.setToolTip("Откроется страница сервиса, где создаётся бесплатный ключ")
+        self.btn_get.clicked.connect(self._open_key_page)
+        krow.addWidget(self.btn_get)
+        cl.addLayout(krow)
+
+        lbl_m = QLabel("Модель")
+        lbl_m.setObjectName("plain")
+        cl.addWidget(lbl_m)
+        self.ed_model = QLineEdit()
+        self.ed_model.setMinimumHeight(32)
+        cl.addWidget(self.ed_model)
+        hint = QLabel("Оставьте пустым — программа сама подберёт модель, которая понимает сканы.")
+        hint.setObjectName("hint")
+        hint.setWordWrap(True)
+        cl.addWidget(hint)
+        cl.addSpacing(4)
+
+        trow = QHBoxLayout()
+        trow.setSpacing(8)
+        self.btn_test = QPushButton("Проверить")
+        self.btn_test.setToolTip("Отправить короткий пробный запрос: текст и маленькую картинку")
+        self.btn_test.clicked.connect(self._test)
+        trow.addWidget(self.btn_test)
+        self.btn_main = QPushButton("Сделать основным")
+        self.btn_main.setObjectName("primary")
+        self.btn_main.clicked.connect(self._make_main)
+        trow.addWidget(self.btn_main)
+        trow.addStretch(1)
+        cl.addLayout(trow)
+        self.lbl_test = QLabel("")
+        self.lbl_test.setObjectName("plain")
+        self.lbl_test.setWordWrap(True)
+        self.lbl_test.setMinimumHeight(38)
+        self.lbl_test.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        self.lbl_test.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        cl.addWidget(self.lbl_test)
+        cl.addStretch(1)
+        top.addWidget(card, 1)
+        self.stack.addWidget(page1)
+
+        # ================= страница 2: автоматика и правила
+        page2 = QWidget()
+        p2 = QVBoxLayout(page2)
+        p2.setContentsMargins(0, 0, 0, 0)
+        p2.setSpacing(12)
+        auto = QGroupBox("Автоматический режим")
+        al = QVBoxLayout(auto)
+        al.setSpacing(8)
+        self.chk_auto = QCheckBox("Работать автоматически — то же, что галочка в меню «ИИ»")
+        self.chk_auto.setChecked(bool(s.get("ai_auto", False)))
+        al.addWidget(self.chk_auto)
+        sub = QVBoxLayout()
+        sub.setContentsMargins(26, 0, 0, 0)
+        sub.setSpacing(8)
+        self.chk_auto_name = QCheckBox("имя файла подставляется само в окне «Сохранить как»")
+        self.chk_auto_name.setChecked(bool(s.get("ai_auto_name", True)))
+        sub.addWidget(self.chk_auto_name)
+        self.chk_auto_ocr = QCheckBox("текст распознаётся сразу после сканирования")
+        self.chk_auto_ocr.setChecked(bool(s.get("ai_auto_ocr", True)))
+        sub.addWidget(self.chk_auto_ocr)
+        al.addLayout(sub)
+        off = QLabel("Когда галочка снята, ИИ работает только по вашей команде из меню «ИИ».")
+        off.setObjectName("hint")
+        off.setWordWrap(True)
+        al.addWidget(off)
+        self.chk_auto.toggled.connect(self._sync_auto)
+        p2.addWidget(auto)
+
+        rules = QGroupBox("Правила")
+        g = QGridLayout(rules)
+        g.setHorizontalSpacing(14)
+        g.setVerticalSpacing(10)
+
+        def cap(text):
+            l = QLabel(text)
+            l.setObjectName("plain")
+            return l
+        g.addWidget(cap("Имя файла по правилу"), 0, 0)
+        self.ed_rule = QLineEdit(s.get("ai_name_rule") or AI.DEFAULT_NAME_RULE)
+        self.ed_rule.setMinimumHeight(32)
+        self.ed_rule.setToolTip("Опишите словами, из чего собирать имя. Пример результата: «CMR №597 Иванов 26.09.2026»")
+        g.addWidget(self.ed_rule, 0, 1)
+        g.addWidget(cap("Какие данные выписывать"), 1, 0)
+        self.ed_fields = QLineEdit(s.get("ai_fields") or AI.DEFAULT_FIELDS)
+        self.ed_fields.setMinimumHeight(32)
+        self.ed_fields.setCursorPosition(0)
+        self.ed_fields.setToolTip("Через запятую. Эти же поля станут столбцами таблицы.")
+        g.addWidget(self.ed_fields, 1, 1)
+        g.addWidget(cap("Распознавание текста"), 2, 0)
+        orow = QHBoxLayout()
+        orow.setSpacing(8)
+        self.cmb_ocr = QComboBox()
+        self.cmb_ocr.setMinimumHeight(32)
+        win = AI.win_ocr_available()
+        self.cmb_ocr.addItem("Авто — Windows, а если его нет — ИИ", "auto")
+        self.cmb_ocr.addItem("Windows — на этом компьютере, без интернета" + ("" if win else " (недоступно)"), "windows")
+        self.cmb_ocr.addItem("ИИ — через интернет, медленнее", "ai")
+        i = self.cmb_ocr.findData(s.get("ai_ocr_engine", "auto"))
+        self.cmb_ocr.setCurrentIndex(max(0, i))
+        orow.addWidget(self.cmb_ocr, 1)
+        self.cmb_lang = QComboBox()
+        self.cmb_lang.setMinimumHeight(32)
+        self.cmb_lang.setMinimumWidth(120)
+        self.cmb_lang.addItem("язык: авто", "auto")
+        for tag in AI.win_ocr_languages():
+            self.cmb_lang.addItem(tag, tag)
+        i = self.cmb_lang.findData(s.get("ai_ocr_lang", "auto"))
+        self.cmb_lang.setCurrentIndex(max(0, i))
+        self.cmb_lang.setEnabled(win)
+        orow.addWidget(self.cmb_lang)
+        g.addLayout(orow, 2, 1)
+        g.setColumnStretch(1, 1)
+        p2.addWidget(rules)
+        p2.addStretch(1)
+        self.stack.addWidget(page2)
+
+        note = QLabel("Когда работает ИИ, текст или изображение страниц уходит в выбранный сервис через интернет. "
+                      "Для документов, которые нельзя никому показывать, ИИ не используйте. "
+                      "Распознавание «Windows» и поиск «М.П.» в документах с текстом работают на компьютере.")
+        note.setObjectName("hint")
+        note.setWordWrap(True)
+        root.addWidget(note)
+
+        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        bb.button(QDialogButtonBox.Ok).setText("Сохранить")
+        bb.button(QDialogButtonBox.Cancel).setText("Отмена")
+        bb.accepted.connect(self._save)
+        bb.rejected.connect(self.reject)
+        root.addWidget(bb)
+
+        self._page(0)
+        self._fill_list()
+        self.lst.currentRowChanged.connect(self._show)
+        names = [p["name"] for p in AI.PROVIDERS]
+        self.lst.setCurrentRow(names.index(self.chosen) if self.chosen in names else 0)
+        self._sync_auto()
+
+    def _page(self, n):
+        self.stack.setCurrentIndex(n)
+        for i, b in enumerate(self.seg_btns):
+            b.setChecked(i == n)
+
+    # ---- список
+    def _state(self, p):
+        if p.get("custom"):
+            return "адрес задан" if self.custom_url.strip() else "не настроен"
+        if p.get("nokey"):
+            return "ключ не нужен"
+        if self.keys.get(p["name"], "").strip():
+            return "свой ключ"
+        if AI.builtin_keys().get(p["name"]):
+            return "встроенный ключ"
+        return "нужен ключ"
+
+    def _fill_list(self):
+        self.lst.blockSignals(True)
+        row = self.lst.currentRow()
+        self.lst.clear()
+        for p in AI.PROVIDERS:
+            st = self._state(p)
+            star = "★ " if p["name"] == self.chosen else ""
+            it = QListWidgetItem(f"{star}{p['name'].split(' (')[0]}\n{st}")
+            it.setData(Qt.UserRole, p["name"])
+            if st in ("нужен ключ", "не настроен"):
+                it.setForeground(QColor("#9a9486"))
+            self.lst.addItem(it)
+        self.lst.setCurrentRow(row)
+        self.lst.blockSignals(False)
+
+    def _current(self):
+        return AI.PROVIDERS[self._row] if 0 <= self._row < len(AI.PROVIDERS) else None
+
+    def _keep(self):
+        """Запомнить то, что введено для открытого сервиса."""
+        p = self._current()
+        if p is None:
+            return
+        name = p["name"]
+        key = self.ed_key.text().strip()
+        if key:
+            self.keys[name] = key
+        else:
+            self.keys.pop(name, None)
+        m = self.ed_model.text().strip()
+        if m:
+            self.models[name] = m
+        else:
+            self.models.pop(name, None)
+        if p.get("custom"):
+            self.custom_url = self.ed_url.text().strip()
+
+    def _show(self, row):
+        self._keep()
+        self._row = row
+        p = self._current()
+        if p is None:
+            return
+        name = p["name"]
+        self.lbl_name.setText(name + ("   ★ основной" if name == self.chosen else ""))
+        stars = "★" * p["stars"] + "☆" * (5 - p["stars"]) if p["stars"] else ""
+        self.lbl_best.setText((stars + " — " if stars else "") + p["best"])
+        self.lbl_count.setText(AI.count_text(name))
+        custom, nokey = bool(p.get("custom")), bool(p.get("nokey"))
+        self.lbl_url.setVisible(custom)
+        self.ed_url.setVisible(custom)
+        self.ed_url.setText(self.custom_url)
+        self.ed_key.setEnabled(not nokey)
+        self.ed_key.setText(self.keys.get(name, ""))
+        builtin = bool(AI.builtin_keys().get(name))
+        self.lbl_key.setText("Ключ API" + (" — необязательно, есть встроенный" if builtin else
+                                           " — не нужен" if nokey else ""))
+        self.ed_key.setPlaceholderText("встроенный ключ уже работает — сюда можно вписать свой" if builtin
+                                       else p["key_hint"])
+        self.btn_get.setVisible(bool(p.get("key_url")) and not nokey)
+        s = settings_load()
+        found = (s.get("ai_models_found") or {}).get(name) or (p["models"][0] if p["models"] else "")
+        self.ed_model.setText(self.models.get(name, ""))
+        self.ed_model.setPlaceholderText(f"авто: {found}" if found else "название модели")
+        self.btn_main.setEnabled(name != self.chosen)
+        self.lbl_test.setText("")
+
+    def _eye(self, on):
+        self.ed_key.setEchoMode(QLineEdit.Normal if on else QLineEdit.Password)
+        self.btn_eye.setText("Скрыть" if on else "Показать")
+
+    def _open_key_page(self):
+        p = self._current()
+        if p and p.get("key_url"):
+            QDesktopServices.openUrl(QUrl(p["key_url"]))
+
+    def _make_main(self):
+        p = self._current()
+        if p is None:
+            return
+        self._keep()
+        self.chosen = p["name"]
+        self._fill_list()
+        self._show(self._row)
+
+    def _sync_auto(self):
+        on = self.chk_auto.isChecked()
+        self.chk_auto_name.setEnabled(on)
+        self.chk_auto_ocr.setEnabled(on)
+
+    def _apply(self):
+        self._keep()
+        s = settings_load()
+        s["ai_keys"] = self.keys
+        s["ai_models"] = self.models
+        s["ai_custom_url"] = self.custom_url
+        s["ai_provider"] = self.chosen
+        s["ai_auto"] = self.chk_auto.isChecked()
+        s["ai_auto_name"] = self.chk_auto_name.isChecked()
+        s["ai_auto_ocr"] = self.chk_auto_ocr.isChecked()
+        s["ai_name_rule"] = self.ed_rule.text().strip() or AI.DEFAULT_NAME_RULE
+        s["ai_fields"] = ", ".join(AI.fields_list(self.ed_fields.text()))
+        s["ai_ocr_engine"] = self.cmb_ocr.currentData()
+        s["ai_ocr_lang"] = self.cmb_lang.currentData()
+        settings_save(s)
+
+    def _test(self):
+        p = self._current()
+        if p is None or self._test_thread is not None:
+            return
+        self._apply()
+        self._fill_list()
+        if not AI.provider_ready(p):
+            self.lbl_test.setText("Сначала вставьте ключ" + (" и адрес сервиса." if p.get("custom") else "."))
+            return
+        name = p["name"]
+        self.btn_test.setEnabled(False)
+        self.lbl_test.setText("Проверяю… обычно это 5–20 секунд")
+        th = AiThread(lambda status, cancelled: AI.test_provider(name), self)
+        self._test_thread = th
+
+        def fin(text):
+            self._test_thread = None
+            self.btn_test.setEnabled(True)
+            self.lbl_test.setText(text)
+            self.lbl_count.setText(AI.count_text(name))
+        th.done.connect(lambda r: fin("✔ " + str(r)))
+        th.failed.connect(lambda m: fin("✖ " + m))
+        th.start()
+
+    def _save(self):
+        self._apply()
+        self.accept()
+
+    def reject(self):
+        if self._test_thread is not None:
+            self._test_thread.cancelled = True
+            self._test_thread.wait(200)
+        super().reject()
+
+
+class AiNameDialog(QDialog):
+    """Имя файла, предложенное ИИ: поправить и применить."""
+
+    def __init__(self, name, can_rename, source, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Имя файла от ИИ")
+        self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
+        self.setMinimumWidth(780)
+        self.action = None
+        self._can_rename = can_rename
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(20, 16, 20, 16)
+        lay.setSpacing(10)
+        head = QLabel("ИИ прочитал документ и предлагает имя")
+        head.setObjectName("aihead")
+        lay.addWidget(head)
+        row = QHBoxLayout()
+        row.setSpacing(6)
+        self.edit = QLineEdit(name)
+        self.edit.setMinimumHeight(34)
+        self.edit.selectAll()
+        row.addWidget(self.edit, 1)
+        row.addWidget(QLabel(".pdf"))
+        lay.addLayout(row)
+        src = QLabel(f"Можно поправить вручную. Ответил: {source}")
+        src.setObjectName("hint")
+        lay.addWidget(src)
+        btns = QHBoxLayout()
+        btns.setSpacing(8)
+        self.b_rename = QPushButton("Переименовать файл")
+        self.b_rename.setObjectName("primary")
+        self.b_rename.setEnabled(can_rename)
+        if not can_rename:
+            self.b_rename.setToolTip("Документ ещё не сохранён в файл — нажмите «Сохранить как…»")
+        self.b_rename.clicked.connect(lambda: self._done("rename"))
+        btns.addWidget(self.b_rename)
+        b_as = QPushButton("Сохранить как…")
+        if not can_rename:
+            b_as.setObjectName("primary")
+        b_as.clicked.connect(lambda: self._done("saveas"))
+        btns.addWidget(b_as)
+        b_copy = QPushButton("Скопировать")
+        b_copy.clicked.connect(lambda: self._done("copy"))
+        btns.addWidget(b_copy)
+        b_again = QPushButton("Другой вариант")
+        b_again.setToolTip("Спросить ИИ ещё раз")
+        b_again.clicked.connect(lambda: self._done("again"))
+        btns.addWidget(b_again)
+        btns.addStretch(1)
+        b_close = QPushButton("Закрыть")
+        b_close.clicked.connect(self.reject)
+        btns.addWidget(b_close)
+        lay.addLayout(btns)
+        self.edit.textChanged.connect(self._check)
+        self._check()
+
+    def _check(self):
+        ok = bool(AI.clean_filename(self.edit.text()))
+        self.b_rename.setEnabled(ok and self._can_rename)
+
+    def name(self):
+        return AI.clean_filename(self.edit.text())
+
+    def _done(self, action):
+        if not self.name():
+            return
+        self.action = action
+        self.accept()
+
+
+class AiDataDialog(QDialog):
+    """Данные из документа: таблица «поле — значение», копирование, запись в CSV."""
+
+    def __init__(self, result, file_name, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Данные из документа")
+        self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
+        self.resize(720, 560)
+        self.file_name = file_name
+        self.n_main = len(result["fields"])
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(16, 14, 16, 14)
+        lay.setSpacing(10)
+        head = QLabel(f"Данные из «{file_name}»")
+        head.setObjectName("aihead")
+        lay.addWidget(head)
+        sub = QLabel("Значения можно править двойным щелчком. Сверьте с документом: ИИ иногда ошибается в цифрах. "
+                     f"Ответил: {result['provider'].split(' (')[0]}")
+        sub.setObjectName("hint")
+        sub.setWordWrap(True)
+        lay.addWidget(sub)
+        rows = list(result["fields"]) + list(result["other"])
+        self.tbl = QTableWidget(len(rows), 2)
+        self.tbl.setObjectName("aitable")
+        self.tbl.setHorizontalHeaderLabels(["Поле", "Значение"])
+        self.tbl.verticalHeader().setVisible(False)
+        self.tbl.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self.tbl.horizontalHeader().setStretchLastSection(True)
+        self.tbl.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.tbl.setAlternatingRowColors(True)
+        self.tbl.setWordWrap(True)
+        for r, (k, v) in enumerate(rows):
+            a = QTableWidgetItem(k)
+            a.setFlags(a.flags() & ~Qt.ItemIsEditable)
+            if r >= self.n_main:
+                a.setForeground(QColor("#9a9486"))
+            self.tbl.setItem(r, 0, a)
+            self.tbl.setItem(r, 1, QTableWidgetItem(v))
+        self.tbl.resizeRowsToContents()
+        self.tbl.setCurrentCell(-1, -1)
+        self.tbl.setFocusPolicy(Qt.ClickFocus)
+        lay.addWidget(self.tbl, 1)
+        btns = QHBoxLayout()
+        btns.setSpacing(8)
+        b_all = QPushButton("Скопировать всё")
+        b_all.setObjectName("primary")
+        b_all.setToolTip("Поле и значение через табуляцию — вставляется в Excel двумя столбцами")
+        b_all.clicked.connect(self.copy_all)
+        btns.addWidget(b_all)
+        b_one = QPushButton("Скопировать значение")
+        b_one.setToolTip("Только значение выбранной строки")
+        b_one.clicked.connect(self.copy_value)
+        btns.addWidget(b_one)
+        b_csv = QPushButton("Добавить в таблицу…")
+        b_csv.setToolTip("Дописать строку в файл-таблицу (CSV, открывается в Excel).\n"
+                         "Один документ — одна строка, столбцы — ваши поля.")
+        b_csv.clicked.connect(self.to_csv)
+        btns.addWidget(b_csv)
+        self.b_open = QPushButton("Открыть таблицу")
+        self.b_open.clicked.connect(self.open_csv)
+        self.b_open.setVisible(bool(settings_load().get("ai_csv_path")))
+        btns.addWidget(self.b_open)
+        btns.addStretch(1)
+        b_close = QPushButton("Закрыть")
+        b_close.clicked.connect(self.accept)
+        btns.addWidget(b_close)
+        lay.addLayout(btns)
+        self.lbl = QLabel("")
+        self.lbl.setObjectName("hint")
+        lay.addWidget(self.lbl)
+
+    def rows(self):
+        out = []
+        for r in range(self.tbl.rowCount()):
+            out.append((self.tbl.item(r, 0).text(), self.tbl.item(r, 1).text().strip()))
+        return out
+
+    def copy_all(self):
+        QApplication.clipboard().setText("\n".join(f"{k}\t{v}" for k, v in self.rows() if v))
+        self.lbl.setText("✔ Скопировано — вставьте в Excel или в сообщение (Ctrl+V)")
+
+    def copy_value(self):
+        r = self.tbl.currentRow()
+        if r < 0:
+            self.lbl.setText("Сначала щёлкните по строке")
+            return
+        QApplication.clipboard().setText(self.tbl.item(r, 1).text())
+        self.lbl.setText(f"✔ Скопировано: {self.tbl.item(r, 0).text()}")
+
+    def to_csv(self):
+        import csv
+        s = settings_load()
+        path = s.get("ai_csv_path") or ""
+        if not path or not os.path.isdir(os.path.dirname(path)):
+            start = os.path.join(os.path.expanduser("~"), "Documents")
+            if not os.path.isdir(start):
+                start = os.path.expanduser("~")
+            path, _ = QFileDialog.getSaveFileName(
+                self, "Таблица для данных", os.path.join(start, "Stamp Studio — данные.csv"),
+                "Таблица CSV (*.csv)", options=QFileDialog.DontConfirmOverwrite)
+            if not path:
+                return
+            if not path.lower().endswith(".csv"):
+                path += ".csv"
+        rows = self.rows()
+        main = rows[:self.n_main]
+        other = [f"{k}: {v}" for k, v in rows[self.n_main:] if v]
+        try:
+            header = None
+            if os.path.exists(path) and os.path.getsize(path) > 0:
+                with open(path, "r", encoding="utf-8-sig", newline="") as f:
+                    header = next(csv.reader(f, delimiter=";"), None)
+            new_file = not header
+            if new_file:
+                header = ["Файл", "Добавлено"] + [k for k, _ in main] + ["Прочее"]
+            vals = dict(main)
+            line = []
+            for col in header:
+                if col == "Файл":
+                    line.append(self.file_name)
+                elif col == "Добавлено":
+                    line.append(time.strftime("%d.%m.%Y %H:%M"))
+                elif col == "Прочее":
+                    extra = [f"{k}: {v}" for k, v in main if k not in header and v] + other
+                    line.append(" | ".join(extra))
+                else:
+                    line.append(vals.get(col, ""))
+            with open(path, "a", encoding="utf-8-sig" if new_file else "utf-8", newline="") as f:
+                w = csv.writer(f, delimiter=";")
+                if new_file:
+                    w.writerow(header)
+                w.writerow(line)
+        except PermissionError:
+            QMessageBox.warning(self, "Таблица занята",
+                                "Файл таблицы открыт в Excel — закройте его и нажмите ещё раз.")
+            return
+        except Exception as e:
+            QMessageBox.warning(self, "Не получилось", f"Не удалось записать таблицу:\n{e}")
+            return
+        s = settings_load()
+        s["ai_csv_path"] = path
+        settings_save(s)
+        self.b_open.setVisible(True)
+        self.lbl.setText(f"✔ Строка добавлена в {os.path.basename(path)}")
+
+    def open_csv(self):
+        path = settings_load().get("ai_csv_path") or ""
+        if os.path.exists(path):
+            QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+
+
+class AiCheckDialog(QDialog):
+    """Результат проверки документа: список замечаний, двойной щелчок — к странице."""
+    go_page = Signal(int)
+
+    def __init__(self, result, file_name, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Проверка документа")
+        self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
+        self.resize(680, 520)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(16, 14, 16, 14)
+        lay.setSpacing(10)
+        issues = result["issues"]
+        errs = sum(1 for i in issues if i["severity"] == "error")
+        if not issues:
+            title = "✔ Проблем не найдено"
+        else:
+            title = f"Найдено замечаний: {len(issues)}" + (f", из них важных: {errs}" if errs else "")
+        head = QLabel(title)
+        head.setObjectName("aihead")
+        lay.addWidget(head)
+        text = result.get("summary") or ""
+        if result.get("skipped"):
+            text += (" " if text else "") + (f"Проверены не все страницы: за один раз ИИ читает до 6 сканов "
+                                             f"(пропущено: {result['skipped']}).")
+        text += (" " if text else "") + "ИИ может ошибаться — это подсказка, а не гарантия."
+        sub = QLabel(text.strip())
+        sub.setObjectName("hint")
+        sub.setWordWrap(True)
+        lay.addWidget(sub)
+        self.lst = QListWidget()
+        self.lst.setObjectName("aiissues")
+        self.lst.setWordWrap(True)
+        self.lst.setSpacing(2)
+        self.lst.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        for it in issues:
+            mark = "⛔" if it["severity"] == "error" else "⚠"
+            page = f"стр. {it['page']} · " if it["page"] else ""
+            line = f"{mark}  {page}{it['text']}"
+            if it["quote"]:
+                line += f"\n      «{it['quote'][:160]}»"
+            li = QListWidgetItem(line)
+            li.setData(Qt.UserRole, it["page"])
+            self.lst.addItem(li)
+        self.lst.itemDoubleClicked.connect(self._go)
+        self.lst.setVisible(bool(issues))
+        lay.addWidget(self.lst, 1)
+        if not issues:
+            lay.addStretch(1)
+        row = QHBoxLayout()
+        tip = QLabel("Двойной щелчок — перейти к странице" if issues else "")
+        tip.setObjectName("hint")
+        row.addWidget(tip)
+        row.addStretch(1)
+        b_copy = QPushButton("Скопировать список")
+        b_copy.setVisible(bool(issues))
+        b_copy.clicked.connect(lambda: QApplication.clipboard().setText(
+            "\n".join(self.lst.item(i).text() for i in range(self.lst.count()))))
+        row.addWidget(b_copy)
+        b = QPushButton("Закрыть")
+        b.clicked.connect(self.accept)
+        row.addWidget(b)
+        lay.addLayout(row)
+
+    def _go(self, item):
+        page = item.data(Qt.UserRole)
+        if page:
+            self.go_page.emit(int(page) - 1)
+
+
+class AiPlaceDialog(QDialog):
+    """Что и куда ставить автоматически: печать, подпись, страницы."""
+
+    def __init__(self, current_file, n_pages, cur_page, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Поставить печать и подпись на место")
+        self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
+        self.setMinimumWidth(560)
+        s = settings_load().get("ai_place") or {}
+        lib = lib_load()
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(20, 16, 20, 16)
+        lay.setSpacing(10)
+        head = QLabel("Программа найдёт «М.П.» и строку подписи и поставит их сама")
+        head.setObjectName("aihead")
+        head.setWordWrap(True)
+        lay.addWidget(head)
+        form = QFormLayout()
+        form.setHorizontalSpacing(12)
+        form.setVerticalSpacing(8)
+        self.cmb_stamp = QComboBox()
+        self.cmb_stamp.setMinimumHeight(30)
+        self.cmb_stamp.addItem("— не ставить —", None)
+        self.cmb_sign = QComboBox()
+        self.cmb_sign.setMinimumHeight(30)
+        self.cmb_sign.addItem("— не ставить —", None)
+        for e in lib:
+            label = e["name"] + (f"  ·  {e.get('category')}" if e.get("category") not in (None, "", "Без категории") else "")
+            self.cmb_stamp.addItem(label, e["file"])
+            self.cmb_sign.addItem(label, e["file"])
+        is_sign = lambda e: (e.get("category") == "Подписи") or ("подпис" in e["name"].lower())
+        cur = next((e for e in lib if e["file"] == current_file), None)
+        want_stamp = current_file if cur and not is_sign(cur) else s.get("stamp")
+        if want_stamp is None or self.cmb_stamp.findData(want_stamp) < 0:
+            want_stamp = next((e["file"] for e in lib if not is_sign(e)), None)
+        want_sign = current_file if cur and is_sign(cur) else s.get("sign", "?")
+        if want_sign == "?" or (want_sign and self.cmb_sign.findData(want_sign) < 0):
+            want_sign = next((e["file"] for e in lib if is_sign(e)), None)
+        self.cmb_stamp.setCurrentIndex(max(0, self.cmb_stamp.findData(want_stamp)))
+        self.cmb_sign.setCurrentIndex(max(0, self.cmb_sign.findData(want_sign)))
+        form.addRow("Печать:", self.cmb_stamp)
+        form.addRow("Подпись:", self.cmb_sign)
+        self.cmb_pages = QComboBox()
+        self.cmb_pages.setMinimumHeight(30)
+        self.cmb_pages.addItem(f"Только текущая (стр. {cur_page + 1})", "current")
+        self.cmb_pages.addItem(f"Все страницы, где есть место ({n_pages})", "all")
+        self.cmb_pages.setCurrentIndex(1 if s.get("pages") == "all" and n_pages > 1 else 0)
+        self.cmb_pages.setEnabled(n_pages > 1)
+        form.addRow("Страницы:", self.cmb_pages)
+        lay.addLayout(form)
+        self.hint = QLabel("")
+        self.hint.setObjectName("hint")
+        self.hint.setWordWrap(True)
+        lay.addWidget(self.hint)
+        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        self.b_ok = bb.button(QDialogButtonBox.Ok)
+        self.b_ok.setText("Найти и поставить")
+        self.b_ok.setObjectName("primary")
+        bb.button(QDialogButtonBox.Cancel).setText("Отмена")
+        bb.accepted.connect(self._ok)
+        bb.rejected.connect(self.reject)
+        lay.addWidget(bb)
+        self.cmb_stamp.currentIndexChanged.connect(self._check)
+        self.cmb_sign.currentIndexChanged.connect(self._check)
+        self._empty = not lib
+        self._check()
+
+    def _check(self):
+        ok = bool(self.cmb_stamp.currentData() or self.cmb_sign.currentData())
+        self.b_ok.setEnabled(ok)
+        if self._empty:
+            self.hint.setText("В «Моих печатях» пока пусто. Сначала добавьте печать и подпись в библиотеку "
+                              "(правая панель → «Загрузить файл» → «В библиотеку»).")
+        elif not ok:
+            self.hint.setText("Выберите печать, подпись или обе.")
+        else:
+            self.hint.setText("Размер берётся тот, что запомнен за печатью. После расстановки всё можно "
+                              "подвинуть мышью. Если мест несколько, программа выберет сторону по названию печати.")
+
+    def _ok(self):
+        s = settings_load()
+        s["ai_place"] = {"stamp": self.cmb_stamp.currentData(), "sign": self.cmb_sign.currentData(),
+                         "pages": self.cmb_pages.currentData()}
+        settings_save(s)
+        self.accept()
+
+    def choice(self):
+        return self.cmb_stamp.currentData(), self.cmb_sign.currentData(), self.cmb_pages.currentData()
+
+
 class MetadataDialog(QDialog):
     """Показать метаданные PDF и предложить их очистить."""
 
@@ -5024,6 +5975,7 @@ class MainWindow(QMainWindow):
         self._build_toolbar()
         self._build_dir_bar()
         self._build_side_panel()
+        self._build_menubar()
         self.reload_library()
         self.theme = settings_load().get("theme", "light")
         self.apply_theme()
@@ -5042,6 +5994,8 @@ class MainWindow(QMainWindow):
         QApplication.instance().setStyleSheet(style)
         self.view.set_theme(self.theme)
         self._retint_icons()
+        if hasattr(self, "act_dark"):
+            self.act_dark.setChecked(self.theme == "dark")
 
     def toggle_theme(self):
         self.theme = "light" if self.theme == "dark" else "dark"
@@ -5056,6 +6010,7 @@ class MainWindow(QMainWindow):
         tb.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         tb.setIconSize(QSize(18, 18))
         self._themed_actions = []   # (QAction, kind) — перекрашиваются при смене темы
+        self._doc_actions = []      # действия, которым нужен открытый документ
 
         def add(kind, text, slot, shortcut=None, tip=None, target=None, checkable=False):
             a = QAction(text, self)
@@ -5068,16 +6023,14 @@ class MainWindow(QMainWindow):
                 full_tip = f"{full_tip}  ({shortcut})"
             a.setToolTip(full_tip)
             a.setStatusTip(full_tip)
-            (target or tb).addAction(a)
-            if target is not None:
-                self.addAction(a)                 # чтобы горячая клавиша работала всегда
+            (target if target is not None else tb).addAction(a)
             self._themed_actions.append((a, kind))
             return a
 
         # файл
-        add("folder", "Открыть", self.open_pdf, "Ctrl+O", "Открыть PDF-документ")
-        add("scanner", "Сканер", self.scan_document, None,
-            "Отсканировать документ со сканера")
+        self.act_open = add("folder", "Открыть", self.open_pdf, "Ctrl+O", "Открыть PDF-документ")
+        self.act_scan = add("scanner", "Сканер", self.scan_document, None,
+                            "Отсканировать документ со сканера")
         self.act_save = add("save", "Сохранить", self.save_pdf, "Ctrl+S",
                             "Записать изменения в открытый файл")
         self.act_save_as = add("save_as", "Сохранить как", self.export_pdf, "Ctrl+Shift+S",
@@ -5095,41 +6048,44 @@ class MainWindow(QMainWindow):
                            "Порядок страниц, поворот, добавление из другого PDF")
         self.act_compress = add("compress", "Сжать", self.compress_pdf, None,
                                 "Сжать PDF — уменьшить размер файла")
+        tb.addSeparator()
 
-        # остальное — в подписанном меню «Ещё»
-        more = QMenu(self)
-        add("images", "Открыть картинки как документ…", self.open_images_as_doc, None,
-            "Открыть картинки PNG/JPG как страницы документа", target=more)
-        add("to_pdf", "Собрать PDF из картинок…", self.images_to_pdf, None,
-            "Собрать PDF из готовых картинок", target=more)
+        # ИИ-помощник: то же меню стоит в строке меню сверху
+        self.btn_ai = QToolButton()
+        self.btn_ai.setText("ИИ")
+        self.btn_ai.setToolTip("ИИ-помощник: имя файла, печать на место, данные, проверка, распознавание текста")
+        self.btn_ai.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.btn_ai.setPopupMode(QToolButton.InstantPopup)
+        self.btn_ai.setMenu(self._build_ai_menu())
+        tb.addWidget(self.btn_ai)
+        self._themed_toolbtns = [(self.btn_ai, "ai")]
+
+        # редкие действия живут только в меню «Файл»
+        self.act_images = add("images", "Открыть картинки как документ…", self.open_images_as_doc, None,
+                              "Открыть картинки PNG/JPG как страницы документа", target=self)
+        self.act_topdf = add("to_pdf", "Собрать PDF из картинок…", self.images_to_pdf, None,
+                             "Собрать PDF из готовых картинок", target=self)
         self.act_png = add("to_png", "Сохранить страницы картинками PNG…", self.export_pngs, None,
-                           "Сохранить все страницы картинками PNG", target=more)
-        more.addSeparator()
-        add("meta", "Метаданные PDF…", self.show_metadata, None,
-            "Посмотреть и очистить метаданные PDF", target=more)
-        more.addSeparator()
+                           "Сохранить все страницы картинками PNG", target=self)
+        self.act_meta = add("meta", "Метаданные PDF…", self.show_metadata, None,
+                            "Посмотреть и очистить метаданные PDF", target=self)
         self.act_close = add("close", "Закрыть документ", self.close_document, "Ctrl+W",
-                             "Закрыть открытый документ", target=more)
-        self.btn_more = QToolButton()
-        self.btn_more.setText("Ещё")
-        self.btn_more.setToolTip("Картинки ↔ PDF, метаданные, закрыть документ")
-        self.btn_more.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
-        self.btn_more.setPopupMode(QToolButton.InstantPopup)
-        self.btn_more.setMenu(more)
-        tb.addWidget(self.btn_more)
-        self._themed_toolbtns = [(self.btn_more, "more")]
+                             "Закрыть открытый документ", target=self)
 
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         tb.addWidget(spacer)
-        add("help", "Справка", self.show_guide, "F1", "Как пользоваться программой — с картинками")
+        self.act_help = add("help", "Справка", self.show_guide, "F1",
+                            "Как пользоваться программой — с картинками")
         self.theme_action = add("moon", "", self.toggle_theme, None, "Светлая / тёмная тема")
 
-        # Удаление выбранной печати — по Del (без кнопки в тулбаре)
-        del_act = QAction(self)
-        del_act.setShortcut(QKeySequence("Del"))
-        del_act.triggered.connect(self.delete_selected)
-        self.addAction(del_act)
+        # Удаление выбранной печати — по Del
+        self.act_delete = QAction("Удалить выбранную печать", self)
+        self.act_delete.setShortcut(QKeySequence("Del"))
+        self.act_delete.setStatusTip("Убрать со страницы выделенную печать или подпись  (Del)")
+        self.act_delete.triggered.connect(self.delete_selected)
+        self.addAction(self.act_delete)
+        self._doc_actions.append(self.act_delete)
 
 
     # ---------------------------------------------------------- обновления
@@ -5214,6 +6170,640 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         super().closeEvent(event)
+
+    # ====================================================================== меню и ИИ
+
+    def _build_menubar(self):
+        mb = self.menuBar()
+        mb.setNativeMenuBar(False)
+        mb.clear()
+
+        def act(text, slot, shortcut=None, tip=None, checkable=False, doc=False):
+            a = QAction(text, self)
+            a.triggered.connect(slot)
+            a.setCheckable(checkable)
+            if shortcut:
+                a.setShortcut(QKeySequence(shortcut))
+            a.setStatusTip(tip or text.replace("…", ""))
+            if doc:
+                self._doc_actions.append(a)
+            return a
+
+        # ---- Файл
+        m = mb.addMenu("Файл")
+        for a in (self.act_open, self.act_scan, self.act_images, self.act_topdf):
+            m.addAction(a)
+        m.addSeparator()
+        for a in (self.act_save, self.act_save_as, self.act_png):
+            m.addAction(a)
+        m.addSeparator()
+        m.addAction(self.act_meta)
+        m.addAction(self.act_close)
+        m.addSeparator()
+        m.addAction(act("Выход", self.close, "Ctrl+Q", "Закрыть программу"))
+
+        # ---- Правка
+        m = mb.addMenu("Правка")
+        self.act_place = act("Поставить печать на страницу", self.add_stamp, "Ctrl+Return",
+                             "Поставить выбранную печать в центр страницы", doc=True)
+        m.addAction(self.act_place)
+        m.addAction(self.act_pen)
+        m.addAction(self.act_delete)
+        m.addSeparator()
+        m.addAction(act("Повернуть страницу влево", lambda: self.rotate_page(-90), "Ctrl+L", doc=True))
+        m.addAction(act("Повернуть страницу вправо", lambda: self.rotate_page(90), "Ctrl+Shift+L", doc=True))
+        m.addAction(act("Обрезать поля…", self.crop_page, None, "Убрать лишние поля по краям", doc=True))
+        m.addAction(act("Кадрировать рамкой…", self.frame_crop_page, None,
+                        "Оставить от страницы только область в рамке", doc=True))
+        m.addAction(act("Разрезать на две бумаги…", self.split_page_two, None,
+                        "Разложить два документа со страницы как два листа на стекле сканера", doc=True))
+        m.addAction(self.act_scanlook)
+        m.addSeparator()
+        m.addAction(self.act_org)
+        m.addAction(self.act_compress)
+        m.addSeparator()
+        m.addAction(act("Скопировать текст страницы", self.copy_page_text, "Ctrl+Shift+C",
+                        "Скопировать весь текст открытой страницы в буфер обмена", doc=True))
+
+        # ---- Вид
+        m = mb.addMenu("Вид")
+        m.addAction(act("Увеличить", lambda: self._zoom(1.2), "Ctrl+=", "Приблизить страницу", doc=True))
+        m.addAction(act("Уменьшить", lambda: self._zoom(1 / 1.2), "Ctrl+-", "Отдалить страницу", doc=True))
+        m.addAction(act("Страница целиком", lambda: self._zoom(0), "Ctrl+0",
+                        "Показать страницу целиком", doc=True))
+        m.addSeparator()
+        m.addAction(act("Следующая страница", lambda: self._step_page(1), "Ctrl+PgDown", doc=True))
+        m.addAction(act("Предыдущая страница", lambda: self._step_page(-1), "Ctrl+PgUp", doc=True))
+        m.addSeparator()
+        self.act_dark = act("Тёмная тема", self.toggle_theme, None, "Светлая / тёмная тема", checkable=True)
+        m.addAction(self.act_dark)
+
+        # ---- ИИ (то же меню, что у кнопки «ИИ» в панели)
+        mb.addMenu(self.ai_menu)
+
+        # ---- Помощь
+        m = mb.addMenu("Помощь")
+        m.addAction(self.act_help)
+        m.addAction(act("Что нового в этой версии", self.show_whats_new, None, "Список изменений на сайте"))
+        m.addAction(act("Проверить обновления", lambda: self.check_updates(silent=False), None,
+                        "Проверить, не вышла ли новая версия"))
+        m.addSeparator()
+        m.addAction(act("О программе", self.show_about))
+
+    def _build_ai_menu(self):
+        """Меню «ИИ»: пять помощников, галочка «автоматически», настройки."""
+        m = QMenu("ИИ", self)
+        m.setToolTipsVisible(True)
+
+        def act(text, slot, shortcut, tip, doc=True, checkable=False):
+            a = QAction(text, self)
+            a.triggered.connect(slot)
+            a.setCheckable(checkable)
+            if shortcut:
+                a.setShortcut(QKeySequence(shortcut))
+            a.setToolTip(tip)
+            a.setStatusTip(tip)
+            m.addAction(a)
+            self.addAction(a)
+            if doc:
+                self._doc_actions.append(a)
+            return a
+
+        self.act_ai_name = act("Предложить имя файла", self.ai_name, "Ctrl+I",
+                               "ИИ читает документ и предлагает имя: «CMR №597 Иванов 26.09.2026»")
+        self.act_ai_place = act("Поставить печать и подпись на место…", self.ai_place, "Ctrl+M",
+                                "Найти «М.П.» и строку подписи и поставить туда печать и подпись")
+        self.act_ai_data = act("Данные из документа…", self.ai_extract, "Ctrl+D",
+                               "Номер, дата, сумма, VIN, ФИО — в буфер обмена или в таблицу")
+        self.act_ai_check = act("Проверить перед отправкой…", self.ai_check, "Ctrl+E",
+                                "Опечатки, несовпадения дат, сумм и реквизитов, пустые поля")
+        self.act_ai_ocr = act("Распознать текст скана", self.ai_ocr, "Ctrl+T",
+                              "После этого в скане работают поиск и копирование текста")
+        m.addSeparator()
+        self.act_ai_auto = act("Работать автоматически", self.ai_toggle_auto, None,
+                               "Имя файла подставляется само при «Сохранить как», текст распознаётся после "
+                               "сканирования. Что именно делать само — в настройках ИИ.",
+                               doc=False, checkable=True)
+        self.act_ai_auto.setChecked(bool(settings_load().get("ai_auto", False)))
+        self.act_ai_settings = act("Настройки ИИ и ключи…", self.ai_settings, None,
+                                   "Сервисы ИИ, ключи, что делать автоматически", doc=False)
+        self.ai_menu = m
+        return m
+
+    def _zoom(self, factor):
+        if self.doc is None:
+            return
+        if factor == 0:
+            self.view.fitInView(self.scene.sceneRect(), Qt.KeepAspectRatio)
+        else:
+            self.view.scale(factor, factor)
+        self.place_mascot()
+
+    def _step_page(self, delta):
+        if self.doc is None:
+            return
+        row = max(0, min(self.doc.page_count - 1, self.page_list.currentRow() + delta))
+        self.page_list.setCurrentRow(row)
+
+    def copy_page_text(self):
+        if self.doc is None:
+            return
+        text = self.doc[self.current_page].get_text().strip()
+        if not text:
+            QMessageBox.information(
+                self, "Текста нет",
+                "Эта страница — картинка (скан), текста в ней нет.\n"
+                "Сначала распознайте текст: меню «ИИ → Распознать текст скана».")
+            return
+        QApplication.clipboard().setText(text)
+        self.show_toast("✔  Текст страницы скопирован")
+
+    def show_whats_new(self):
+        QDesktopServices.openUrl(QUrl(f"{GITHUB_URL}/releases/tag/v{APP_VERSION}"))
+
+    def show_about(self):
+        QMessageBox.about(
+            self, "О программе",
+            f"<h3>{APP_TITLE} {APP_VERSION}</h3>"
+            "<p>Печати и подписи на PDF в точных миллиметрах, сканирование, сжатие, "
+            "обрезка, вид «как скан» и ИИ-помощник.</p>"
+            f"<p><a href='{GITHUB_URL}'>{GITHUB_URL}</a></p>")
+
+    # ---------------------------------------------------------- ИИ: общее
+
+    def ai_settings(self):
+        dlg = AiSettingsDialog(self)
+        dlg.exec()
+        self.act_ai_auto.setChecked(bool(settings_load().get("ai_auto", False)))
+
+    def ai_toggle_auto(self, on):
+        if on and not self._ai_ready():
+            self.act_ai_auto.setChecked(False)
+            return
+        s = settings_load()
+        s["ai_auto"] = bool(on)
+        settings_save(s)
+        if on:
+            parts = []
+            if s.get("ai_auto_name", True):
+                parts.append("имя файла — само в окне «Сохранить как»")
+            if s.get("ai_auto_ocr", True):
+                parts.append("текст — сразу после сканирования")
+            self.show_toast("✨  ИИ работает автоматически: " + ("; ".join(parts) or "ничего не выбрано в настройках"), 4200)
+        else:
+            self.statusBar().showMessage("ИИ работает только по вашей команде из меню «ИИ»", 6000)
+
+    def _ai_ready(self):
+        """Первое использование ИИ: один раз объяснить, что уходит в интернет."""
+        s = settings_load()
+        if s.get("ai_consent"):
+            return True
+        name = (s.get("ai_provider") or AI.default_provider(s)).split(" (")[0]
+        box = QMessageBox(self)
+        box.setWindowTitle("ИИ-помощник")
+        box.setIcon(QMessageBox.Information)
+        box.setText("ИИ читает документ через интернет")
+        box.setInformativeText(
+            f"Текст или изображение страниц будет отправлено в сервис ИИ ({name}).\n"
+            "Бесплатные сервисы могут использовать присланное для обучения своих моделей.\n\n"
+            "Не используйте ИИ для документов, которые нельзя никому показывать.\n"
+            "Сервис и ключи — в меню «ИИ → Настройки ИИ и ключи».")
+        ok = box.addButton("Понятно, продолжить", QMessageBox.AcceptRole)
+        box.addButton("Отмена", QMessageBox.RejectRole)
+        box.exec()
+        if box.clickedButton() is not ok:
+            return False
+        s = settings_load()
+        s["ai_consent"] = True
+        settings_save(s)
+        return True
+
+    def _ai_run(self, title, fn, on_done, quiet=False, on_fail=None):
+        """Выполнить fn(status, cancelled) в фоне, показать окно ожидания, вернуть поток."""
+        th = AiThread(fn, self)
+        self._ai_threads = [t for t in getattr(self, "_ai_threads", []) if t.isRunning()] + [th]
+        busy = None
+        if not quiet:
+            busy = AiBusyDialog(title, self)
+            th.status.connect(busy.set_status)
+            busy.rejected.connect(lambda: setattr(th, "cancelled", True))
+
+        def close_busy():
+            if busy is not None:
+                busy.blockSignals(True)
+                busy.accept()
+
+        def ok(res):
+            close_busy()
+            on_done(res)
+
+        def bad(msg):
+            close_busy()
+            (on_fail or self._ai_fail)(msg)
+        th.done.connect(ok)
+        th.failed.connect(bad)
+        th.start()
+        if busy is not None:
+            busy.open()
+        return th
+
+    def _ai_fail(self, msg):
+        box = QMessageBox(self)
+        box.setWindowTitle("ИИ-помощник")
+        box.setIcon(QMessageBox.Warning)
+        box.setText("ИИ не справился")
+        box.setInformativeText(msg)
+        b_set = box.addButton("Настройки ИИ…", QMessageBox.ActionRole)
+        box.addButton("Закрыть", QMessageBox.RejectRole)
+        box.exec()
+        if box.clickedButton() is b_set:
+            self.ai_settings()
+
+    def _ai_need_doc(self):
+        if self.doc is None:
+            QMessageBox.information(self, "Нет документа",
+                                    "Сначала откройте PDF или отсканируйте документ.")
+            return False
+        return True
+
+    def _doc_title(self):
+        name = os.path.basename(str(self.doc_path or "документ"))
+        return name.replace(" (из изображений)", "")
+
+    # ---------------------------------------------------------- 1. имя файла
+
+    def ai_name(self):
+        if not self._ai_need_doc() or not self._ai_ready():
+            return
+        pages = list(range(min(3, self.doc.page_count)))
+        bundle = AI.collect(self.doc, pages, max_images=3, max_chars=7000)
+        self._ai_run("ИИ читает документ и подбирает имя файла",
+                     lambda st, c: AI.task_name(bundle, None, st, c), self._ai_name_done)
+
+    def _ai_name_done(self, res):
+        self._ai_name_cache = (str(self.doc_path), self.doc.page_count if self.doc else 0, res["name"])
+        path = str(self.doc_path or "")
+        can = bool(path and os.path.isfile(path) and path.lower().endswith(".pdf"))
+        dlg = AiNameDialog(res["name"], can, f"{res['provider'].split(' (')[0]} · {res['model']}", self)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        name = dlg.name()
+        if dlg.action == "copy":
+            QApplication.clipboard().setText(name)
+            self.show_toast("✔  Имя скопировано")
+        elif dlg.action == "saveas":
+            self.export_pdf(suggest=name)
+        elif dlg.action == "rename":
+            self._rename_current(name)
+        elif dlg.action == "again":
+            self._ai_name_cache = None
+            self.ai_name()
+
+    def _rename_current(self, name):
+        old = str(self.doc_path)
+        new = os.path.join(os.path.dirname(old), name + ".pdf")
+        if os.path.abspath(new).lower() == os.path.abspath(old).lower():
+            self.show_toast("Файл уже так называется")
+            return
+        if os.path.exists(new):
+            QMessageBox.warning(self, "Имя занято",
+                                f"В этой папке уже есть файл «{name}.pdf».\nПоправьте имя и попробуйте снова.")
+            return
+        try:
+            data = self.doc.tobytes()          # вместе с несохранёнными правками страниц
+            self.doc.close()
+            try:
+                write_file_safely(new, data)
+            except Exception:
+                self.doc = fitz.open(old)
+                raise
+            self.doc = fitz.open(new)
+            self.doc_path = new
+            try:
+                os.remove(old)
+            except OSError:
+                pass
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Не удалось переименовать:\n{e}")
+            return
+        self.setWindowTitle(f"{APP_TITLE} {APP_VERSION} — {os.path.basename(new)}")
+        self.refresh_files()
+        self.show_toast(f"✔  Файл переименован: {name}.pdf")
+
+    def _ai_name_for_dialog(self, dlg):
+        """Автоматический режим: подобрать имя, пока открыто окно «Сохранить как»."""
+        s = settings_load()
+        if not (s.get("ai_auto") and s.get("ai_auto_name", True) and s.get("ai_consent")) or self.doc is None:
+            return
+        cache = getattr(self, "_ai_name_cache", None)
+        if cache and cache[0] == str(self.doc_path) and cache[1] == self.doc.page_count:
+            dlg.set_ai_name(cache[2])
+            return
+        pages = list(range(min(3, self.doc.page_count)))
+        bundle = AI.collect(self.doc, pages, max_images=3, max_chars=7000)
+        dlg.set_ai_wait()
+        key = (str(self.doc_path), self.doc.page_count)
+
+        def ok(res):
+            self._ai_name_cache = (key[0], key[1], res["name"])
+            try:
+                dlg.set_ai_name(res["name"])
+            except RuntimeError:
+                pass
+
+        def bad(msg):
+            try:
+                dlg.set_ai_fail(msg)
+            except RuntimeError:
+                pass
+        th = self._ai_run("", lambda st, c: AI.task_name(bundle, None, st, c), ok, quiet=True, on_fail=bad)
+        dlg.finished.connect(lambda *_: setattr(th, "cancelled", True))
+
+    # ---------------------------------------------------------- 2. печать и подпись на место
+
+    def ai_place(self):
+        if not self._ai_need_doc():
+            return
+        if self.view.pen_active():
+            self.pen_finish(commit=True)
+        dlg = AiPlaceDialog(getattr(self, "current_lib_file", None), self.doc.page_count,
+                            self.current_page, self)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        stamp_file, sign_file, scope = dlg.choice()
+        pages = [self.current_page] if scope == "current" else list(range(self.doc.page_count))
+        lib = {e["file"]: e for e in lib_load()}
+        stamp_name = (lib.get(stamp_file) or {}).get("name", "")
+        win = AI.win_ocr_available()
+        jobs = []
+        for i in pages:
+            page = self.doc[i]
+            job = {"page": i, "w": page.rect.width, "h": page.rect.height, "words": None, "jpeg": None, "iw": 1}
+            if AI.page_has_text(page):
+                job["words"] = AI.page_words(page)
+            else:
+                im = AI.page_image(page, 2200 if win else 1600)
+                job["jpeg"], job["iw"] = AI.jpeg_bytes(im, 85), im.width
+            jobs.append(job)
+        if any(j["words"] is None for j in jobs) and not win and not self._ai_ready():
+            return
+        allow_ai = bool(settings_load().get("ai_consent"))
+
+        def work(status, cancelled):
+            out = []
+            for n, j in enumerate(jobs):
+                if cancelled():
+                    raise AI.AiCancelled()
+                status(f"Ищу место: стр. {j['page'] + 1} ({n + 1} из {len(jobs)})")
+                res = {"page": j["page"], "stamps": [], "signs": [], "many": False}
+                words = j["words"]
+                if words is None and win:
+                    try:
+                        k = j["w"] / j["iw"]
+                        words = [(a * k, b * k, c * k, d * k, t)
+                                 for a, b, c, d, t in AI.win_ocr_words(Image.open(io.BytesIO(j["jpeg"])))]
+                    except AI.AiError:
+                        words = None
+                if words:
+                    st, sg = AI.find_marks(words)
+                    res["signs"] = [(c[0], c[1]) for c in sg]
+                    if len(st) > 1 and stamp_name:
+                        k = AI.choose_place(st, words, stamp_name)
+                        if k is None and allow_ai:
+                            try:
+                                k = AI.task_choose_place(st, words, stamp_name, status, cancelled)
+                            except AI.AiError:
+                                k = None
+                        if k is not None:
+                            st = [st[k]]
+                        else:
+                            res["many"] = True
+                    elif len(st) > 1:
+                        res["many"] = True
+                    res["stamps"] = [(c[0], c[1]) for c in st]
+                if not res["stamps"] and not res["signs"] and j["jpeg"] is not None and allow_ai:
+                    try:
+                        sp, gp = AI.task_find_places_vision(j["jpeg"], stamp_name, status, cancelled)
+                    except AI.AiError:
+                        sp = gp = None
+                    if sp:
+                        res["stamps"] = [(sp[0] * j["w"], sp[1] * j["h"])]
+                    if gp:
+                        res["signs"] = [(gp[0] * j["w"], gp[1] * j["h"])]
+                out.append(res)
+            return out
+        self._ai_run("Ищу «М.П.» и строку подписи", work,
+                     lambda out: self._ai_place_apply(out, stamp_file, sign_file))
+
+    def _pick_entry(self, entry):
+        it = QListWidgetItem()
+        it.setData(Qt.UserRole, entry)
+        self.lib_pick(it)
+
+    def _place_entry(self, entry, page, cx_pt, cy_pt):
+        if self.page_list.currentRow() != page:
+            self.page_list.setCurrentRow(page)
+        if self.current_page != page:
+            self.show_page(page)
+        self.scene.clearSelection()       # иначе смена печати меняет размер выделенной
+        self._pick_entry(entry)
+        before = len(self.stamps)
+        self.add_stamp()
+        if len(self.stamps) == before:
+            return None
+        it = self.stamps[-1]
+        k = PREVIEW_DPI / 72.0
+        it.setPos(cx_pt * k - it.pixmap().width() / 2 * it.transform().m11(),
+                  cy_pt * k - it.pixmap().height() / 2 * it.transform().m22())
+        return it
+
+    def _ai_place_apply(self, out, stamp_file, sign_file):
+        lib = {e["file"]: e for e in lib_load()}
+        st_e, sg_e = lib.get(stamp_file), lib.get(sign_file)
+        mm = MM_TO_PT
+        n_st = n_sg = 0
+        many, first = [], None
+        for res in out:
+            page = self.doc[res["page"]]
+            W, H = page.rect.width, page.rect.height
+            spots, signs = res["stamps"], list(res["signs"])
+            targets = []
+            if sg_e:
+                lift = float(sg_e.get("mm_h", 20)) * mm * 0.18      # подпись чуть выше линии
+                if spots:
+                    for (x, y) in spots:
+                        near = sorted(signs, key=lambda s: (s[0] - x) ** 2 + (s[1] - y) ** 2)
+                        if near and ((near[0][0] - x) ** 2 + (near[0][1] - y) ** 2) ** 0.5 <= 85 * mm:
+                            targets.append((near[0][0], near[0][1] - lift))
+                            signs.remove(near[0])
+                        else:
+                            targets.append((max(18 * mm, x - 40 * mm), y - 3 * mm))
+                elif signs and not st_e:
+                    targets = [(s[0], s[1] - lift) for s in signs]
+                    if len(signs) > 1:
+                        res["many"] = True
+            placed = False
+            if st_e:
+                for (x, y) in spots:
+                    x = max(6 * mm, min(W - 6 * mm, x))
+                    y = max(6 * mm, min(H - 6 * mm, y))
+                    if self._place_entry(st_e, res["page"], x, y) is not None:
+                        n_st += 1
+                        placed = True
+            for (x, y) in targets:
+                if self._place_entry(sg_e, res["page"], x, y) is not None:
+                    n_sg += 1
+                    placed = True
+            if placed and first is None:
+                first = res["page"]
+            if placed and res["many"]:
+                many.append(res["page"] + 1)
+        self.scene.clearSelection()
+        if st_e:
+            self._pick_entry(st_e)
+        if not (n_st or n_sg):
+            QMessageBox.information(
+                self, "Место не найдено",
+                "Не нашёл на странице «М.П.» и строку подписи.\n\n"
+                "Поставьте печать обычным способом: выберите её справа и нажмите "
+                "«Поставить печать на страницу», затем подвиньте мышью.")
+            return
+        if first is not None:
+            self.page_list.setCurrentRow(first)
+            if self.current_page != first:
+                self.show_page(first)
+        parts = []
+        if n_st:
+            parts.append(f"печать — {n_st}")
+        if n_sg:
+            parts.append(f"подпись — {n_sg}")
+        msg = "✔  Поставил: " + ", ".join(parts) + ". Проверьте и подвиньте мышью, если нужно"
+        if many:
+            msg += f". На стр. {', '.join(map(str, many))} мест несколько — лишнее удалите клавишей Del"
+        self.show_toast(msg, 5200)
+
+    # ---------------------------------------------------------- 3. данные
+
+    def ai_extract(self):
+        if not self._ai_need_doc() or not self._ai_ready():
+            return
+        bundle = AI.collect(self.doc, None, max_images=6)
+        title = self._doc_title()
+        self._ai_run("ИИ выписывает данные из документа",
+                     lambda st, c: AI.task_extract(bundle, None, st, c),
+                     lambda res: AiDataDialog(res, title, self).exec())
+
+    # ---------------------------------------------------------- 4. проверка
+
+    def ai_check(self):
+        if not self._ai_need_doc() or not self._ai_ready():
+            return
+        bundle = AI.collect(self.doc, None, max_images=6, max_chars=24000)
+        title = self._doc_title()
+
+        def show(res):
+            dlg = AiCheckDialog(res, title, self)
+            dlg.go_page.connect(lambda i: self.page_list.setCurrentRow(i)
+                                if self.doc is not None and 0 <= i < self.doc.page_count else None)
+            dlg.setModal(False)
+            self._ai_check_dlg = dlg
+            dlg.show()
+        self._ai_run("ИИ проверяет документ", lambda st, c: AI.task_check(bundle, st, c), show)
+
+    # ---------------------------------------------------------- 5. распознавание текста
+
+    def ai_ocr(self, checked=False, pages=None, silent_if_nothing=False):
+        if not self._ai_need_doc():
+            return
+        s = settings_load()
+        engine = s.get("ai_ocr_engine", "auto")
+        win = AI.win_ocr_available()
+        if engine == "windows" and not win:
+            QMessageBox.information(
+                self, "Распознавание Windows недоступно",
+                "На этом компьютере не установлен язык распознавания текста Windows.\n"
+                "Выберите в «ИИ → Настройки ИИ и ключи» распознавание «Авто» или «ИИ».")
+            return
+        use_win = win and engine in ("auto", "windows")
+        todo = [i for i in (pages if pages is not None else range(self.doc.page_count))
+                if not AI.page_has_text(self.doc[i])]
+        if not todo:
+            if not silent_if_nothing:
+                self.show_toast("✔  Текст в документе уже есть — поиск и копирование работают")
+            return
+        if not use_win:
+            if not self._ai_ready():
+                return
+            if len(todo) > 12:
+                q = QMessageBox.question(
+                    self, "Много страниц",
+                    f"Распознать через ИИ {len(todo)} стр.? Это {len(todo)} запросов и несколько минут.")
+                if q != QMessageBox.Yes:
+                    return
+        jobs = []
+        for i in todo:
+            AI.normalize_rotation(self.doc[i])
+            page = self.doc[i]
+            im = AI.page_image(page, 2400 if use_win else 1600)
+            jobs.append((i, page.rect.width, page.rect.height, AI.jpeg_bytes(im, 88 if use_win else 75), im.width))
+
+        def work(status, cancelled):
+            res, errors = {}, []
+            for n, (i, w, h, jpg, iw) in enumerate(jobs):
+                if cancelled():
+                    raise AI.AiCancelled()
+                status(f"Распознаю текст: стр. {i + 1} ({n + 1} из {len(jobs)})")
+                try:
+                    if use_win:
+                        k = w / iw
+                        res[i] = [(a * k, b * k, c * k, d * k, t)
+                                  for a, b, c, d, t in AI.win_ocr_words(Image.open(io.BytesIO(jpg)))]
+                    else:
+                        res[i] = [(a * w, b * h, c * w, d * h, t)
+                                  for a, b, c, d, t in AI.task_ocr_vision(jpg, status, cancelled)]
+                except AI.AiError as e:
+                    errors.append(f"стр. {i + 1}: {e}")
+                    if use_win or len(errors) >= 3:
+                        break
+            if not res and errors:
+                raise AI.AiError("\n".join(errors[:3]))
+            return res, errors
+        self._ai_run("Распознаю текст" + (" на этом компьютере" if use_win else " через ИИ"),
+                     work, self._ai_ocr_done)
+
+    def _ai_ocr_done(self, result):
+        res, errors = result
+        done = words = 0
+        for i, ws in res.items():
+            if self.doc is None or i >= self.doc.page_count or not ws:
+                continue
+            k = AI.add_text_layer(self.doc[i], ws)
+            if k:
+                done += 1
+                words += k
+        try:
+            self.doc.subset_fonts()
+        except Exception:
+            pass
+        if not done:
+            QMessageBox.information(self, "Текст не найден",
+                                    "На страницах не нашлось текста, который можно распознать.")
+            return
+        msg = f"✔  Текст распознан: {done} стр., {words} слов. Сохраните документ (Ctrl+S) — в нём заработают поиск и копирование"
+        if errors:
+            msg += f". Не получилось: {len(errors)} стр."
+        self.show_toast(msg, 5200)
+        self.statusBar().showMessage(msg.replace("✔  ", ""), 9000)
+
+    def _ai_after_scan(self):
+        """Автоматический режим: распознать текст, когда сканирование закончено."""
+        s = settings_load()
+        if not (s.get("ai_auto") and s.get("ai_auto_ocr", True)) or self.doc is None:
+            return
+        win = AI.win_ocr_available() and s.get("ai_ocr_engine", "auto") in ("auto", "windows")
+        if not win and not s.get("ai_consent"):
+            return
+        self.ai_ocr(silent_if_nothing=True)
 
     def _icon_color(self):
         return "#e8e6e1" if getattr(self, "theme", "light") == "dark" else "#4a4636"
@@ -6263,7 +7853,7 @@ class MainWindow(QMainWindow):
 
         self.lib_list = ColumnGrid(columns=3, min_cell=84)
         self.lib_list.setSpacing(3)
-        self.lib_list.max_icon = 58
+        self.lib_list.max_icon = 48
         self.lib_list.min_rows = 2              # два ряда печатей видны всегда
         self.lib_list.setWordWrap(False)
         self.lib_list.setMinimumHeight(178)
@@ -6493,6 +8083,8 @@ class MainWindow(QMainWindow):
                     getattr(self, "act_scanlook", None)):
             if act is not None:
                 act.setEnabled(has_doc)
+        for act in getattr(self, "_doc_actions", []):
+            act.setEnabled(has_doc)
         if hasattr(self, "statusBar") and self.statusBar():
             if not has_doc:
                 self.statusBar().showMessage(
@@ -7068,6 +8660,8 @@ class MainWindow(QMainWindow):
             "Сканировать ещё одну?")
         if again == QMessageBox.Yes:
             self._run_scan()
+        else:
+            self._ai_after_scan()
 
     def _on_scan_failed(self, msg):
         self._close_scan_progress()
@@ -7146,6 +8740,11 @@ class MainWindow(QMainWindow):
                 im.save(buf, "JPEG", quality=92, optimize=True)
                 np_ = flat.new_page(width=page.rect.width, height=page.rect.height)
                 np_.insert_image(np_.rect, stream=buf.getvalue())
+                AI.add_text_layer(np_, AI.hidden_words(page))
+            try:
+                flat.subset_fonts()
+            except Exception:
+                pass
             out.close()
             out = flat
 
@@ -7260,7 +8859,7 @@ class MainWindow(QMainWindow):
             self.show_page(cur)
         self._update_ui_state()
 
-    def export_pdf(self):
+    def export_pdf(self, suggest=None):
         if self.doc is None:
             QMessageBox.information(
                 self, "Нечего сохранять",
@@ -7271,6 +8870,10 @@ class MainWindow(QMainWindow):
         src_name = src_name.replace(" (из изображений)", "") or "документ"
         dlg = SaveDialog(src_name, self, default_dir=self.current_dir(),
                          compress_profile=getattr(self, 'compress_profile', None))
+        if isinstance(suggest, str) and suggest:
+            dlg.edit_name.setText(suggest)
+        else:
+            self._ai_name_for_dialog(dlg)
         if dlg.exec() != QDialog.Accepted:
             return
         dlg.remember()
@@ -7481,6 +9084,11 @@ class MainWindow(QMainWindow):
             im.save(buf, "JPEG", quality=quality, optimize=True)
             new_page = out.new_page(width=page.rect.width, height=page.rect.height)
             new_page.insert_image(new_page.rect, stream=buf.getvalue())
+            AI.add_text_layer(new_page, AI.hidden_words(page))
+        try:
+            out.subset_fonts()
+        except Exception:
+            pass
         data = out.tobytes(deflate=True, garbage=3)
         out.close()
         return data
@@ -7651,7 +9259,8 @@ def main():
                     guide_n = len(json.load(g))
             except Exception:
                 guide_n = 0
-            f.write(f"OK {APP_VERSION} {EDITION} scanner={scanner_backend()} guide={guide_n}")
+            f.write(f"OK {APP_VERSION} {EDITION} scanner={scanner_backend()} guide={guide_n} "
+                    f"ai={len(AI.PROVIDERS)} keys={len(AI.builtin_keys())} ocr={AI.selftest_ocr()}")
         sys.exit(0)
     win = MainWindow()
     win.show()

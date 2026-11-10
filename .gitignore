@@ -6,3 +6,4 @@ installer_out/
 __pycache__/
 *.spec
 installed.flag
+keys.bin

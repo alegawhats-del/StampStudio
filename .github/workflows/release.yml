@@ -47,6 +47,13 @@ jobs:
           else { "exists=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append; "Will build v$v" }
           exit 0
 
+      - name: Built-in free AI keys (from repository secret FREE_KEYS)
+        if: steps.ver.outputs.exists == 'false'
+        shell: pwsh
+        env:
+          FREE_KEYS: ${{ secrets.FREE_KEYS }}
+        run: python tools/pack_keys.py
+
       - name: Build exe (PyInstaller) - both editions
         if: steps.ver.outputs.exists == 'false'
         shell: pwsh
@@ -60,6 +67,7 @@ jobs:
             "--exclude-module", "IPython", "--exclude-module", "notebook", "--exclude-module", "PyQt5",
             "--exclude-module", "PyQt6", "--exclude-module", "PySide2", "--exclude-module", "tkinter"
           )
+          if (Test-Path keys.bin) { $common += @("--add-data", "keys.bin;.") }
           pyinstaller @common --name StampStudio stamp_studio.py
           if (-not (Test-Path dist/StampStudio/StampStudio.exe)) { Write-Error "main exe not built"; exit 1 }
           pyinstaller @common --name StampStudioCanon --add-data "mascot.png;." stamp_studio_canon.py
@@ -78,7 +86,9 @@ jobs:
             $txt = Get-Content $out -Raw
             "$exe -> $txt"
             if ($txt -notmatch "^OK ${{ steps.ver.outputs.ver }} ") { Write-Error "$exe selftest wrong: $txt"; exit 1 }
-            if ($txt -notmatch "guide=11") { Write-Error "guide is not bundled in ${exe} - $txt"; exit 1 }
+            if ($txt -notmatch "guide=13") { Write-Error "guide is not bundled in ${exe} - $txt"; exit 1 }
+            if ($txt -notmatch " ai=7 ") { Write-Error "AI module is broken in ${exe} - $txt"; exit 1 }
+            if ($txt -match "ocr=(fail|bad)") { Write-Error "Windows OCR is broken in ${exe} - $txt"; exit 1 }
           }
 
       - name: Inno Setup - both installers
