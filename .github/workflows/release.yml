@@ -1,0 +1,134 @@
+name: Release
+
+on:
+  push:
+    branches: ["main"]
+    paths-ignore: ["version.json", "README.md"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  PYTHONIOENCODING: utf-8
+  PYTHONUTF8: "1"
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Read version, skip if already released
+        id: ver
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Continue"
+          $v = python get_version.py
+          if ($LASTEXITCODE -ne 0) { Write-Error "version mismatch between editions"; exit 1 }
+          "ver=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          $null = gh release view "v$v" --repo ${{ github.repository }} 2>&1
+          if ($LASTEXITCODE -eq 0) { "exists=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append; "Release v$v already exists - skip" }
+          else { "exists=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append; "Will build v$v" }
+          exit 0
+
+      - name: Build exe (PyInstaller) - both editions
+        if: steps.ver.outputs.exists == 'false'
+        shell: pwsh
+        run: |
+          $common = @(
+            "--noconfirm", "--clean", "--windowed", "--onedir", "--log-level", "WARN",
+            "--icon", "icon.ico", "--add-data", "icon.png;.",
+            "--hidden-import", "win32com.client", "--hidden-import", "pythoncom", "--hidden-import", "pywintypes",
+            "--exclude-module", "torch", "--exclude-module", "torchvision", "--exclude-module", "tensorflow",
+            "--exclude-module", "matplotlib", "--exclude-module", "scipy", "--exclude-module", "pandas",
+            "--exclude-module", "IPython", "--exclude-module", "notebook", "--exclude-module", "PyQt5",
+            "--exclude-module", "PyQt6", "--exclude-module", "PySide2", "--exclude-module", "tkinter"
+          )
+          pyinstaller @common --name StampStudio stamp_studio.py
+          if (-not (Test-Path dist/StampStudio/StampStudio.exe)) { Write-Error "main exe not built"; exit 1 }
+          pyinstaller @common --name StampStudioCanon --add-data "mascot.png;." stamp_studio_canon.py
+          if (-not (Test-Path dist/StampStudioCanon/StampStudioCanon.exe)) { Write-Error "canon exe not built"; exit 1 }
+
+      - name: Self-test of built exe files
+        if: steps.ver.outputs.exists == 'false'
+        shell: pwsh
+        run: |
+          $out = Join-Path $env:TEMP "stampstudio_selftest.txt"
+          foreach ($exe in @("dist/StampStudio/StampStudio.exe", "dist/StampStudioCanon/StampStudioCanon.exe")) {
+            if (Test-Path $out) { Remove-Item $out }
+            $p = Start-Process -FilePath $exe -ArgumentList "--selftest" -PassThru
+            if (-not $p.WaitForExit(120000)) { $p.Kill(); Write-Error "$exe selftest timed out"; exit 1 }
+            if (-not (Test-Path $out)) { Write-Error "$exe did not start (no selftest file)"; exit 1 }
+            $txt = Get-Content $out -Raw
+            "$exe -> $txt"
+            if ($txt -notmatch "^OK ${{ steps.ver.outputs.ver }} ") { Write-Error "$exe selftest wrong: $txt"; exit 1 }
+          }
+
+      - name: Inno Setup - both installers
+        if: steps.ver.outputs.exists == 'false'
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "C:\Program Files (x86)\Inno Setup 6\ISCC.exe")) { choco install innosetup -y --no-progress }
+          Set-Content -Path installed.flag -Value "installed"
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /Q /DAppVersion=${{ steps.ver.outputs.ver }} installer.iss
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /Q /DAppVersion=${{ steps.ver.outputs.ver }} /DCanon installer.iss
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          Get-ChildItem installer_out
+
+      - name: Release notes
+        if: steps.ver.outputs.exists == 'false'
+        id: notes
+        shell: pwsh
+        run: |
+          $body = Get-Content NOTES.md -Raw -Encoding UTF8
+          "body<<EOF`n$body`nEOF" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Publish GitHub Release
+        if: steps.ver.outputs.exists == 'false'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.ver.outputs.ver }}
+          target_commitish: ${{ github.sha }}
+          name: Stamp Studio ${{ steps.ver.outputs.ver }}
+          body: ${{ steps.notes.outputs.body }}
+          files: |
+            installer_out/StampStudio-Setup-${{ steps.ver.outputs.ver }}.exe
+            installer_out/StampStudioCanon-Setup-${{ steps.ver.outputs.ver }}.exe
+
+      - name: Update version.json on main
+        if: steps.ver.outputs.exists == 'false'
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git checkout main
+          python bump_manifest.py ${{ steps.ver.outputs.ver }}
+          git add version.json
+          git diff --cached --quiet
+          if ($LASTEXITCODE -eq 0) { "version.json already up to date"; exit 0 }
+          git commit -m "version.json -> ${{ steps.ver.outputs.ver }} [skip ci]"
+          $ok = $false
+          for ($i = 0; $i -lt 5 -and -not $ok; $i++) {
+            git pull --rebase origin main
+            git push origin main
+            if ($LASTEXITCODE -eq 0) { $ok = $true } else { Start-Sleep -Seconds 10 }
+          }
+          if (-not $ok) { exit 1 }

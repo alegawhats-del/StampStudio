@@ -1,0 +1,5 @@
+PySide6
+PyMuPDF
+Pillow
+pywin32; sys_platform == "win32"
+pyinstaller
