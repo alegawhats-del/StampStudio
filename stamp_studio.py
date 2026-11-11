@@ -393,6 +393,9 @@ QListWidget#guidenav::item:selected { background: #2c3145; color: #e8b04b; }
 QListWidget#guidenav::item:hover { background: #232735; }
 QToolBar { padding: 4px 6px; spacing: 3px; }
 QToolBar QToolButton { min-height: 32px; max-height: 32px; padding: 0 6px; }
+QToolButton#ghost { background: transparent; border: none; border-radius: 12px; padding: 0; min-width: 0; min-height: 0; }
+QToolButton#ghost:hover { background: rgba(214, 154, 51, 0.22); }
+QToolButton#ghost:pressed { background: rgba(214, 154, 51, 0.40); }
 QPushButton#aiact { text-align: left; padding: 6px 12px; }
 QDialog#embedded { background: transparent; }
 QToolBar#tools { background: #171a22; border: none; border-right: 1px solid #262b39; padding: 6px 5px; spacing: 3px; }
@@ -465,6 +468,9 @@ QListWidget#guidenav::item:selected { background: #fbefd3; color: #8a5f0a; }
 QListWidget#guidenav::item:hover { background: #efeadf; }
 QToolBar { padding: 4px 6px; spacing: 3px; }
 QToolBar QToolButton { min-height: 32px; max-height: 32px; padding: 0 6px; }
+QToolButton#ghost { background: transparent; border: none; border-radius: 12px; padding: 0; min-width: 0; min-height: 0; }
+QToolButton#ghost:hover { background: rgba(214, 154, 51, 0.22); }
+QToolButton#ghost:pressed { background: rgba(214, 154, 51, 0.40); }
 QPushButton#aiact { text-align: left; padding: 6px 12px; }
 QDialog#embedded { background: transparent; }
 QToolBar#tools { background: #fbf9f4; border: none; border-right: 1px solid #e6e1d6; padding: 6px 5px; spacing: 3px; }
@@ -511,7 +517,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.4.11"
+APP_VERSION = "6.4.12"
 EDITION = "main"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -1567,6 +1573,15 @@ def draw_icon(kind: str, color: str, size: int = 64) -> QIcon:
             x1 = 8 + 4.2 * _m.cos(ang); y1 = 8 + 4.2 * _m.sin(ang)
             x2 = 8 + 5.8 * _m.cos(ang); y2 = 8 + 5.8 * _m.sin(ang)
             line(x1, y1, x2, y2)
+    elif kind == "refresh":
+        path = QPainterPath()
+        path.arcMoveTo(3.0 * u, 3.0 * u, 10.0 * u, 10.0 * u, 50)
+        path.arcTo(3.0 * u, 3.0 * u, 10.0 * u, 10.0 * u, 50, 290)
+        p.drawPath(path)
+        p.setBrush(QBrush(c))
+        p.setPen(Qt.NoPen)
+        p.drawPolygon([QPointF(13.9 * u, 2.6 * u), QPointF(13.9 * u, 7.0 * u), QPointF(9.7 * u, 6.2 * u)])
+        p.setBrush(Qt.NoBrush)
     elif kind == "rot_left":
         path = QPainterPath()
         path.moveTo(3.4 * u, 7.6 * u)
@@ -7529,15 +7544,6 @@ class MainWindow(QMainWindow):
         self._themed_buttons.append((b_up, "up", False))
         row.addWidget(b_up, 0)
 
-        b_ref = QPushButton()
-        b_ref.setFixedSize(30, 30)
-        b_ref.setToolTip("Обновить список файлов  (F5)\nСписок обновляется и сам, когда в папке что-то меняется")
-        b_ref.setIconSize(QSize(13, 13))
-        b_ref.setShortcut(QKeySequence("F5"))
-        b_ref.clicked.connect(lambda: self.reload_files(manual=True))
-        self._themed_buttons.append((b_ref, "rot_right", False))
-        row.addWidget(b_ref, 0)
-
         row.addSpacing(6)
         self.lbl_path = QLabel("")
         self.lbl_path.setObjectName("path")
@@ -7593,7 +7599,21 @@ class MainWindow(QMainWindow):
         tl.setContentsMargins(0, 0, 0, 0)
         tl.setSpacing(6)
         cap_files = QLabel("<b>Файлы в папке</b>")
-        tl.addWidget(cap_files)
+        cap_row = QHBoxLayout()
+        cap_row.setContentsMargins(0, 0, 2, 0)
+        cap_row.addWidget(cap_files, 1)
+        b_ref = QToolButton()
+        b_ref.setObjectName("ghost")
+        b_ref.setAutoRaise(True)
+        b_ref.setCursor(Qt.PointingHandCursor)
+        b_ref.setFixedSize(24, 24)
+        b_ref.setIconSize(QSize(16, 16))
+        b_ref.setToolTip("Обновить список файлов  (F5)\nСписок обновляется и сам, когда в папке что-то меняется")
+        b_ref.setShortcut(QKeySequence("F5"))
+        b_ref.clicked.connect(lambda: self.reload_files(manual=True))
+        self._themed_toolbtns.append((b_ref, "refresh"))
+        cap_row.addWidget(b_ref, 0)
+        tl.addLayout(cap_row)
 
         self.file_list = QListWidget()
         self.file_list.setAlternatingRowColors(True)
