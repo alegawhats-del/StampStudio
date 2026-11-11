@@ -9,6 +9,11 @@ on:
 permissions:
   contents: write
 
+# сборки идут строго по очереди: иначе две подряд спорят за version.json
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 env:
   PYTHONIOENCODING: utf-8
   PYTHONUTF8: "1"
