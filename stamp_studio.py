@@ -507,7 +507,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.4.5"
+APP_VERSION = "6.4.6"
 EDITION = "main"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -995,7 +995,7 @@ class PenBar(QFrame):
         self.on_change = on_change
         st = settings_load().get("pen", {})
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(14, 10, 14, 10)
+        outer.setContentsMargins(10, 10, 10, 10)
         outer.setSpacing(8)
         lay = QHBoxLayout()
         lay.setSpacing(12)
@@ -1061,7 +1061,7 @@ class PenBar(QFrame):
         lay.addStretch(1)
 
         lay = QHBoxLayout()                    # второй ряд — действия
-        lay.setSpacing(8)
+        lay.setSpacing(6)
         outer.addLayout(lay)
 
         def btn(text, tip, slot, accent=False):
@@ -1075,8 +1075,18 @@ class PenBar(QFrame):
             lay.addWidget(b)
             return b
 
-        self.b_undo = btn("↶ Отменить штрих", "Убрать последний штрих  (Ctrl+Z)", on_undo)
+        self.b_undo = btn("↶", "Отменить последний штрих  (Ctrl+Z)", on_undo)
+        self.b_undo.setFixedWidth(40)
         self.b_clear = btn("Очистить", "Стереть всё нарисованное", on_clear)
+        self.b_sets = QPushButton("Наборы")
+        self.b_sets.setToolTip("Сохранённые настройки ручки: толщина, плавность и цвет под одним именем.\n"
+                               "Например «Подпись» и «Пометки» — переключаются одним щелчком.")
+        self.b_sets.setMinimumHeight(32)
+        self.b_sets.setCursor(Qt.PointingHandCursor)
+        self._sets_menu = QMenu(self.b_sets)
+        self._sets_menu.aboutToShow.connect(self._fill_sets_menu)
+        self.b_sets.setMenu(self._sets_menu)
+        lay.addWidget(self.b_sets)
         lay.addStretch(1)
         self.b_cancel = btn("Отмена", "Выйти без подписи  (Esc)", on_cancel)
         self.b_done = btn("Готово", "Оставить подпись на странице  (Enter)", on_done, accent=True)
@@ -1085,6 +1095,61 @@ class PenBar(QFrame):
         self.sl_smooth.valueChanged.connect(self._changed)
         self._pick_ink(self.ink_index, notify=False)
         self._changed()
+
+    # ---- наборы настроек ручки
+    def current_set(self):
+        return {"width": self.sl_width.value(), "smooth": self.sl_smooth.value(), "ink": self.ink_index}
+
+    def apply_set(self, p):
+        self.sl_width.setValue(int(p.get("width", 6)))
+        self.sl_smooth.setValue(int(p.get("smooth", 55)))
+        self._pick_ink(int(p.get("ink", 0)) % len(PEN_INKS))
+
+    @staticmethod
+    def set_text(p):
+        v = int(p.get("smooth", 55))
+        feel = "резко" if v < 15 else ("плавно" if v > 70 else "средне")
+        ink = PEN_INKS[int(p.get("ink", 0)) % len(PEN_INKS)][0].lower()
+        return f"{p.get('name', '')}  —  {int(p.get('width', 6)) / 10:.1f} мм, {feel}, {ink}"
+
+    def _fill_sets_menu(self):
+        m = self._sets_menu
+        m.clear()
+        sets = settings_load().get("pen_presets") or []
+        cur = self.current_set()
+        for p in sets:
+            a = m.addAction(self.set_text(p))
+            a.setCheckable(True)
+            a.setChecked(all(p.get(k) == cur[k] for k in cur))
+            a.triggered.connect(lambda _=False, p=p: self.apply_set(p))
+        if not sets:
+            a = m.addAction("пока нет сохранённых наборов")
+            a.setEnabled(False)
+        m.addSeparator()
+        m.addAction("Сохранить текущие настройки как набор…").triggered.connect(self.save_set)
+        if sets:
+            sub = m.addMenu("Удалить набор")
+            for p in sets:
+                sub.addAction(p.get("name", "")).triggered.connect(
+                    lambda _=False, n=p.get("name", ""): self.delete_set(n))
+
+    def save_set(self):
+        name, ok = QInputDialog.getText(self.window(), "Набор для ручки",
+                                        "Название набора (например «Подпись»):")
+        name = (name or "").strip()[:30]
+        if not ok or not name:
+            return
+        s = settings_load()
+        sets = [p for p in (s.get("pen_presets") or []) if p.get("name") != name]
+        sets.append(dict(self.current_set(), name=name))
+        s["pen_presets"] = sets[-12:]
+        settings_save(s)
+        self.b_sets.setToolTip(f"Набор «{name}» сохранён. Нажмите, чтобы выбрать другой.")
+
+    def delete_set(self, name):
+        s = settings_load()
+        s["pen_presets"] = [p for p in (s.get("pen_presets") or []) if p.get("name") != name]
+        settings_save(s)
 
     def _pick_ink(self, i, notify=True):
         self.ink_index = i
@@ -4820,6 +4885,19 @@ class ScanLookDialog(QDialog):
         self.lbl_pages.setObjectName("hint")
         pl.addWidget(self.lbl_pages)
         side.addWidget(pbox)
+        tbox = QGroupBox("Куда сохранить")
+        tl = QVBoxLayout(tbox)
+        tl.setSpacing(6)
+        self.rb_here = QRadioButton("В открытый документ")
+        self.rb_here.setToolTip("Страницы открытого документа заменяются на «скан».\n"
+                                "В файл это попадёт, когда вы нажмёте «Сохранить».")
+        self.rb_new = QRadioButton("Новым PDF — исходный не меняется")
+        self.rb_new.setToolTip("Программа спросит имя и сохранит «скан» отдельным файлом.\n"
+                               "Открытый документ и печати на нём останутся как были.")
+        (self.rb_new if st.get("target") == "new" else self.rb_here).setChecked(True)
+        tl.addWidget(self.rb_here)
+        tl.addWidget(self.rb_new)
+        side.addWidget(tbox)
         if preselect and len(preselect) > 1:
             self.rb_custom.setChecked(True)
             self.ed_pages.setText(pages_to_text(preselect))
@@ -4929,6 +5007,7 @@ class ScanLookDialog(QDialog):
                 "dpi": int(self.cmb_dpi.currentData()),
                 "pages": self.selected_pages(),
                 "pages_mode": self.pages_mode(),
+                "target": "new" if self.rb_new.isChecked() else "here",
                 "bed": self.chk_bed.isChecked(),
                 "seed": self.seed}
 
@@ -6146,6 +6225,9 @@ class MainWindow(QMainWindow):
         self.act_png = add("to_png", "Сохранить страницы картинками PNG…", self.export_pngs, None,
                            "Сохранить все страницы картинками PNG")
         tb.widgetForAction(self.act_png).setToolButtonStyle(Qt.ToolButtonIconOnly)
+        self.act_close = add("close", "Закрыть документ", self.close_document, "Ctrl+W",
+                             "Закрыть документ — закончить работу с открытым PDF")
+        tb.widgetForAction(self.act_close).setToolButtonStyle(Qt.ToolButtonIconOnly)
         tb.addSeparator()
 
         # ИИ-помощник: то же меню стоит в строке меню сверху
@@ -6160,8 +6242,6 @@ class MainWindow(QMainWindow):
 
         self.act_meta = add("meta", "Метаданные PDF…", self.show_metadata, None,
                             "Посмотреть и очистить метаданные PDF", target=self)
-        self.act_close = add("close", "Закрыть документ", self.close_document, "Ctrl+W",
-                             "Закрыть открытый документ", target=self)
 
         tb.addSeparator()      # всё стоит плотно слева — вид панели не зависит от ширины окна
         self.act_help = add("help", "Справка", self.show_guide, "F1",
@@ -7678,6 +7758,9 @@ class MainWindow(QMainWindow):
         prog.setValue(src.page_count)
         prog.close()
         src.close()
+        if o.get("target") == "new":
+            self._scan_look_save_new(new, len(pages))
+            return
         n = self.doc.page_count
         self.doc.insert_pdf(new)
         self.doc.delete_pages(0, n - 1)
@@ -7693,6 +7776,40 @@ class MainWindow(QMainWindow):
         self._update_ui_state()
         self.show_toast(f"✔  Готово — страниц «как скан»: {len(pages)}. Сохраните (Ctrl+S)")
 
+
+    def _scan_look_save_new(self, new, n_pages):
+        """Сохранить «скан» отдельным файлом; открытый документ и печати не трогаем."""
+        base = os.path.splitext(os.path.basename(str(self.doc_path or "документ")))[0]
+        base = base.replace(" (из изображений)", "")
+        folder = self.current_dir()
+        if self.doc_path and os.path.isfile(str(self.doc_path)):
+            folder = os.path.dirname(str(self.doc_path))
+        name = f"{base} скан.pdf"
+        k = 2
+        while os.path.exists(os.path.join(folder, name)):
+            name = f"{base} скан {k}.pdf"
+            k += 1
+        path, _ = QFileDialog.getSaveFileName(self, "Сохранить «скан» новым файлом",
+                                              os.path.join(folder, name), "PDF (*.pdf)")
+        if not path:
+            new.close()
+            self.statusBar().showMessage("«Скан» не сохранён — открытый документ не изменён", 6000)
+            return
+        if not path.lower().endswith(".pdf"):
+            path += ".pdf"
+        try:
+            if self.doc_path and os.path.abspath(path).lower() == os.path.abspath(str(self.doc_path)).lower():
+                raise ValueError("это имя открытого документа — выберите другое имя "
+                                 "или вариант «В открытый документ»")
+            data = new.tobytes(garbage=3, deflate=True)
+            new.close()
+            write_file_safely(path, data)
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Не удалось сохранить:\n{e}")
+            return
+        self.reload_files()
+        self.show_toast(f"✔  «Скан» сохранён новым файлом: {os.path.basename(path)}. "
+                        f"Открытый документ не изменён", 5200)
 
     # ---------------------------------------------------------- ручка
     def toggle_pen(self):
