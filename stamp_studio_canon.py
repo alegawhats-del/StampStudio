@@ -39,7 +39,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtWidgets import (QProgressBar, QTableWidget, QTableWidgetItem, QHeaderView,
                                QAbstractItemView, QStackedWidget)
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtCore import QUrl
+from PySide6.QtCore import QUrl, QFileSystemWatcher
 import stamp_ai as AI
 
 PREVIEW_DPI = 150          # DPI отрисовки страницы в редакторе
@@ -507,7 +507,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.4.3"
+APP_VERSION = "6.4.4"
 EDITION = "canon"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -7068,6 +7068,15 @@ class MainWindow(QMainWindow):
         self._themed_buttons.append((b_up, "up", False))
         row.addWidget(b_up, 0)
 
+        b_ref = QPushButton()
+        b_ref.setFixedSize(30, 30)
+        b_ref.setToolTip("Обновить список файлов  (F5)\nСписок обновляется и сам, когда в папке что-то меняется")
+        b_ref.setIconSize(QSize(13, 13))
+        b_ref.setShortcut(QKeySequence("F5"))
+        b_ref.clicked.connect(lambda: self.reload_files(manual=True))
+        self._themed_buttons.append((b_ref, "rot_right", False))
+        row.addWidget(b_ref, 0)
+
         row.addSpacing(6)
         self.lbl_path = QLabel("")
         self.lbl_path.setObjectName("path")
@@ -7329,10 +7338,47 @@ class MainWindow(QMainWindow):
         s["open_dirs"] = self._dirs[:6]
         settings_save(s)
 
+    def reload_files(self, manual=False):
+        """Перечитать папку, сохранив выделенный файл (кнопка «Обновить», F5 и слежение за папкой)."""
+        if not hasattr(self, "file_list"):
+            return
+        cur = self.file_list.currentItem()
+        keep = cur.data(Qt.UserRole) if cur is not None else None
+        scroll = self.file_list.verticalScrollBar().value()
+        self.refresh_files()
+        if keep:
+            for i in range(self.file_list.count()):
+                if self.file_list.item(i).data(Qt.UserRole) == keep:
+                    self.file_list.setCurrentRow(i)
+                    break
+        self.file_list.verticalScrollBar().setValue(scroll)
+        if manual:
+            self.statusBar().showMessage("Список файлов обновлён", 2500)
+
+    def _watch_folder(self, folder):
+        """Следить за открытой папкой: новый файл появляется в списке сам."""
+        try:
+            if not hasattr(self, "_dir_watcher"):
+                self._dir_watcher = QFileSystemWatcher(self)
+                self._dir_timer = QTimer(self)
+                self._dir_timer.setSingleShot(True)
+                self._dir_timer.setInterval(500)
+                self._dir_timer.timeout.connect(self.reload_files)
+                self._dir_watcher.directoryChanged.connect(lambda _p: self._dir_timer.start())
+            old = self._dir_watcher.directories()
+            if old != [folder]:
+                if old:
+                    self._dir_watcher.removePaths(old)
+                if os.path.isdir(folder):
+                    self._dir_watcher.addPath(folder)
+        except Exception:
+            pass
+
     def refresh_files(self):
         if not hasattr(self, "file_list"):
             return
         folder = self.current_dir()
+        self._watch_folder(folder)
         self.lbl_path.setText(folder)
         self.file_list.clear()
         col = self._icon_color() if hasattr(self, "_icon_color") else "#888888"
