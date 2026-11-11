@@ -40,10 +40,13 @@ from PySide6.QtWidgets import (QProgressBar, QTableWidget, QTableWidgetItem, QHe
                                QAbstractItemView, QStackedWidget)
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtCore import QUrl, QFileSystemWatcher, QEventLoop, QPoint, QDate
-from PySide6.QtWidgets import QDateEdit, QTabWidget
+from PySide6.QtWidgets import QDateEdit, QTabWidget, QTextEdit
+from PySide6.QtGui import (QTextCursor, QTextCharFormat, QTextBlockFormat, QTextTableFormat, QTextFormat,
+                           QTextFrameFormat, QTextLength, QFont, QTextDocument)
 from PySide6.QtCore import QFile
 from PySide6.QtGui import QShortcut
 import datetime
+import re
 import stamp_ai as AI
 import stamp_word as SW
 
@@ -522,7 +525,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.5.1"
+APP_VERSION = "6.6.0"
 EDITION = "canon"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -6759,9 +6762,298 @@ class AiCenterDialog(QDialog):
         self.refresh()
 
 
+WORD_PAR = QTextFormat.UserProperty + 1
+
+
+class ClickLabel(QLabel):
+    """Подпись, по которой можно щёлкнуть."""
+    clicked = Signal()
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(e)
+
+
+class WordView(QTextEdit):
+    """Документ Word на экране: шрифты, жирный, курсив, выравнивание и таблицы — как в файле.
+    Текст правится прямо здесь; абзацы и таблицы нельзя склеить или разорвать, поэтому вёрстка цела."""
+    blocked = Signal(str)
+    mark_asked = Signal(str)                 # пользователь хочет сделать выделенное полем шаблона
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("wordview")
+        self.setAcceptRichText(False)
+        self.setAcceptDrops(False)
+        self.setStyleSheet("QTextEdit#wordview { background: #ffffff; color: #111111; border: 1px solid "
+                           "rgba(128,128,128,0.35); border-radius: 6px; selection-background-color: #f1c15b; "
+                           "selection-color: #111111; }")
+        self.wd = None
+        self.par_pos = {}                    # номер абзаца → позиция блока (сразу после построения)
+        self.par_tabs = {}                   # номер абзаца → смещения табуляций в тексте абзаца
+
+    # ---- построение
+    def build(self, wd):
+        from docx.text.paragraph import Paragraph
+        self.wd = wd
+        self.par_pos, self.par_tabs = {}, {}
+        doc = wd.doc
+        idx = {id(p): i for i, p in enumerate(wd.pars)}
+        q = lambda n: "{%s}%s" % (SW.W, n)
+        d = QTextDocument(self)                 # строим в стороне от экрана: большие таблицы собираются мгновенно
+        d.setUndoRedoEnabled(False)
+        d.setDocumentMargin(26)
+        grid_col = QColor("#c9c9c9")
+
+        def eff(run, par, attr):
+            try:
+                v = getattr(run.font, attr)
+                if v is not None:
+                    return v
+                for st in (run.style, par.style):
+                    while st is not None:
+                        v = getattr(st.font, attr, None)
+                        if v is not None:
+                            return v
+                        st = st.base_style
+            except Exception:
+                pass
+            return None
+
+        def put_par(p_el, cur, first):
+            i = idx.get(id(p_el))
+            par = Paragraph(p_el, doc._body)
+            bf = QTextBlockFormat()
+            try:
+                al = par.alignment
+                if al is None and par.style is not None:
+                    al = par.style.paragraph_format.alignment
+                bf.setAlignment({1: Qt.AlignHCenter, 2: Qt.AlignRight, 3: Qt.AlignJustify}.get(
+                    int(al) if al is not None else 0, Qt.AlignLeft))
+                pf = par.paragraph_format
+                if pf.left_indent:
+                    bf.setLeftMargin(max(0.0, pf.left_indent.pt * 1.33))
+                if pf.first_line_indent and pf.first_line_indent.pt > 0:
+                    bf.setTextIndent(pf.first_line_indent.pt * 1.33)
+                bf.setTopMargin((pf.space_before.pt if pf.space_before is not None else 0) * 1.33)
+                bf.setBottomMargin((pf.space_after.pt if pf.space_after is not None else 0) * 1.33)
+            except Exception:
+                pass
+            if i is not None:
+                bf.setProperty(WORD_PAR, i)
+            if first:
+                cur.setBlockFormat(bf)
+            else:
+                cur.insertBlock(bf)
+            if i is None:
+                return
+            self.par_pos[i] = cur.block().position()
+            own = set(id(t) for t in wd._texts[i])
+            tabs, off = [], 0
+            cf_last = None
+            try:
+                runs = par.runs
+            except Exception:
+                runs = []
+            seen = set()
+            for r in runs:
+                cf = QTextCharFormat()
+                f = QFont(eff(r, par, "name") or "Times New Roman")
+                sz = eff(r, par, "size")
+                f.setPointSizeF(max(5.0, sz.pt if sz else 11.0))
+                f.setBold(bool(eff(r, par, "bold")))
+                f.setItalic(bool(eff(r, par, "italic")))
+                f.setUnderline(bool(eff(r, par, "underline")))
+                cf.setFont(f)
+                cf.setForeground(QColor("#111111"))
+                cf_last = cf
+                for ch in r._r:
+                    if ch.tag == q("t") and id(ch) in own:
+                        cur.insertText(ch.text or "", cf)
+                        off += len(ch.text or "")
+                        seen.add(id(ch))
+                    elif ch.tag == q("tab"):
+                        cur.insertText("\t", cf)
+                        tabs.append(off)
+            rest = "".join(t.text or "" for t in wd._texts[i] if id(t) not in seen)
+            if rest:                                         # текст в гиперссылках и вставках — без потерь
+                cur.insertText(rest, cf_last or QTextCharFormat())
+            if tabs:
+                self.par_tabs[i] = tabs
+            if cf_last is None:                              # пустой абзац: шрифт на случай, если сюда впишут
+                cf = QTextCharFormat()
+                f = QFont("Times New Roman")
+                f.setPointSizeF(11.0)
+                cf.setFont(f)
+                cf.setForeground(QColor("#111111"))
+                cur.setBlockCharFormat(cf)
+
+        def span_of(tc):
+            pr = tc.find(q("tcPr"))
+            gs = pr.find(q("gridSpan")) if pr is not None else None
+            try:
+                return max(1, int(gs.get(q("val")))) if gs is not None else 1
+            except (TypeError, ValueError):
+                return 1
+
+        def put_tbl(t_el, cur):
+            rows = [r for r in t_el if r.tag == q("tr")]
+            if not rows:
+                return
+            grid = t_el.find(q("tblGrid"))
+            cols = []
+            if grid is not None:
+                for c in grid:
+                    try:
+                        cols.append(int(c.get(q("w")) or 0))
+                    except ValueError:
+                        cols.append(0)
+            n = max([len(cols)] + [sum(span_of(tc) for tc in r if tc.tag == q("tc")) for r in rows])
+            if n <= 0:
+                return
+            tf = QTextTableFormat()
+            tf.setCellPadding(3)
+            tf.setCellSpacing(0)
+            tf.setBorder(0.5)
+            tf.setBorderBrush(grid_col)
+            tf.setBorderStyle(QTextFrameFormat.BorderStyle_Solid)
+            tf.setBorderCollapse(True)
+            tot = sum(cols) or 1
+            tf.setColumnWidthConstraints([QTextLength(QTextLength.PercentageLength,
+                                                      100.0 * (cols[k] if k < len(cols) and cols[k] else tot / n) / tot)
+                                          for k in range(n)])
+            tf.setWidth(QTextLength(QTextLength.PercentageLength, 100))
+            tbl = cur.insertTable(len(rows), n, tf)
+            for ri, r in enumerate(rows):
+                ci = 0
+                for tc in (c for c in r if c.tag == q("tc")):
+                    if ci >= n:
+                        break
+                    span = min(span_of(tc), n - ci)
+                    if span > 1:
+                        tbl.mergeCells(ri, ci, 1, span)
+                    cc = tbl.cellAt(ri, ci).firstCursorPosition()
+                    fst = True
+                    for ch in tc:
+                        if ch.tag == q("p"):
+                            put_par(ch, cc, fst)
+                            fst = False
+                            nested(ch, cc)
+                        elif ch.tag == q("tbl"):
+                            put_tbl(ch, cc)
+                            fst = False
+                    ci += span
+
+        def nested(p_el, cur):
+            """Надписи (текстовые рамки) внутри абзаца — отдельными абзацами следом."""
+            for sub in p_el.iter(q("p")):
+                if sub is not p_el and id(sub) in idx and idx[id(sub)] not in self.par_pos:
+                    put_par(sub, cur, False)
+
+        cur = QTextCursor(d)
+        first = True
+        for ch in doc.element.body:
+            if ch.tag == q("p"):
+                put_par(ch, cur, first)
+                first = False
+                nested(ch, cur)
+            elif ch.tag == q("tbl"):
+                put_tbl(ch, cur)
+                first = False
+                cur = QTextCursor(d)
+                cur.movePosition(QTextCursor.End)
+        d.setUndoRedoEnabled(True)
+        d.setModified(False)
+        self.setDocument(d)                     # прежний документ Qt удаляет сам
+        c = self.textCursor()
+        c.movePosition(QTextCursor.Start)
+        self.setTextCursor(c)
+
+    def pos_of(self, par, offset):
+        """Позиция в окне для смещения внутри текста абзаца."""
+        if par not in self.par_pos:
+            return None
+        return self.par_pos[par] + offset + sum(1 for t in self.par_tabs.get(par, ()) if t < offset or (t == offset == 0))
+
+    def changed_paragraphs(self):
+        """{номер абзаца: новый текст} — только то, что отличается от файла."""
+        out, seen = {}, set()
+        b = self.document().begin()
+        while b.isValid():
+            v = b.blockFormat().property(WORD_PAR)
+            if v is not None and v not in seen:
+                seen.add(v)
+                text = b.text().replace("\t", "").replace(" ", "")
+                if text != self.wd.text(int(v)):
+                    out[int(v)] = text
+            b = b.next()
+        return out
+
+    # ---- правка только внутри абзаца
+    def _one_block(self):
+        c = self.textCursor()
+        if not c.hasSelection():
+            return True
+        d = self.document()
+        return d.findBlock(c.selectionStart()) == d.findBlock(c.selectionEnd())
+
+    def keyPressEvent(self, e):
+        k = e.key()
+        c = self.textCursor()
+        if e.matches(QKeySequence.Copy) or e.matches(QKeySequence.SelectAll) or e.matches(QKeySequence.Undo) \
+                or e.matches(QKeySequence.Redo) or k in (Qt.Key_Left, Qt.Key_Right, Qt.Key_Up, Qt.Key_Down, Qt.Key_Home,
+                                                         Qt.Key_End, Qt.Key_PageUp, Qt.Key_PageDown, Qt.Key_Shift,
+                                                         Qt.Key_Control, Qt.Key_Alt, Qt.Key_Meta, Qt.Key_Escape):
+            if k == Qt.Key_Escape:
+                e.ignore()
+                return
+            return super().keyPressEvent(e)
+        if k in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Tab, Qt.Key_Backtab):
+            self.blocked.emit("Новые абзацы и табуляция здесь не добавляются — так оформление остаётся целым")
+            return
+        if not self._one_block():
+            self.blocked.emit("Выделите текст в пределах одного абзаца или одной ячейки — и печатайте")
+            return
+        if not c.hasSelection():
+            if k == Qt.Key_Backspace and c.atBlockStart():
+                return
+            if k == Qt.Key_Delete and c.atBlockEnd():
+                return
+            if e.matches(QKeySequence.DeleteStartOfWord) or e.matches(QKeySequence.DeleteEndOfWord):
+                return
+        super().keyPressEvent(e)
+
+    def insertFromMimeData(self, src):
+        if not self._one_block():
+            self.blocked.emit("Выделите текст в пределах одного абзаца — и вставляйте")
+            return
+        text = re.sub(r"[\r\n\t]+", " ", src.text() or "").strip(" ")
+        if text:
+            self.textCursor().insertText(text)
+
+    def contextMenuEvent(self, e):
+        m = QMenu(self)
+        c = self.textCursor()
+        sel = c.selectedText() if c.hasSelection() and self._one_block() else ""
+        if sel.strip():
+            sub = m.addMenu("Сделать полем шаблона")
+            sub.setToolTipsVisible(True)
+            for key, title in SW.KEYS:
+                sub.addAction(title, lambda k=key: self.mark_asked.emit(k))
+            sub.addSeparator()
+            sub.addAction("Своё название…", lambda: self.mark_asked.emit(""))
+            m.addSeparator()
+        m.addAction("Копировать", self.copy).setEnabled(c.hasSelection())
+        a = m.addAction("Вставить", self.paste)
+        a.setEnabled(self.canPaste())
+        m.addAction("Отменить", self.undo)
+        m.exec(e.globalPos())
+
+
 class WordFillPage(QDialog):
-    """Заполнение документа Word внутри главного окна: поля, замены образцов, правка текста.
-    Меняется только текст — шрифты, таблицы, нумерация и отступы остаются как в шаблоне."""
+    """Редактор документов Word внутри главного окна: слева сам документ с оформлением, справа — поля.
+    Меняется только текст; шрифты, таблицы, нумерация и отступы остаются как в файле."""
 
     def __init__(self, win):
         super().__init__(win)
@@ -6770,9 +7062,7 @@ class WordFillPage(QDialog):
         self.setObjectName("aipage")
         self.wd = None
         self.path = ""
-        self.edits = {}
-        self.f_edits = []
-        self._auto_dates = set()
+        self.rows = []
         root = QVBoxLayout(self)
         root.setContentsMargins(16, 10, 16, 10)
         root.setSpacing(8)
@@ -6786,95 +7076,82 @@ class WordFillPage(QDialog):
         b_back.clicked.connect(lambda: win.ai_mode(False))
         win._themed_buttons.append((b_back, "back", False))
         head.addWidget(b_back)
-        ttl = QLabel("ЗАПОЛНЕНИЕ WORD")
+        ttl = QLabel("РЕДАКТОР WORD")
         ttl.setObjectName("paneltitle")
         head.addWidget(ttl)
         self.lbl_doc = QLabel("")
         self.lbl_doc.setObjectName("hint")
         self.lbl_doc.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         head.addWidget(self.lbl_doc, 1)
+        cap = QLabel("Клиент:")
+        cap.setObjectName("plain")
+        head.addWidget(cap)
+        self.cmb_client = QComboBox()
+        self.cmb_client.setMinimumWidth(170)
+        self.cmb_client.setMinimumHeight(30)
+        self.cmb_client.setToolTip("Данные клиента, сохранённые из прошлых документов: ФИО, паспорт, адрес, VIN…\n"
+                                   "Выберите — и поля заполнятся сами.")
+        self.cmb_client.activated.connect(self._pick_client)
+        head.addWidget(self.cmb_client)
+        self.b_keep = QPushButton("Запомнить")
+        self.b_keep.setToolTip("Сохранить введённые данные клиента, чтобы подставить их в следующий документ\n"
+                               "(счёт, акт, CMR). Данные хранятся только на этом компьютере.")
+        self.b_keep.clicked.connect(self._keep_client)
+        head.addWidget(self.b_keep)
         root.addLayout(head)
 
-        self.tabs = QTabWidget()
-        self.tabs.setStyleSheet("QTabWidget::pane { border: 1px solid rgba(128, 128, 128, 0.32); border-radius: 10px; "
-                                "background: transparent; top: -1px; } "
-                                "QScrollArea { background: transparent; } "
-                                "QScrollArea > QWidget > QWidget { background: transparent; }")
-        root.addWidget(self.tabs, 1)
+        body = QHBoxLayout()
+        body.setSpacing(10)
+        root.addLayout(body, 1)
+        self.view = WordView()
+        self.view.blocked.connect(lambda t: self._say(t, warn=True))
+        self.view.mark_asked.connect(self._add_mark)
+        self.view.textChanged.connect(self._later)
+        body.addWidget(self.view, 1)
 
-        # ---- вкладка «Поля»
-        t1 = QWidget()
-        l1 = QVBoxLayout(t1)
-        l1.setContentsMargins(10, 10, 10, 6)
-        l1.setSpacing(8)
+        side = QVBoxLayout()
+        side.setSpacing(6)
         drow = QHBoxLayout()
-        cap = QLabel("Дата во все пустые даты:")
-        cap.setObjectName("plain")
-        drow.addWidget(cap)
+        drow.setSpacing(6)
         self.ed_all_date = QLineEdit()
-        self.ed_all_date.setPlaceholderText("ДД.ММ.ГГГГ")
-        self.ed_all_date.setFixedWidth(130)
+        self.ed_all_date.setPlaceholderText("дата во все даты")
         self.ed_all_date.setMinimumHeight(30)
+        self.ed_all_date.setToolTip("ДД.ММ.ГГГГ — встанет во все пустые даты документа: «11» ноября 2026 г.")
         self.ed_all_date.textChanged.connect(self._spread_date)
-        drow.addWidget(self.ed_all_date)
+        drow.addWidget(self.ed_all_date, 1)
         b_today = QPushButton("Сегодня")
         b_today.clicked.connect(lambda: self.ed_all_date.setText(AI.today().strftime("%d.%m.%Y")))
         drow.addWidget(b_today)
+        side.addLayout(drow)
         self.lbl_cnt = QLabel("")
         self.lbl_cnt.setObjectName("hint")
-        drow.addWidget(self.lbl_cnt, 1)
-        l1.addLayout(drow)
+        side.addWidget(self.lbl_cnt)
         self.sc = QScrollArea()
         self.sc.setWidgetResizable(True)
         self.sc.setFrameShape(QFrame.NoFrame)
         self.sc.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        l1.addWidget(self.sc, 1)
-        self.tabs.addTab(t1, "Поля")
-
-        # ---- вкладка «Образцы и замены»
-        t2 = QWidget()
-        l2 = QVBoxLayout(t2)
-        l2.setContentsMargins(10, 10, 10, 6)
-        h2 = QLabel("В шаблоне стоят образцы — «Иванов Иван Иванович», «00 00 000000», «БМ-000». Впишите справа настоящее "
-                    "значение, и оно заменит образец везде, где он встречается. В пустые строки внизу можно вписать "
-                    "любую свою замену: что найти и на что заменить.")
-        h2.setObjectName("hint")
-        h2.setWordWrap(True)
-        l2.addWidget(h2)
-        self.tbl = QTableWidget(0, 3)
-        self.tbl.setHorizontalHeaderLabels(["Что стоит в документе", "Раз", "Заменить на"])
-        self.tbl.verticalHeader().setVisible(False)
-        hh = self.tbl.horizontalHeader()
-        hh.setSectionResizeMode(0, QHeaderView.Stretch)
-        hh.setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        hh.setSectionResizeMode(2, QHeaderView.Stretch)
-        self.tbl.itemChanged.connect(self._repl_changed)
-        l2.addWidget(self.tbl, 1)
-        self.tabs.addTab(t2, "Образцы и замены")
-
-        # ---- вкладка «Весь текст»
-        t3 = QWidget()
-        l3 = QVBoxLayout(t3)
-        l3.setContentsMargins(10, 10, 10, 6)
-        h3 = QLabel("Любой абзац можно поправить: двойной щелчок, правка, Enter. Оформление абзаца сохраняется. "
-                    "Абзац, исправленный здесь, берётся отсюда целиком — поля в нём уже не подставляются.")
-        h3.setObjectName("hint")
-        h3.setWordWrap(True)
-        l3.addWidget(h3)
-        frow = QHBoxLayout()
+        self.sc.setStyleSheet("QScrollArea { background: transparent; } "
+                              "QScrollArea > QWidget > QWidget { background: transparent; }")
+        side.addWidget(self.sc, 1)
+        rrow = QHBoxLayout()
+        rrow.setSpacing(6)
         self.ed_find = QLineEdit()
-        self.ed_find.setPlaceholderText("Найти в тексте…")
+        self.ed_find.setPlaceholderText("найти")
         self.ed_find.setMinimumHeight(30)
-        self.ed_find.textChanged.connect(self._filter_text)
-        frow.addWidget(self.ed_find)
-        l3.addLayout(frow)
-        self.lst = QListWidget()
-        self.lst.setWordWrap(True)
-        self.lst.setAlternatingRowColors(True)
-        self.lst.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.lst.itemChanged.connect(self._text_changed)
-        l3.addWidget(self.lst, 1)
-        self.tabs.addTab(t3, "Весь текст")
+        self.ed_repl = QLineEdit()
+        self.ed_repl.setPlaceholderText("заменить на")
+        self.ed_repl.setMinimumHeight(30)
+        rrow.addWidget(self.ed_find, 1)
+        rrow.addWidget(self.ed_repl, 1)
+        side.addLayout(rrow)
+        b_repl = QPushButton("Заменить во всём документе")
+        b_repl.setToolTip("Заменить текст везде, где он встречается. Оформление не меняется.")
+        b_repl.clicked.connect(self._replace_all)
+        side.addWidget(b_repl)
+        sw = QWidget()
+        sw.setLayout(side)
+        sw.setFixedWidth(320)
+        body.addWidget(sw)
 
         foot = QHBoxLayout()
         self.lbl_info = QLabel("")
@@ -6884,237 +7161,437 @@ class WordFillPage(QDialog):
         self.b_save = QPushButton("Сохранить как Word…")
         self.b_save.setObjectName("primary")
         self.b_save.setMinimumHeight(36)
-        self.b_save.setToolTip("Сохранить заполненный документ новым файлом Word.\nШаблон остаётся нетронутым.")
+        self.b_save.setToolTip("Сохранить документ новым файлом Word. Исходный файл остаётся нетронутым.")
         self.b_save.clicked.connect(self.save)
         foot.addWidget(self.b_save)
         root.addLayout(foot)
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.setInterval(180)
+        self._timer.timeout.connect(self._paint_marks)
+        self._home = ("Щёлкните в документе и печатайте: выделите текст — и впишите свой. Жирный, курсив, шрифты и "
+                      "таблицы остаются как были. Справа — найденные места для заполнения. "
+                      "Правая кнопка по выделенному — сделать его полем шаблона на будущее.")
 
     def reject(self):
         self.win.ai_mode(False)
 
-    # ---- загрузка документа
+    def _say(self, text, warn=False):
+        self.lbl_info.setText(("⚠ " if warn else "") + text)
+        if warn:
+            QTimer.singleShot(5000, lambda: self.lbl_info.setText(self._home) if self.lbl_info.text().startswith("⚠") else None)
+
+    def _later(self):
+        self._timer.start()
+
+    # ---- курсоры-якоря
+    def _cursor(self, a, b):
+        c = QTextCursor(self.view.document())
+        c.setPosition(a)
+        c.setPosition(b, QTextCursor.KeepAnchor)
+        return c
+
+    def _fmt_at(self, a, b):
+        c = QTextCursor(self.view.document())
+        c.setPosition(min(a + 1, b) if b > a else a)
+        f = c.charFormat() if b > a else c.blockCharFormat()
+        if b == a and c.block().length() > 1:
+            f = c.charFormat()
+        f.clearBackground()
+        return f
+
+    def _find_all(self, text):
+        out = []
+        d = self.view.document()
+        b = d.begin()
+        while b.isValid():
+            if b.blockFormat().property(WORD_PAR) is not None:
+                s, k = b.text(), 0
+                while True:
+                    k = s.find(text, k)
+                    if k < 0:
+                        break
+                    out.append((b.position() + k, b.position() + k + len(text)))
+                    k += len(text)
+            b = b.next()
+        return out
+
+    def _new_row(self, label, key, kind, spans, field=None, mark=None, dummy=""):
+        cs = [self._cursor(a, b) for a, b in spans]
+        return {"label": label, "key": key, "kind": kind, "cursors": cs, "fmts": [self._fmt_at(a, b) for a, b in spans],
+                "orig": [c.selectedText() for c in cs], "field": field, "mark": mark, "dummy": dummy,
+                "auto": False, "edit": None, "current": (field.current if field is not None else "")}
+
+    def _render(self, row, value):
+        value = (value or "").strip()
+        if not value:
+            return None
+        if row["field"] is not None:
+            return row["field"].render(value)
+        return value
+
+    def _write(self, row, value):
+        new = self._render(row, value)
+        self.view.blockSignals(True)
+        for k, c in enumerate(row["cursors"]):
+            text = row["orig"][k] if new is None else new
+            if c.selectedText() == text:
+                continue
+            c.beginEditBlock()
+            c.insertText(text, row["fmts"][k])
+            end = c.position()
+            c.setPosition(end - len(text))
+            c.setPosition(end, QTextCursor.KeepAnchor)
+            c.endEditBlock()
+        self.view.blockSignals(False)
+        self._later()
+
+    # ---- загрузка
     def load(self, path):
         self.wd = SW.WordDoc(path)
         self.path = path
-        self.edits = {}
-        self._auto_dates = set()
-        self.lbl_doc.setText("Шаблон: " + os.path.basename(path))
+        self.lbl_doc.setText(os.path.basename(path))
         self.lbl_doc.setToolTip(path)
+        self.view.blockSignals(True)
+        self.view.build(self.wd)
+        self.view.blockSignals(False)
         self.ed_all_date.blockSignals(True)
         self.ed_all_date.clear()
         self.ed_all_date.blockSignals(False)
-        # поля
+        self.ed_find.clear()
+        self.ed_repl.clear()
+        rows = []
+        for f in self.wd.fields:
+            a, b = self.view.pos_of(f.par, f.start), self.view.pos_of(f.par, f.end)
+            if a is None:
+                continue
+            before = self.wd.text(f.par)[:f.start][-70:]
+            key = SW.guess_key(f.label if f.kind in ("cell", "tail") else before)
+            if f.kind == "date":
+                ref = re.search(r"договор\w*\s*№[^№]{0,40}\bот\s*$", before.lower())
+                own = bool(re.search(r"к договору\s*№", before.lower()))
+                key = "contract_date" if (ref and not own) or (not any(r["kind"] == "date" for r in rows) and
+                                                               any(n == "Номер договора" and re.match(r"[А-ЯЁA-Z]", t)
+                                                                   for n, t, _c in self.wd.dummies)) else ""
+            elif f.kind == "blank" and re.search(r"(?<!к )договор(?:ом|а|у)?\s*№\s*$", before.lower()):
+                key = "contract_no"
+            rows.append(self._new_row(f.label, key, f.kind, [(a, b)], field=f))
+        for name, text, cnt in self.wd.dummies:
+            spans = self._find_all(text)
+            if spans:
+                key = SW.DUMMY_KEYS.get(name, "")
+                if key == "contract_no" and not re.match(r"[А-ЯЁA-Z]", text):
+                    key = ""                             # «000–2026» — собственный номер этого документа
+                rows.append(self._new_row(f"{name}: «{text}»" + (f" ×{len(spans)}" if len(spans) > 1 else ""),
+                                          key, "dummy", spans, dummy=name))
+        taken = [(c.selectionStart(), c.selectionEnd()) for r in rows for c in r["cursors"]]
+        for m in self._marks():
+            spans = [s for s in self._find_all(m.get("text", "")) if not any(a < s[1] and s[0] < b for a, b in taken)]
+            if spans:
+                title = SW.KEY_TITLES.get(m.get("key"), m.get("label") or "поле")
+                rows.append(self._new_row(f"{title}: «{m['text'][:40]}»" + (f" ×{len(spans)}" if len(spans) > 1 else ""),
+                                          m.get("key", ""), "mark", spans, mark=m))
+                taken += spans
+        rows.sort(key=lambda r: (bool(r["current"]), r["cursors"][0].selectionStart()))
+        self.rows = rows
+        self._build_panel()
+        self._load_clients()
+        self._paint_marks()
+        self.lbl_info.setText(self._home)
+
+    def _build_panel(self):
         holder = QWidget()
-        g = QGridLayout(holder)
-        g.setContentsMargins(2, 2, 10, 2)
-        g.setHorizontalSpacing(12)
-        g.setVerticalSpacing(7)
-        g.setColumnStretch(0, 5)
-        g.setColumnStretch(1, 4)
-        self.f_edits = [None] * len(self.wd.fields)
-        order = [k for k, f in enumerate(self.wd.fields) if not f.current] + \
-                [k for k, f in enumerate(self.wd.fields) if f.current]
-        row, sep_done = 0, False
-        tips = {"date": "ДД.ММ.ГГГГ", "sum": "число — прописью подставится само", "cell": "", "blank": "", "tail": ""}
-        for k in order:
-            f = self.wd.fields[k]
-            if f.current and not sep_done:
-                sep = QLabel("Уже заполнено в шаблоне — меняйте, только если нужно")
+        v = QVBoxLayout(holder)
+        v.setContentsMargins(0, 0, 8, 0)
+        v.setSpacing(2)
+        tips = {"date": "ДД.ММ.ГГГГ", "sum": "число — пропись подставится"}
+        sep_done = False
+        for row in self.rows:
+            if row["current"] and not sep_done:
+                sep = QLabel("УЖЕ ЗАПОЛНЕНО В ШАБЛОНЕ")
                 sep.setObjectName("paneltitle")
-                g.addWidget(sep, row, 0, 1, 2)
-                row += 1
+                v.addSpacing(6)
+                v.addWidget(sep)
                 sep_done = True
-            lab = QLabel(f.label)
-            lab.setObjectName("plain")
-            lab.setWordWrap(True)
-            lab.setToolTip(self.wd.text(f.par)[:600])
-            g.addWidget(lab, row, 0)
+            top = QHBoxLayout()
+            top.setSpacing(4)
+            lab = ClickLabel(row["label"])
+            lab.setObjectName("hint")
+            lab.setCursor(Qt.PointingHandCursor)
+            lab.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+            lab.setFixedHeight(17)
+            lab.setToolTip(row["label"] + "\nЩелчок — показать это место в документе")
+            lab.clicked.connect(lambda r=row: self._jump(r))
+            top.addWidget(lab, 1)
+            if row["mark"] is not None:
+                x = QToolButton()
+                x.setObjectName("ghost")
+                x.setAutoRaise(True)
+                x.setFixedSize(18, 18)
+                x.setIcon(draw_icon("close", self.win._icon_color()))
+                x.setIconSize(QSize(10, 10))
+                x.setToolTip("Убрать это поле из шаблона")
+                x.clicked.connect(lambda _=False, r=row: self._drop_mark(r))
+                top.addWidget(x)
+            v.addLayout(top)
             ed = QLineEdit()
-            ed.setMinimumHeight(30)
-            ed.setPlaceholderText(tips.get(f.kind, ""))
-            if f.current:
-                ed.setText(f.current)
-            if f.kind == "sum":
-                ed.textChanged.connect(lambda _t, e=ed, fld=f: self._sum_tip(e, fld))
-            ed.textChanged.connect(self._count)
-            g.addWidget(ed, row, 1)
-            self.f_edits[k] = ed
-            row += 1
-        if not self.wd.fields:
-            none = QLabel("Пустых мест (прочерков, пустых ячеек, сумм прописью) в документе не нашлось.\n"
-                          "Это уже заполненный документ: меняйте значения на вкладках «Образцы и замены» и «Весь текст».")
+            ed.setMinimumHeight(28)
+            ed.setPlaceholderText(tips.get(row["kind"], SW.KEY_TITLES.get(row["key"], "")))
+            if row["current"]:
+                ed.setText(row["current"])
+            ed.textEdited.connect(lambda t, r=row: self._typed(r, t))
+            row["edit"] = ed
+            v.addWidget(ed)
+            v.addSpacing(5)
+        if not self.rows:
+            none = QLabel("Готовых мест для заполнения не нашлось — это уже заполненный документ.\n\n"
+                          "Правьте текст прямо в документе слева: выделите и впишите своё.\n\n"
+                          "Чтобы в следующий раз заполнялось само: выделите значение (ФИО, VIN, номер), правая кнопка → "
+                          "«Сделать полем шаблона».")
             none.setObjectName("hint")
             none.setWordWrap(True)
-            g.addWidget(none, row, 0, 1, 2)
-            row += 1
-        g.setRowStretch(row, 1)
+            v.addWidget(none)
+        v.addStretch(1)
         self.sc.setWidget(holder)
-        # образцы
-        self.tbl.blockSignals(True)
-        self.tbl.setRowCount(0)
-        for name, text, cnt in self.wd.dummies:
-            r = self.tbl.rowCount()
-            self.tbl.insertRow(r)
-            it = QTableWidgetItem(text)
-            it.setFlags(it.flags() & ~Qt.ItemIsEditable)
-            it.setToolTip(name)
-            it.setData(Qt.UserRole, name)
-            self.tbl.setItem(r, 0, it)
-            c = QTableWidgetItem(str(cnt))
-            c.setFlags(c.flags() & ~Qt.ItemIsEditable)
-            c.setTextAlignment(Qt.AlignCenter)
-            self.tbl.setItem(r, 1, c)
-            self.tbl.setItem(r, 2, QTableWidgetItem(""))
-        for _ in range(6):
-            r = self.tbl.rowCount()
-            self.tbl.insertRow(r)
-            self.tbl.setItem(r, 0, QTableWidgetItem(""))
-            c = QTableWidgetItem("")
-            c.setFlags(c.flags() & ~Qt.ItemIsEditable)
-            c.setTextAlignment(Qt.AlignCenter)
-            self.tbl.setItem(r, 1, c)
-            self.tbl.setItem(r, 2, QTableWidgetItem(""))
-        self.tbl.blockSignals(False)
-        # весь текст
-        self.lst.blockSignals(True)
-        self.lst.clear()
-        for i, text in self.wd.paragraphs_text():
-            it = QListWidgetItem(text)
-            it.setFlags(it.flags() | Qt.ItemIsEditable)
-            it.setData(Qt.UserRole, i)
-            it.setData(Qt.UserRole + 1, text)
-            self.lst.addItem(it)
-        self.lst.blockSignals(False)
-        self.ed_find.clear()
-        self.tabs.setTabText(2, "Весь текст")
-        self.tabs.setTabText(0, f"Поля ({len(self.wd.fields)})")
-        self.tabs.setTabText(1, f"Образцы и замены ({len(self.wd.dummies)})")
-        self.tabs.setCurrentIndex(0 if self.wd.fields else (1 if self.wd.dummies else 2))
         self._count()
 
-    # ---- поведение
+    def _jump(self, row):
+        c = QTextCursor(row["cursors"][0])
+        self.view.setTextCursor(c)
+        self.view.ensureCursorVisible()
+        if row["edit"] is not None:
+            row["edit"].setFocus()
+
+    def _typed(self, row, text, spread=True):
+        row["auto"] = False
+        self._write(row, text)
+        if spread and row["key"]:
+            self._spread_key(row["key"], text, skip=row)
+        self._count()
+
+    def _spread_key(self, key, text, skip=None):
+        """То же значение — во все поля с тем же смыслом; из полного ФИО получается «Фамилия И. О.»."""
+        for r in self.rows:
+            if r is skip or r["edit"] is None:
+                continue
+            val = None
+            if r["key"] == key:
+                val = text
+            elif key == "fio" and r["key"] == "fio_short":
+                val = SW.initials(text)
+            if val is not None and (not r["edit"].text().strip() or r["auto"]):
+                r["edit"].setText(val)
+                r["auto"] = True
+                self._write(r, val)
+
     def _spread_date(self, text):
-        if SW.parse_date(text) is None and text.strip():
+        if text.strip() and SW.parse_date(text) is None:
             return
-        for k, f in enumerate(self.wd.fields if self.wd else []):
-            ed = self.f_edits[k]
-            if f.kind == "date" and ed is not None and (not ed.text().strip() or k in self._auto_dates):
-                ed.setText(text.strip())
-                self._auto_dates.add(k)
+        for r in self.rows:
+            if r["kind"] == "date" and r["edit"] is not None and (not r["edit"].text().strip() or r["auto"]):
+                r["edit"].setText(text.strip())
+                r["auto"] = True
+                self._write(r, text)
+        self._count()
 
-    def _sum_tip(self, ed, fld):
-        out = fld.render(ed.text())
-        ed.setToolTip(("В документе будет: " + out) if out else "")
+    def _count(self):
+        done = sum(1 for r in self.rows if r["edit"] is not None and r["edit"].text().strip())
+        self.lbl_cnt.setText(f"Поля: заполнено {done} из {len(self.rows)}" if self.rows else "")
 
-    def _count(self, *_):
-        if not self.wd:
+    def _paint_marks(self):
+        sels = []
+        for r in self.rows:
+            filled = bool(r["edit"] is not None and r["edit"].text().strip())
+            for c in r["cursors"]:
+                if c.hasSelection():
+                    s = QTextEdit.ExtraSelection()
+                    s.cursor = QTextCursor(c)
+                    s.format.setBackground(QColor("#d9f2d0" if filled else "#fff1b8"))
+                    sels.append(s)
+        self.view.setExtraSelections(sels)
+
+    def _replace_all(self):
+        a, b = self.ed_find.text(), self.ed_repl.text()
+        if not a:
             return
-        done = sum(1 for e in self.f_edits if e is not None and e.text().strip())
-        self.lbl_cnt.setText(f"заполнено {done} из {len(self.f_edits)}")
-        self.lbl_info.setText("Пустое поле остаётся в документе как было. Шаблон не меняется — "
-                              "результат сохраняется новым файлом.")
+        spans = self._find_all(a)
+        if not spans:
+            self._say(f"«{a}» в документе не найдено", warn=True)
+            return
+        self.view.blockSignals(True)
+        c = QTextCursor(self.view.document())
+        c.beginEditBlock()
+        for s, e in reversed(spans):
+            fmt = self._fmt_at(s, e)
+            c.setPosition(s)
+            c.setPosition(e, QTextCursor.KeepAnchor)
+            c.insertText(b, fmt)
+        c.endEditBlock()
+        self.view.blockSignals(False)
+        self._later()
+        self._say(f"Заменено: {len(spans)}")
 
-    def _repl_changed(self, item):
-        if item.column() == 2 and item.row() < len(self.wd.dummies):
-            if self.tbl.item(item.row(), 0).data(Qt.UserRole) == "ФИО":
-                short = SW.initials(item.text())
-                for r in range(len(self.wd.dummies)):
-                    it0, it2 = self.tbl.item(r, 0), self.tbl.item(r, 2)
-                    if it0.data(Qt.UserRole) == "ФИО коротко" and (not it2.text().strip() or it2.data(Qt.UserRole)):
-                        self.tbl.blockSignals(True)
-                        it2.setText(short)
-                        it2.setData(Qt.UserRole, True)          # подставлено программой
-                        self.tbl.blockSignals(False)
-            elif self.tbl.item(item.row(), 0).data(Qt.UserRole) == "ФИО коротко":
-                item.setData(Qt.UserRole, None)
-            else:                                   # тот же образец в другом написании («БМ-000» и «БМ-___»)
-                name = self.tbl.item(item.row(), 0).data(Qt.UserRole)
-                item.setData(Qt.UserRole, None)
-                for r in range(len(self.wd.dummies)):
-                    it0, it2 = self.tbl.item(r, 0), self.tbl.item(r, 2)
-                    if r != item.row() and it0.data(Qt.UserRole) == name and name == "Номер договора" \
-                            and (not it2.text().strip() or it2.data(Qt.UserRole)):
-                        self.tbl.blockSignals(True)
-                        it2.setText(item.text())
-                        it2.setData(Qt.UserRole, True)
-                        self.tbl.blockSignals(False)
-        if item.column() == 0 and item.row() >= len(self.wd.dummies):
-            what = item.text()
-            n = sum(t.count(what) for _i, t in self.wd.paragraphs_text()) if what else 0
-            self.tbl.blockSignals(True)
-            self.tbl.item(item.row(), 1).setText(str(n) if what else "")
-            self.tbl.blockSignals(False)
+    # ---- поля шаблона, которые отметил пользователь
+    def _tpl_id(self):
+        return os.path.basename(self.path).lower()
 
-    def _text_changed(self, item):
-        i, orig = item.data(Qt.UserRole), item.data(Qt.UserRole + 1)
-        f = item.font()
-        if item.text() != orig:
-            self.edits[i] = item.text()
-            f.setBold(True)
-        else:
-            self.edits.pop(i, None)
-            f.setBold(False)
-        self.lst.blockSignals(True)
-        item.setFont(f)
-        self.lst.blockSignals(False)
-        self.tabs.setTabText(2, "Весь текст" + (f" (правок: {len(self.edits)})" if self.edits else ""))
+    def _marks(self):
+        return list((settings_load().get("word_marks") or {}).get(self._tpl_id(), []))
 
-    def _filter_text(self, text):
-        q = text.strip().lower()
-        for r in range(self.lst.count()):
-            it = self.lst.item(r)
-            it.setHidden(bool(q) and q not in it.text().lower())
+    def _add_mark(self, key):
+        c = self.view.textCursor()
+        text = c.selectedText()
+        if not text.strip():
+            return
+        label = ""
+        if not key:
+            label, ok = QInputDialog.getText(self, "Поле шаблона", "Как назвать это поле (например «Город доставки»):")
+            label = (label or "").strip()
+            if not ok or not label:
+                return
+        st = settings_load()
+        marks = st.setdefault("word_marks", {}).setdefault(self._tpl_id(), [])
+        if any(m.get("text") == text for m in marks):
+            self._say("Такое поле в этом шаблоне уже есть", warn=True)
+            return
+        m = {"key": key or "", "label": label, "text": text}
+        marks.append(m)
+        settings_save(st)
+        taken = [(x.selectionStart(), x.selectionEnd()) for r in self.rows for x in r["cursors"]]
+        spans = [s for s in self._find_all(text) if not any(a < s[1] and s[0] < b for a, b in taken)]
+        if not spans:
+            self._say("Это место уже занято другим полем", warn=True)
+            return
+        title = SW.KEY_TITLES.get(key, label or "поле")
+        row = self._new_row(f"{title}: «{text[:40]}»" + (f" ×{len(spans)}" if len(spans) > 1 else ""),
+                            key or "", "mark", spans, mark=m)
+        self.rows.append(row)
+        self.rows.sort(key=lambda r: (bool(r["current"]), r["cursors"][0].selectionStart()))
+        vals = {id(r): (r["edit"].text() if r["edit"] is not None else "") for r in self.rows}
+        self._build_panel()
+        for r in self.rows:
+            if vals.get(id(r)):
+                r["edit"].setText(vals[id(r)])
+        self._count()
+        self._paint_marks()
+        self._jump(row)
+        self._say(f"Поле «{title}» запомнено для этого шаблона" + (f" — мест в документе: {len(spans)}" if len(spans) > 1 else "")
+                  + ". В следующий раз оно появится справа само.")
 
-    def collect(self):
-        values = {k: e.text() for k, e in enumerate(self.f_edits) if e is not None and e.text().strip()
-                  and e.text().strip() != (self.wd.fields[k].current or "")}
-        repl = []
-        for r in range(self.tbl.rowCount()):
-            a, b = self.tbl.item(r, 0).text(), self.tbl.item(r, 2).text().strip()
-            if a and b:
-                repl.append((a, b))
-        return values, repl, dict(self.edits)
+    def _drop_mark(self, row):
+        st = settings_load()
+        marks = (st.get("word_marks") or {}).get(self._tpl_id(), [])
+        marks[:] = [m for m in marks if m.get("text") != row["mark"].get("text")]
+        settings_save(st)
+        self._write(row, "")
+        self.rows.remove(row)
+        vals = {id(r): r["edit"].text() for r in self.rows if r["edit"] is not None}
+        self._build_panel()
+        for r in self.rows:
+            if vals.get(id(r)):
+                r["edit"].setText(vals[id(r)])
+        self._count()
+        self._paint_marks()
 
+    # ---- данные клиента
+    def _load_clients(self):
+        self.cmb_client.blockSignals(True)
+        self.cmb_client.clear()
+        self.cmb_client.addItem("— выбрать —", None)
+        for name in sorted((settings_load().get("word_clients") or {}).keys(), key=str.lower):
+            self.cmb_client.addItem(name, name)
+        self.cmb_client.blockSignals(False)
+
+    def client_values(self):
+        out = {}
+        for r in self.rows:
+            if r["key"] and r["edit"] is not None and r["edit"].text().strip() and r["key"] not in out:
+                out[r["key"]] = r["edit"].text().strip()
+        return out
+
+    def _keep_client(self):
+        vals = self.client_values()
+        name = vals.get("fio") or vals.get("fio_short") or ""
+        if not vals:
+            self._say("Сначала заполните поля клиента: ФИО, паспорт, адрес…", warn=True)
+            return
+        if not name:
+            name, ok = QInputDialog.getText(self, "Клиент", "Под каким именем сохранить данные:")
+            name = (name or "").strip()
+            if not ok or not name:
+                return
+        st = settings_load()
+        cl = st.setdefault("word_clients", {})
+        merged = dict(cl.get(name) or {})
+        merged.update(vals)
+        cl[name] = merged
+        settings_save(st)
+        self._load_clients()
+        self.cmb_client.setCurrentIndex(max(0, self.cmb_client.findData(name)))
+        self._say(f"Данные клиента «{name}» сохранены — в следующем документе выберите его вверху")
+
+    def _pick_client(self, *_):
+        name = self.cmb_client.currentData()
+        if not name:
+            return
+        data = (settings_load().get("word_clients") or {}).get(name) or {}
+        if "fio" in data and "fio_short" not in data:
+            data = dict(data, fio_short=SW.initials(data["fio"]))
+        n = 0
+        for r in self.rows:
+            if r["key"] in data and r["edit"] is not None:
+                r["edit"].setText(data[r["key"]])
+                r["auto"] = True
+                self._write(r, data[r["key"]])
+                n += 1
+        self._count()
+        self._say(f"Подставлено полей: {n}" if n else "В этом документе нет полей под данные клиента — отметьте их: "
+                                                      "выделите значение, правая кнопка → «Сделать полем шаблона»", warn=not n)
+
+    # ---- сохранение
     def save(self):
         if not self.wd:
             return
-        values, repl, edits = self.collect()
-        if not values and not repl and not edits:
-            QMessageBox.information(self, "Заполнение Word", "Пока ничего не заполнено — впишите значения в поля.")
+        edits = self.view.changed_paragraphs()
+        if not edits:
+            QMessageBox.information(self, "Редактор Word", "В документе пока ничего не изменено.")
             return
         folder = os.path.dirname(self.path)
         base = os.path.splitext(os.path.basename(self.path))[0]
+        vals = self.client_values()
         name = base
-        for a, b in repl:
-            name = name.replace(a, b)
-        fio = next((b for a, b in repl if a.startswith("Иванов") and len(b.split()) >= 2), "")
+        for r in self.rows:
+            if r["kind"] == "dummy" and r["edit"] is not None and r["edit"].text().strip():
+                name = name.replace(r["orig"][0], r["edit"].text().strip())
         if name == base:
-            name = f"{base} — {fio}" if fio else f"{base} (заполнен)"
-        name = AI.clean_filename(name)
-        out, _ = QFileDialog.getSaveFileName(self, "Сохранить заполненный документ",
-                                             os.path.join(folder, name + ".docx"), "Документ Word (*.docx)")
+            who = vals.get("fio_short") or vals.get("fio") or ""
+            name = f"{base} — {who}" if who else f"{base} (заполнен)"
+        out, _ = QFileDialog.getSaveFileName(self, "Сохранить документ Word",
+                                             os.path.join(folder, AI.clean_filename(name) + ".docx"),
+                                             "Документ Word (*.docx)")
         if not out:
             return
         if not out.lower().endswith(".docx"):
             out += ".docx"
         if os.path.normcase(os.path.abspath(out)) == os.path.normcase(os.path.abspath(self.path)):
-            QMessageBox.warning(self, "Заполнение Word", "Это имя шаблона. Выберите другое имя — шаблон должен "
-                                                         "остаться чистым для следующих документов.")
+            QMessageBox.warning(self, "Редактор Word", "Это имя исходного файла. Выберите другое имя — шаблон должен "
+                                                       "остаться чистым для следующих документов.")
             return
         try:
             fresh = SW.WordDoc(self.path)
-            n = fresh.save(out, values, repl, edits)
+            n = fresh.save(out, edits=edits)
         except PermissionError:
-            QMessageBox.warning(self, "Заполнение Word", "Не удалось записать файл — он открыт в Word. "
-                                                         "Закройте его там и повторите.")
+            QMessageBox.warning(self, "Редактор Word", "Не удалось записать файл — он открыт в Word. "
+                                                       "Закройте его там и повторите.")
             return
         except Exception as e:
-            QMessageBox.critical(self, "Заполнение Word", f"Не удалось сохранить:\n{e}")
+            QMessageBox.critical(self, "Редактор Word", f"Не удалось сохранить:\n{e}")
             return
+        self.wd = None                              # следующий документ открывается с чистого шаблона
         self.win.reload_files()
         self.win.ai_mode(False)
         self.win.open_word(out, quiet=True)
-        self.win.show_toast(f"✔  Сохранено: {os.path.basename(out)} — изменений: {n}. Проверьте документ", 5200)
+        self.win.show_toast(f"✔  Сохранено: {os.path.basename(out)} — изменено абзацев: {n}. Проверьте документ", 5200)
 
 
 class AiPlaceDialog(QDialog):
@@ -7578,7 +8055,7 @@ class MainWindow(QMainWindow):
         for a in (self.act_save, self.act_save_as, self.act_png):
             m.addAction(a)
         m.addSeparator()
-        self.act_word = act("Заполнить документ Word…", self.act_word_fill_run, "Ctrl+Shift+W",
+        self.act_word = act("Редактор Word — заполнить и поправить документ…", self.act_word_fill_run, "Ctrl+Shift+W",
                             "Заполнить шаблон Word: ФИО, паспорт, даты, суммы прописью — оформление не меняется")
         m.addAction(self.act_word)
         m.addAction(self.act_meta)
@@ -7909,6 +8386,7 @@ class MainWindow(QMainWindow):
         if self.view.pen_active():
             self.pen_finish(commit=True)
         self.right_dock.hide()
+        self.left_dock.hide()
         self.center_stack.setCurrentWidget(pg)
 
     def ai_mode(self, on=True):
@@ -7922,11 +8400,13 @@ class MainWindow(QMainWindow):
                 self._ai_center_dlg = c
                 self.center_stack.addWidget(c)
             self.right_dock.hide()
+            self.left_dock.show()
             self.center_stack.setCurrentWidget(c)
             c.refresh()
         else:
             self.center_stack.setCurrentIndex(0)
             self.right_dock.show()
+            self.left_dock.show()
             self.view.setFocus()
         try:
             self.btn_ai.setToolTip("Вернуться к странице документа (Esc)" if on else self._ai_btn_tip)
@@ -8644,11 +9124,11 @@ class MainWindow(QMainWindow):
         b_open.setMinimumHeight(30)
         b_open.clicked.connect(lambda: self.open_from_browser(self.file_list.currentItem()))
         self._themed_buttons.append((b_open, "folder", False))
-        self.btn_fill = QPushButton(" Заполнить")
+        self.btn_fill = QPushButton(" Редактор")
         self.btn_fill.setIconSize(QSize(14, 14))
         self.btn_fill.setMinimumHeight(30)
-        self.btn_fill.setToolTip("Заполнить выбранный документ Word: ФИО, паспорт, даты, суммы прописью.\n"
-                                 "Оформление документа не меняется, шаблон остаётся чистым  (Ctrl+Shift+W)")
+        self.btn_fill.setToolTip("Редактор Word: открыть выбранный документ, заполнить поля и поправить текст.\n"
+                                 "Оформление документа не меняется, исходный файл остаётся чистым  (Ctrl+Shift+W)")
         self.btn_fill.clicked.connect(self._fill_selected)
         self.btn_fill.setVisible(False)
         self._themed_buttons.append((self.btn_fill, "word", False))
@@ -8992,7 +9472,7 @@ class MainWindow(QMainWindow):
             return
         self._set_document(doc, path + " (из Word)")
         msg = ("Word открыт как копия: можно проверять ИИ, ставить печать и сохранять в PDF. "
-               "Заполнить шаблон — кнопка «Заполнить» под списком файлов")
+               "Править и заполнять — кнопка «Редактор» под списком файлов")
         if how != "word":
             msg += ". Microsoft Word не найден — вид упрощённый, текст полный"
         if not quiet:
@@ -9069,7 +9549,7 @@ class MainWindow(QMainWindow):
         else:
             menu.addAction("Открыть", lambda: self.open_from_browser(item))
             if path.lower().endswith(".docx"):
-                menu.addAction(draw_icon("word", self._icon_color()), "Заполнить…", lambda: self.word_fill(path))
+                menu.addAction(draw_icon("word", self._icon_color()), "Открыть в редакторе Word", lambda: self.word_fill(path))
             menu.addSeparator()
             menu.addAction("Показать метаданные", lambda: self._meta_for_file(path))
             menu.addSeparator()

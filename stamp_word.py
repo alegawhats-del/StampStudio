@@ -407,3 +407,28 @@ def selftest():
         return "ok" if ok else "bad"
     except Exception as e:
         return "fail:" + str(e)[:80]
+
+
+# ----------------------------------------------------------------------------- данные клиента
+KEYS = (("fio", "ФИО клиента"), ("fio_short", "Фамилия И. О."), ("passport", "Паспорт: серия и номер"),
+        ("passport_issued", "Паспорт: кем и когда выдан"), ("address", "Адрес регистрации"),
+        ("birth", "Дата рождения"), ("phone", "Телефон"), ("email", "E-mail"), ("city", "Город"),
+        ("contract_no", "Номер договора"), ("contract_date", "Дата договора"),
+        ("car", "Марка и модель"), ("vin", "VIN"), ("year", "Год выпуска"))
+KEY_TITLES = dict(KEYS)
+DUMMY_KEYS = {"ФИО": "fio", "ФИО коротко": "fio_short", "Паспорт": "passport", "Телефон": "phone",
+              "Номер договора": "contract_no"}
+_GUESS = ((r"vin\W*$", "vin"), (r"марка и модель\W*$|марка, модель\W*$", "car"), (r"год выпуска\W*$", "year"),
+          (r"e-?mail\W*$", "email"), (r"тел\.?\W*$|телефон\W*$", "phone"), (r"рожден\w*\W*$", "birth"),
+          (r"выдан\w*\W*$", "passport_issued"), (r"(?<![а-яё])паспорт\s*(?:№|серия)?\W*$", "passport"),
+          (r"адрес\w*\W*$|адрес регистрации\W*$", "address"),
+          (r"гражданин(?:\(ка\))?\W*$|фио\W*$|заказчик \(декларант\)\W*$", "fio"))
+
+
+def guess_key(before):
+    """По словам перед пустым местом понять, что туда вписывается («паспорт ___» → passport)."""
+    s = re.sub(r"[\s_]+", " ", str(before or "").lower()).strip()
+    for pat, key in _GUESS:
+        if re.search(pat, s):
+            return key
+    return ""
