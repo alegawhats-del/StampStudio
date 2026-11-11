@@ -170,6 +170,33 @@ class WordDoc:
         self.path = path
         self.doc = docx.Document(path)
         self.pars = [p for p in self.doc.element.body.iter(P)]
+        self.zones = []                               # [(название, элемент, [номера абзацев])] — колонтитулы
+        seen = set()
+        for sec in self.doc.sections:
+            parts = [("Верхний колонтитул", "header"), ("Нижний колонтитул", "footer")]
+            try:
+                if sec.different_first_page_header_footer:
+                    parts += [("Верхний колонтитул первой страницы", "first_page_header"),
+                              ("Нижний колонтитул первой страницы", "first_page_footer")]
+            except Exception:
+                pass
+            for title, attr in parts:
+                try:
+                    part = getattr(sec, attr)
+                    if part.is_linked_to_previous:
+                        continue
+                    el = part._element
+                except Exception:
+                    continue
+                if id(el) in seen:
+                    continue
+                seen.add(id(el))
+                ps = [p for p in el.iter(P)]
+                if not any("".join(t.text or "" for t in p.iter(T)).strip() for p in ps):
+                    continue                           # пустой колонтитул не показываем
+                start = len(self.pars)
+                self.pars += ps
+                self.zones.append((title, el, list(range(start, start + len(ps)))))
         self._texts = [self._ts(p) for p in self.pars]
         self.fields = self._find_fields()
         self.dummies = self._find_dummies()
@@ -221,7 +248,7 @@ class WordDoc:
             if not text.strip():
                 ctx, idx, n, _ = self._cell_ctx(p)
                 # пустая ячейка-значение в таблице «№ | название | значение»
-                if idx >= 1 and 2 <= n <= 4 and idx == n - 1 and 2 <= len(ctx) <= 110 and not re.search(r"[_/]", ctx):
+                if idx >= 1 and 2 <= n <= 4 and idx == n - 1 and 2 <= len(ctx) <= 110 and not re.search(r"_|/\s*$", ctx):
                     cell = p.getparent()
                     first = [x for x in cell.iter(P)][0]
                     whole = "".join(t.text or "" for t in cell.iter(T)).strip()
@@ -269,7 +296,19 @@ class WordDoc:
                 out.append(Field("blank", i, m.start(), m.end(), label))
             if cell_pars and len(text.strip()) <= 42 and text.rstrip().endswith(":") and not text.strip().isupper():
                 out.append(Field("tail", i, len(text.rstrip()), len(text), text.strip()))
+            elif (not any(f.par == i for f in out) and idx >= 1 and 2 <= n <= 4 and idx == n - 1 and len(cell_pars) == 1
+                  and len(text) <= 120 and guess_label(ctx) and re.match(r"^\d+\.?\s", ctx + " ")
+                  and not any(re.search(pat, text) for _n, pat in DUMMY_PATTERNS)):
+                out.append(Field("cell", i, 0, len(text), re.sub(r"^\d+\.?\s+", "", ctx), current=text.strip()))
         out.sort(key=lambda f: (f.par, f.start))
+        for f in out:
+            p = self.pars[f.par]
+            ctx = self._cell_ctx(p)[0]
+            f.meta["ctx"] = re.sub(r"^\d+\.?\s+", "", ctx)
+            a = p.getparent()
+            while a is not None and a.tag != TBL:
+                a = a.getparent()
+            f.meta["table"] = a.getroottree().getpath(a) if a is not None else ""
         for f in out:                                  # подпись без слов («[дата]») — добавить, что стоит перед ней
             if not re.search(r"[A-Za-zА-Яа-яЁё]{2,}", re.sub(r"\[[^\]]*\]", "", f.label)):
                 j = f.par - 1
@@ -414,15 +453,53 @@ KEYS = (("fio", "ФИО клиента"), ("fio_short", "Фамилия И. О."
         ("passport_issued", "Паспорт: кем и когда выдан"), ("address", "Адрес регистрации"),
         ("birth", "Дата рождения"), ("phone", "Телефон"), ("email", "E-mail"), ("city", "Город"),
         ("contract_no", "Номер договора"), ("contract_date", "Дата договора"),
-        ("car", "Марка и модель"), ("vin", "VIN"), ("year", "Год выпуска"))
+        ("car", "Марка и модель"), ("year", "Год выпуска"), ("mileage", "Пробег, тыс. км"),
+        ("engine_volume", "Объём двигателя"), ("engine_type", "Тип двигателя"), ("gearbox", "Тип КПП"),
+        ("body", "Тип кузова"), ("color", "Цвет кузова"), ("interior", "Салон"), ("vin", "VIN"),
+        ("weight", "Вес, кг"), ("delivery_address", "Адрес доставки"),
+        ("sum_delivery", "Стоимость доставки"), ("sum_customs", "Таможенное оформление"),
+        ("sum_car", "Стоимость автомобиля"), ("sum_fee", "Вознаграждение исполнителя"),
+        ("sum_total", "Общая стоимость"), ("sum_invoice", "Стоимость по инвойсу"),
+        ("doc_no", "Номер этого документа"))
 KEY_TITLES = dict(KEYS)
+KEY_TITLES["engine_combo"] = "Объём / тип двигателя"
+CARD_GROUPS = (("Клиент", ("fio", "passport", "passport_issued", "address", "birth", "phone", "email", "city")),
+               ("Договор", ("contract_no", "contract_date")),
+               ("Автомобиль", ("car", "year", "mileage", "engine_volume", "engine_type", "gearbox", "body", "color",
+                               "interior", "vin", "weight")),
+               ("Доставка и деньги", ("delivery_address", "sum_delivery", "sum_customs", "sum_car", "sum_fee",
+                                      "sum_total", "sum_invoice")))
+CARD_KEYS = tuple(k for _g, ks in CARD_GROUPS for k in ks)
 DUMMY_KEYS = {"ФИО": "fio", "ФИО коротко": "fio_short", "Паспорт": "passport", "Телефон": "phone",
               "Номер договора": "contract_no"}
 _GUESS = ((r"vin\W*$", "vin"), (r"марка и модель\W*$|марка, модель\W*$", "car"), (r"год выпуска\W*$", "year"),
           (r"e-?mail\W*$", "email"), (r"тел\.?\W*$|телефон\W*$", "phone"), (r"рожден\w*\W*$", "birth"),
           (r"выдан\w*\W*$", "passport_issued"), (r"(?<![а-яё])паспорт\s*(?:№|серия)?\W*$", "passport"),
+          (r"адрес доставки\W*$", "delivery_address"),
           (r"адрес\w*\W*$|адрес регистрации\W*$", "address"),
           (r"гражданин(?:\(ка\))?\W*$|фио\W*$|заказчик \(декларант\)\W*$", "fio"))
+# подписи строк в таблицах («№ | название | значение») — ищутся в любом месте названия
+_GUESS_LABEL = ((r"заказчик \(декларант\)", "fio"), (r"^заказчик$", "fio_short"),
+                (r"марка и модель|марка, модель", "car"), (r"год выпуска", "year"), (r"пробег", "mileage"),
+                (r"объ[её]м двигателя.*тип двигателя", "engine_combo"), (r"объ[её]м двигателя", "engine_volume"),
+                (r"тип двигателя", "engine_type"), (r"тип кпп|коробк", "gearbox"), (r"тип кузова", "body"),
+                (r"цвет кузова", "color"), (r"салон", "interior"), (r"\bvin\b", "vin"), (r"\bвес\b", "weight"),
+                (r"адрес доставки", "delivery_address"), (r"стоимость доставки", "sum_delivery"),
+                (r"таможенное оформление", "sum_customs"), (r"стоимость автомобиля", "sum_car"),
+                (r"вознаграждение", "sum_fee"), (r"общая стоимость", "sum_total"),
+                (r"стоимость по инвойсу", "sum_invoice"), (r"e-?mail", "email"), (r"^(?:моб\.?\s*)?телефон|^тел\b", "phone"),
+                (r"дата рождения", "birth"), (r"^выдан", "passport_issued"), (r"^паспорт", "passport"),
+                (r"адрес регистрации", "address"), (r"^фио", "fio"))
+TOTAL_RE = re.compile(r"\bитого\b|общая стоимость", re.I)
+
+
+def guess_label(label):
+    """По названию строки таблицы («Марка и модель автомобиля») понять, что это за значение."""
+    s = re.sub(r"[\s_]+", " ", re.sub(r"^\d+\.?\s+", "", str(label or "").lower())).strip(" :")
+    for pat, key in _GUESS_LABEL:
+        if re.search(pat, s):
+            return key
+    return ""
 
 
 def guess_key(before):
@@ -432,3 +509,202 @@ def guess_key(before):
         if re.search(pat, s):
             return key
     return ""
+
+
+# ----------------------------------------------------------------------------- нумерация документов
+def next_number(last, year=None, reset_year=True):
+    """Следующий номер в том же виде: «БМ-619» → «БМ-620», «329–2026» → «330–2026».
+    Если в номере стоит год и он сменился — год обновляется, а счёт начинается с 1."""
+    last = str(last or "").strip()
+    groups = list(re.finditer(r"\d+", last))
+    if not groups:
+        return ""
+    year_g = next((g for g in groups if len(g.group()) == 4 and g.group().startswith("20")), None) if len(groups) > 1 else None
+    num_g = next((g for g in groups if g is not year_g), None)
+    if num_g is None:
+        return ""
+    n = int(num_g.group()) + 1
+    new_year = year_g.group() if year_g else ""
+    if year_g is not None and year and str(year) != year_g.group():
+        new_year = str(year)
+        if reset_year:
+            n = 1
+    out = list(last)
+    spans = [(num_g.start(), num_g.end(), str(n).zfill(len(num_g.group())))]
+    if year_g is not None:
+        spans.append((year_g.start(), year_g.end(), new_year))
+    for a, b, text in sorted(spans, reverse=True):
+        out[a:b] = list(text)
+    return "".join(out)
+
+
+def number_value(text):
+    """Число-счётчик внутри номера (для сравнения «какой больше»)."""
+    groups = re.findall(r"\d+", str(text or ""))
+    if not groups:
+        return -1
+    rest = [g for g in groups if not (len(g) == 4 and g.startswith("20"))] if len(groups) > 1 else groups
+    return int((rest or groups)[0])
+
+
+# ----------------------------------------------------------------------------- карточка клиента в папке
+CARD_FILE = "Карточка клиента.ssclient"
+
+
+def card_path(folder):
+    import os
+    return os.path.join(folder, CARD_FILE)
+
+
+def card_load(folder):
+    """Карточка клиента из папки: {ключ: значение}. Пусто, если карточки нет."""
+    import json
+    import os
+    try:
+        with open(card_path(folder), "r", encoding="utf-8") as f:
+            data = json.load(f)
+        vals = data.get("values") if isinstance(data, dict) else None
+        return {k: str(v) for k, v in (vals or {}).items() if str(v).strip()}
+    except (OSError, ValueError):
+        return {}
+
+
+def card_save(folder, values):
+    """Записать карточку в папку клиента (файл помечается скрытым). True — получилось."""
+    import datetime
+    import json
+    import os
+    import sys
+    path = card_path(folder)
+    vals = {k: str(v).strip() for k, v in (values or {}).items() if str(v).strip()}
+    try:
+        if not vals:
+            if os.path.exists(path):
+                _unhide(path)
+                os.remove(path)
+            return True
+        _unhide(path)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"app": "Stamp Studio", "saved": datetime.datetime.now().isoformat(timespec="seconds"),
+                       "values": vals}, f, ensure_ascii=False, indent=1)
+        os.replace(tmp, path)
+        if sys.platform == "win32":
+            try:
+                import ctypes
+                ctypes.windll.kernel32.SetFileAttributesW(path, 0x02)      # скрытый
+            except Exception:
+                pass
+        return True
+    except OSError:
+        return False
+
+
+def _unhide(path):
+    import os
+    import sys
+    if sys.platform == "win32" and os.path.exists(path):
+        try:
+            import ctypes
+            ctypes.windll.kernel32.SetFileAttributesW(path, 0x80)          # обычный: скрытый файл не перезаписать
+        except Exception:
+            pass
+
+
+def derive(values):
+    """Дописать производные значения: «Фамилия И. О.», «объём / тип двигателя»."""
+    out = dict(values or {})
+    if out.get("fio") and not out.get("fio_short"):
+        out["fio_short"] = initials(out["fio"])
+    vol, typ = out.get("engine_volume", ""), out.get("engine_type", "")
+    if (vol or typ) and not out.get("engine_combo"):
+        out["engine_combo"] = " / ".join(x for x in (vol, typ) if x)
+    return out
+
+
+# ----------------------------------------------------------------------------- данные из распознанного текста
+_BRANDS = ("Mercedes-Benz|Mercedes|BMW|Audi|Volkswagen|VW|Skoda|Škoda|Toyota|Lexus|Dacia|Renault|Peugeot|Citroen|"
+           "Citroën|Volvo|Kia|Hyundai|Ford|Opel|Mazda|Nissan|Porsche|Land Rover|Range Rover|Jeep|Tesla|Honda|"
+           "Mitsubishi|Subaru|Seat|Cupra|Fiat|Mini|Suzuki|Jaguar|Infiniti|Chevrolet|Alfa Romeo|Genesis|BYD|Geely")
+
+
+def parse_client_text(text):
+    """Достать из распознанного текста то, что узнаётся по правилам: паспорт, ФИО, даты, VIN, автомобиль.
+    Возвращает {ключ: значение} — только то, в чём есть уверенность; остальное человек впишет сам."""
+    t = str(text or "")
+    flat = re.sub(r"[ \t ]+", " ", t)
+    one = re.sub(r"\s+", " ", flat)
+    out = {}
+    m = re.search(r"(?<![A-Z0-9])(?=[A-HJ-NPR-Z0-9]*\d)(?=[A-HJ-NPR-Z0-9]*[A-HJ-NPR-Z])([A-HJ-NPR-Z0-9]{17})(?![A-Z0-9])",
+                  one.upper())
+    if m:
+        out["vin"] = m.group(1)
+    m = re.search(r"(?<!\d)(\d{2})\s?(\d{2})\s?(?:№\s?)?(\d{6})(?!\d)", one)
+    if m and re.search(r"паспорт|фамилия|выдан|рожден", one.lower()):
+        out["passport"] = f"{m.group(1)} {m.group(2)} {m.group(3)}"
+    else:
+        m = re.search(r"\b([A-Z]{2}\d{7})\b", one)
+        if m and re.search(r"паспорт|пашпарт|passport", one.lower()):
+            out["passport"] = m.group(1)
+    dates = [(x.start(), x.group(1)) for x in re.finditer(r"(?<!\d)(\d{2}[.\s]\d{2}[.\s](?:19|20)\d{2})(?!\d)", one)]
+    norm = lambda d: re.sub(r"\s", ".", d)
+
+    def near(word):
+        k = one.lower().find(word)
+        if k < 0 or not dates:
+            return ""
+        after = [d for p, d in dates if 0 <= p - k <= 90]
+        return norm(after[0]) if after else ""
+
+    b = near("рожден")
+    if b:
+        out["birth"] = b
+    issued_date = near("дата выдачи") or near("выдач")
+    low = one.lower()
+    k = low.find("выдан")
+    if k >= 0:
+        seg = one[k + 5:k + 220]
+        seg = re.split(r"дата выдачи|код подразделения|личный код|фамилия", seg, flags=re.I)[0]
+        seg = re.sub(r"(?<!\d)\d{2}[.\s]\d{2}[.\s](?:19|20)\d{2}(?!\d)", " ", seg)
+        seg = re.sub(r"\s+", " ", seg).strip(" :,.-")
+        if re.search(r"мвд|уфмс|овд|увд|отдел|гу |ровд|рувд", seg.lower()) and len(seg) >= 8:
+            out["passport_issued"] = (seg + (" " + issued_date if issued_date else "")).strip()
+    if "passport_issued" not in out and issued_date:
+        out["passport_issued"] = issued_date
+    parts = []
+    for lab in ("Фамилия", "Имя", "Отчество"):
+        m = re.search(lab + r"\W{0,4}([А-ЯЁ][А-ЯЁа-яё-]{1,30})", flat)
+        if m:
+            parts.append(m.group(1).capitalize() if m.group(1).isupper() else m.group(1))
+    if len(parts) == 3:
+        out["fio"] = " ".join(parts)
+    else:
+        m = re.search(r"\b([А-ЯЁ][а-яё-]{1,30})\s+([А-ЯЁ][а-яё]{1,20})\s+([А-ЯЁ][а-яё]{2,20}(?:вич|вна|ична|ьич|оглы|кызы))\b", one)
+        if m:
+            out["fio"] = " ".join(m.groups())
+        else:
+            m = re.search(r"\b([А-ЯЁ-]{2,30})\s+([А-ЯЁ]{2,20})\s+([А-ЯЁ]{3,20}(?:ВИЧ|ВНА|ИЧНА|ЬИЧ))\b", one)
+            if m:
+                out["fio"] = " ".join(x.capitalize() for x in m.groups())
+    m = re.search(r"(?:зарегистрирован\w*(?: по адресу)?|адрес регистрации|место жительства)\W{0,6}(.{12,140}?)(?:\s{2,}|$|, именуем|\. [А-ЯЁ])", one, re.I)
+    if m and re.search(r"ул\.|улица|пр-т|д\.|дом |кв\.|г\. ?[А-ЯЁ]", m.group(1)):
+        out["address"] = m.group(1).strip(" ,.;")
+    m = re.search(r"\b(" + _BRANDS + r")\b[ \t]+([A-Za-zА-Яа-яЁё0-9][\w.-]*(?:[ \t]+[A-Za-z0-9][\w.-]*){0,2})", flat)
+    if m:
+        out["car"] = (m.group(1) + " " + m.group(2)).strip()
+    m = re.search(r"(?:год выпуска|год изготовления|Herstellungsjahr\w*|Baujahr)\D{0,25}((?:19|20)\d{2})", one, re.I)
+    if m:
+        out["year"] = m.group(1)
+    m = re.search(r"(?<!\d)(\d{3,4})\s?(?:см3|см³|куб\.? ?см|cm3|cm³|ccm)", one, re.I)
+    if m:
+        out["engine_volume"] = m.group(1) + " см³"
+    m = re.search(r"(?:масса|вес)[^\d]{0,40}?(\d{3,4})\s?кг", one, re.I)
+    if m:
+        out["weight"] = m.group(1)
+    m = re.search(r"(\+?\d[\d() -]{9,16}\d)", one)
+    if m and re.search(r"тел|моб|phone", one.lower()):
+        out["phone"] = m.group(1).strip()
+    m = re.search(r"[\w.+-]+@[\w-]+\.[\w.-]+", one)
+    if m:
+        out["email"] = m.group(0)
+    return out

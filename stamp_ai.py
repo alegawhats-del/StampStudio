@@ -916,6 +916,29 @@ def filter_issues(issues):
     return out
 
 
+def task_card(bundle, keys, status=None, cancel=None):
+    """Данные клиента и автомобиля из паспорта, техпаспорта, инвойса. keys: [(ключ, название)].
+    Возвращает {"values": {ключ: значение}, "provider", "model"}."""
+    lines = "\n".join(f'  "{k}": {title}' for k, title in keys)
+    q = ("Перед тобой документы клиента: паспорт, свидетельство о регистрации автомобиля (техпаспорт), инвойс "
+         "или договор купли-продажи. Выпиши данные в JSON с такими ключами:\n" + lines + "\n"
+         "Правила: ФИО — в именительном падеже, кириллицей, как в паспорте. Паспорт — серия и номер через пробел. "
+         "Даты — ДД.ММ.ГГГГ. VIN — 17 знаков без пробелов. Объём двигателя — число и «см³». Вес — только число в кг. "
+         "Чего в документах нет — оставь пустую строку, ничего не выдумывай и не угадывай.\n"
+         'Ответ: {"values": {"fio": "...", "passport": "..."}}\n\n'
+         "ДОКУМЕНТЫ:\n" + bundle["text"])
+    ans, prov, model = chat(sys_prompt(), q, bundle["images"], 1500, status, cancel,
+                            text_fallback=lambda: ocr_text_for(bundle))
+    d = extract_json(ans)
+    vals = d.get("values") if isinstance(d, dict) and isinstance(d.get("values"), dict) else (d if isinstance(d, dict) else {})
+    allowed = {k for k, _t in keys}
+    out = {}
+    for k, v in (vals or {}).items():
+        if k in allowed and v is not None and str(v).strip() and str(v).strip().lower() not in ("нет", "-", "—", "null", "none"):
+            out[k] = str(v).strip()
+    return {"values": out, "provider": prov, "model": model}
+
+
 def task_check(bundle, status=None, cancel=None):
     answer = ('Ответ: {"summary": "одна фраза", "issues": [{"page": 1, "severity": "error", '
               '"text": "что именно не так", "quote": "точная цитата из документа", '

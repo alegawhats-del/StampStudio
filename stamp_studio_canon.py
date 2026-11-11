@@ -525,7 +525,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.6.1"
+APP_VERSION = "6.7.0"
 EDITION = "canon"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -5550,22 +5550,55 @@ class SettingsDialog(QDialog):
         button(l, "Ключи и сервисы ИИ…", win.ai_settings)
         l.addStretch(1)
         # ---- Редактор Word
-        l = page("Редактор Word", "Сохранённые данные клиентов и поля, которые вы отметили в шаблонах. "
-                                  "Хранятся только на этом компьютере.")
-        cap = QLabel("Клиенты:")
+        l = page("Редактор Word", "Свои поля шаблонов и номера документов. Хранятся только на этом компьютере.")
+        self.box_old = QWidget()
+        lo = QVBoxLayout(self.box_old)
+        lo.setContentsMargins(0, 0, 0, 0)
+        lo.setSpacing(6)
+        cap = QLabel("Клиенты, сохранённые до версии 6.7 (теперь карточка лежит в папке клиента):")
         cap.setObjectName("plain")
-        l.addWidget(cap)
+        lo.addWidget(cap)
         self.lst_cl = QListWidget()
-        self.lst_cl.setMaximumHeight(110)
-        l.addWidget(self.lst_cl)
-        button(l, "Удалить выбранного клиента", self._del_client)
+        self.lst_cl.setMaximumHeight(64)
+        lo.addWidget(self.lst_cl)
+        button(lo, "Удалить выбранного клиента", self._del_client)
+        l.addWidget(self.box_old)
         cap = QLabel("Шаблоны со своими полями:")
         cap.setObjectName("plain")
         l.addWidget(cap)
         self.lst_tp = QListWidget()
-        self.lst_tp.setMaximumHeight(90)
+        self.lst_tp.setMaximumHeight(64)
         l.addWidget(self.lst_tp)
         button(l, "Забыть поля выбранного шаблона", self._del_marks)
+        cap = QLabel("Номера документов (последний выданный номер по каждому шаблону):")
+        cap.setObjectName("plain")
+        l.addWidget(cap)
+        self.lst_num = QListWidget()
+        self.lst_num.setMinimumHeight(96)
+        self.lst_num.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.lst_num.setTextElideMode(Qt.ElideMiddle)
+        l.addWidget(self.lst_num)
+        nrow = QHBoxLayout()
+        b1 = QPushButton("Последний номер…")
+        b1.clicked.connect(self._edit_counter)
+        nrow.addWidget(b1)
+        b2 = QPushButton("Авто / вручную")
+        b2.setToolTip("Авто — программа ставит следующий номер сама. Вручную — номер вписываете вы.")
+        b2.clicked.connect(self._toggle_counter)
+        nrow.addWidget(b2)
+        b3 = QPushButton("Сброс с 1 января")
+        b3.setToolTip("Если в номере есть год («329–2026»): начинать ли счёт с 1 в новом году")
+        b3.clicked.connect(self._toggle_reset)
+        nrow.addWidget(b3)
+        nrow.addStretch(1)
+        l.addLayout(nrow)
+        l.addStretch(1)
+        # ---- Подписи
+        l = page("Подписи", "По умолчанию каждая подпись ставится вручную, на своё место. "
+                            "Расстановку разом включайте, только если сами так решили.")
+        check(l, "Разрешить ставить подпись на все места разом", "sign_all_enabled", False,
+              "Появится пункт «Правка → Подписать все места…»: программа найдёт в документе строки\n"
+              "подписи выбранного человека и поставит его подпись на каждую.")
         l.addStretch(1)
         # ---- Данные программы
         l = page("Данные программы", "Библиотека печатей, настройки и ключи лежат в одной папке. "
@@ -5602,6 +5635,14 @@ class SettingsDialog(QDialog):
             it = QListWidgetItem(f"{name}  ·  полей: {len(data)}")
             it.setData(Qt.UserRole, name)
             self.lst_cl.addItem(it)
+        self.box_old.setVisible(bool(st.get("word_clients")))
+        self.lst_num.clear()
+        for name, c in sorted((st.get("doc_counters") or {}).items()):
+            it = QListWidgetItem(f"{c.get('last') or '—'}  ·  {'авто' if c.get('mode', 'auto') == 'auto' else 'вручную'}"
+                                 f"  ·  сброс: {'да' if c.get('reset', True) else 'нет'}  ·  {name}")
+            it.setToolTip(name)
+            it.setData(Qt.UserRole, name)
+            self.lst_num.addItem(it)
         self.lst_tp.clear()
         for name, marks in sorted((st.get("word_marks") or {}).items()):
             if marks:
@@ -5622,6 +5663,34 @@ class SettingsDialog(QDialog):
         (st.get("word_clients") or {}).pop(it.data(Qt.UserRole), None)
         settings_save(st)
         self._fill()
+
+    def _counter_edit(self, fn):
+        it = self.lst_num.currentItem()
+        if it is None:
+            return
+        st = settings_load()
+        c = st.setdefault("doc_counters", {}).setdefault(it.data(Qt.UserRole), {})
+        if fn(c) is False:
+            return
+        settings_save(st)
+        row = self.lst_num.currentRow()
+        self._fill()
+        self.lst_num.setCurrentRow(row)
+
+    def _edit_counter(self):
+        def fn(c):
+            text, ok = QInputDialog.getText(self, "Последний номер", "Последний выданный номер (следующий будет на 1 больше):",
+                                            text=str(c.get("last", "")))
+            if not ok:
+                return False
+            c["last"] = text.strip()
+        self._counter_edit(fn)
+
+    def _toggle_counter(self):
+        self._counter_edit(lambda c: c.__setitem__("mode", "manual" if c.get("mode", "auto") == "auto" else "auto"))
+
+    def _toggle_reset(self):
+        self._counter_edit(lambda c: c.__setitem__("reset", not c.get("reset", True)))
 
     def _del_marks(self):
         it = self.lst_tp.currentItem()
@@ -5644,6 +5713,7 @@ class SettingsDialog(QDialog):
             self.win.act_ai_auto.setChecked(self.chk_ai.isChecked())
             self.win.ai_toggle_auto(self.chk_ai.isChecked())
         self.win._ai_center_refresh()
+        self.win._sign_all_state()
         self.accept()
 
 
@@ -7166,18 +7236,54 @@ class WordView(QTextEdit):
                 if sub is not p_el and id(sub) in idx and idx[id(sub)] not in self.par_pos:
                     put_par(sub, cur, False)
 
+        def put_all(container, cur, first):
+            for ch in container:
+                if ch.tag == q("p"):
+                    put_par(ch, cur, first)
+                    first = False
+                    nested(ch, cur)
+                elif ch.tag == q("tbl"):
+                    put_tbl(ch, cur)
+                    first = False
+                    cur = QTextCursor(d)
+                    cur.movePosition(QTextCursor.End)
+            return cur
+
+        def caption(cur, text, first):
+            """Серая подпись-разделитель (колонтитулы); в неё печатать нельзя."""
+            bf = QTextBlockFormat()
+            bf.setBackground(QColor("#eceae4"))
+            bf.setTopMargin(0 if first else 10)
+            bf.setBottomMargin(2)
+            cf = QTextCharFormat()
+            f = QFont("Segoe UI")
+            f.setPointSizeF(8.0)
+            f.setBold(True)
+            cf.setFont(f)
+            cf.setForeground(QColor("#7a7466"))
+            if first:
+                cur.setBlockFormat(bf)
+            else:
+                cur.insertBlock(bf)
+            cur.insertText(text, cf)
+
         cur = QTextCursor(d)
         first = True
-        for ch in doc.element.body:
-            if ch.tag == q("p"):
-                put_par(ch, cur, first)
-                first = False
-                nested(ch, cur)
-            elif ch.tag == q("tbl"):
-                put_tbl(ch, cur)
-                first = False
-                cur = QTextCursor(d)
-                cur.movePosition(QTextCursor.End)
+        heads = [z for z in wd.zones if z[0].startswith("Верхний")]
+        foots = [z for z in wd.zones if z[0].startswith("Нижний")]
+        many = lambda zs, z: f"{z[0]} ({zs.index(z) + 1})" if len(zs) > 1 and sum(1 for x in zs if x[0] == z[0]) > 1 else z[0]
+        for z in heads:
+            caption(cur, many(heads, z).upper(), first)
+            cur = put_all(z[1], cur, False)
+            first = False
+        if heads:
+            caption(cur, "ТЕКСТ ДОКУМЕНТА", False)
+        cur = put_all(doc.element.body, cur, first)
+        for z in foots:
+            cur = QTextCursor(d)
+            cur.movePosition(QTextCursor.End)
+            caption(cur, many(foots, z).upper(), False)
+            cur = put_all(z[1], cur, False)
         d.setUndoRedoEnabled(True)
         d.setModified(False)
         self.setDocument(d)                     # прежний документ Qt удаляет сам
@@ -7230,6 +7336,9 @@ class WordView(QTextEdit):
         if not self._one_block():
             self.blocked.emit("Выделите текст в пределах одного абзаца или одной ячейки — и печатайте")
             return
+        if c.block().blockFormat().property(WORD_PAR) is None:
+            self.blocked.emit("Это служебная строка — щёлкните в тексте документа")
+            return
         if not c.hasSelection():
             if k == Qt.Key_Backspace and c.atBlockStart():
                 return
@@ -7240,7 +7349,7 @@ class WordView(QTextEdit):
         super().keyPressEvent(e)
 
     def insertFromMimeData(self, src):
-        if not self._one_block():
+        if not self._one_block() or self.textCursor().block().blockFormat().property(WORD_PAR) is None:
             self.blocked.emit("Выделите текст в пределах одного абзаца — и вставляйте")
             return
         text = re.sub(r"[\r\n\t]+", " ", src.text() or "").strip(" ")
@@ -7266,6 +7375,232 @@ class WordView(QTextEdit):
         m.exec(e.globalPos())
 
 
+class CardScanDialog(QDialog):
+    """Что нашлось в сканах: человек проверяет и отмечает, что перенести в карточку."""
+
+    def __init__(self, found, current, how, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Данные из сканов")
+        self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
+        self.resize(720, 520)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(16, 14, 16, 12)
+        lay.setSpacing(10)
+        head = QLabel(f"Найдено значений: {len(found)}" if found else "Ничего не удалось распознать")
+        head.setObjectName("aihead")
+        lay.addWidget(head)
+        sub = QLabel(how + " Проверьте каждое значение по документу и поправьте, если нужно: двойной щелчок по ячейке. "
+                           "В карточку попадут только отмеченные строки.")
+        sub.setObjectName("hint")
+        sub.setWordWrap(True)
+        lay.addWidget(sub)
+        self.tbl = QTableWidget(0, 3)
+        self.tbl.setHorizontalHeaderLabels(["Поле", "Найдено в сканах", "Сейчас в карточке"])
+        self.tbl.verticalHeader().setVisible(False)
+        hh = self.tbl.horizontalHeader()
+        hh.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        hh.setSectionResizeMode(1, QHeaderView.Stretch)
+        hh.setSectionResizeMode(2, QHeaderView.Stretch)
+        for key in [k for k in SW.CARD_KEYS if k in found]:
+            r = self.tbl.rowCount()
+            self.tbl.insertRow(r)
+            it = QTableWidgetItem(SW.KEY_TITLES.get(key, key))
+            it.setFlags((it.flags() | Qt.ItemIsUserCheckable) & ~Qt.ItemIsEditable)
+            it.setCheckState(Qt.Checked if not current.get(key) or current.get(key) == found[key] else Qt.Unchecked)
+            it.setData(Qt.UserRole, key)
+            self.tbl.setItem(r, 0, it)
+            self.tbl.setItem(r, 1, QTableWidgetItem(found[key]))
+            old = QTableWidgetItem(current.get(key, ""))
+            old.setFlags(old.flags() & ~Qt.ItemIsEditable)
+            self.tbl.setItem(r, 2, old)
+        lay.addWidget(self.tbl, 1)
+        row = QHBoxLayout()
+        row.addStretch(1)
+        ok = QPushButton("Перенести в карточку")
+        ok.setObjectName("primary")
+        ok.setEnabled(bool(found))
+        ok.clicked.connect(self.accept)
+        row.addWidget(ok)
+        b = QPushButton("Отмена")
+        b.clicked.connect(self.reject)
+        row.addWidget(b)
+        lay.addLayout(row)
+
+    def chosen(self):
+        out = {}
+        for r in range(self.tbl.rowCount()):
+            it = self.tbl.item(r, 0)
+            val = self.tbl.item(r, 1).text().strip()
+            if it.checkState() == Qt.Checked and val:
+                out[it.data(Qt.UserRole)] = val
+        return out
+
+
+class ClientCardDialog(QDialog):
+    """Карточка клиента: лежит файлом в папке клиента, из неё заполняются документы."""
+
+    def __init__(self, folder, parent=None, values=None):
+        super().__init__(parent)
+        self.folder = folder
+        self.win = parent.win if hasattr(parent, "win") else parent
+        self.setWindowTitle("Карточка клиента")
+        self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
+        self.resize(760, 600)
+        self.setMinimumSize(700, 480)
+        self.stored = SW.card_load(folder)
+        vals = dict(self.stored)
+        vals.update(values or {})
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(16, 14, 16, 12)
+        lay.setSpacing(8)
+        head = QLabel("Карточка клиента")
+        head.setObjectName("aihead")
+        lay.addWidget(head)
+        sub = QLabel(f"Папка: {folder}\nДанные хранятся в самой папке клиента и подставляются во все его документы: "
+                     "договор, счёт, акт, CMR.")
+        sub.setObjectName("hint")
+        sub.setWordWrap(True)
+        lay.addWidget(sub)
+        sc = QScrollArea()
+        sc.setWidgetResizable(True)
+        sc.setFrameShape(QFrame.NoFrame)
+        sc.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        sc.setStyleSheet("QScrollArea { background: transparent; } QScrollArea > QWidget > QWidget { background: transparent; }")
+        holder = QWidget()
+        g = QGridLayout(holder)
+        g.setContentsMargins(2, 2, 10, 2)
+        g.setHorizontalSpacing(12)
+        g.setVerticalSpacing(6)
+        g.setColumnStretch(1, 1)
+        self.edits = {}
+        row = 0
+        for title, keys in SW.CARD_GROUPS:
+            cap = QLabel(title.upper())
+            cap.setObjectName("paneltitle")
+            g.addWidget(cap, row, 0, 1, 2)
+            row += 1
+            for key in keys:
+                lab = QLabel(SW.KEY_TITLES[key])
+                lab.setObjectName("plain")
+                g.addWidget(lab, row, 0)
+                ed = QLineEdit(vals.get(key, ""))
+                ed.setMinimumHeight(28)
+                if key.startswith("sum_"):
+                    ed.setPlaceholderText("число, без «руб.»")
+                elif key in ("birth", "contract_date"):
+                    ed.setPlaceholderText("ДД.ММ.ГГГГ")
+                g.addWidget(ed, row, 1)
+                self.edits[key] = ed
+                row += 1
+        g.setRowStretch(row, 1)
+        sc.setWidget(holder)
+        lay.addWidget(sc, 1)
+        self.chk_ai = QCheckBox("Если на компьютере распознать не получилось — разрешаю отправить сканы в ИИ")
+        self.chk_ai.setChecked(bool(settings_load().get("card_scan_ai", False)))
+        self.chk_ai.setToolTip("Выключено: сканы никуда не уходят, распознавание делает сама Windows.\n"
+                               "Включено: если данных нашлось мало, изображения паспорта и техпаспорта уйдут в сервис ИИ.")
+        lay.addWidget(self.chk_ai)
+        row_b = QHBoxLayout()
+        b_scan = QPushButton("Заполнить из сканов…")
+        b_scan.setToolTip("Паспорт, техпаспорт, инвойс: программа распознает их и предложит данные на проверку")
+        b_scan.clicked.connect(self.from_scans)
+        row_b.addWidget(b_scan)
+        old = sorted((settings_load().get("word_clients") or {}).keys(), key=str.lower)
+        if old:
+            self.cmb_old = QComboBox()
+            self.cmb_old.addItem("Взять из сохранённых ранее…", None)
+            for name in old:
+                self.cmb_old.addItem(name, name)
+            self.cmb_old.activated.connect(self._take_old)
+            row_b.addWidget(self.cmb_old)
+        row_b.addStretch(1)
+        ok = QPushButton("Сохранить")
+        ok.setObjectName("primary")
+        ok.clicked.connect(self._save)
+        row_b.addWidget(ok)
+        b = QPushButton("Закрыть")
+        b.clicked.connect(self.reject)
+        row_b.addWidget(b)
+        lay.addLayout(row_b)
+
+    def values(self):
+        return {k: e.text().strip() for k, e in self.edits.items() if e.text().strip()}
+
+    def _take_old(self, *_):
+        name = self.cmb_old.currentData()
+        data = (settings_load().get("word_clients") or {}).get(name) or {}
+        for k, v in data.items():
+            if k in self.edits and not self.edits[k].text().strip():
+                self.edits[k].setText(str(v))
+
+    def merge(self, found):
+        for k, v in found.items():
+            if k in self.edits:
+                self.edits[k].setText(v)
+
+    def from_scans(self):
+        paths, _ = QFileDialog.getOpenFileNames(self, "Сканы: паспорт, техпаспорт, инвойс", self.folder,
+                                                "Сканы и PDF (*.pdf *.jpg *.jpeg *.png)")
+        if not paths:
+            return
+        allow_ai = self.chk_ai.isChecked()
+        st = settings_load()
+        st["card_scan_ai"] = allow_ai
+        settings_save(st)
+        try:
+            doc = fitz.open()
+            for p in paths:
+                if p.lower().endswith(".pdf"):
+                    src = open_pdf_free(p)
+                    doc.insert_pdf(src)
+                    src.close()
+                else:
+                    with Image.open(p) as im:
+                        w_pt, h_pt = im.width * 72 / 200, im.height * 72 / 200
+                    page = doc.new_page(width=w_pt, height=h_pt)
+                    page.insert_image(page.rect, filename=p)
+            bundle = AI.collect(doc, None, max_images=6)
+        except Exception as e:
+            QMessageBox.critical(self, "Сканы", f"Не удалось открыть файлы:\n{e}")
+            return
+        keys = [(k, SW.KEY_TITLES[k]) for k in SW.CARD_KEYS if not k.startswith("sum_") and k != "contract_date"]
+
+        def work(status, cancel):
+            status("Распознаю текст на компьютере…")
+            text = bundle["text"] + "\n" + (AI.ocr_text_for(bundle) or "")
+            found = SW.parse_client_text(text)
+            how = "Распознано на этом компьютере, в интернет ничего не уходило."
+            if allow_ai and len(found) < 4:
+                status("Локально нашлось мало — спрашиваю ИИ…")
+                try:
+                    res = AI.task_card(bundle, keys, status, cancel)
+                    for k, v in res["values"].items():
+                        found.setdefault(k, v)              # найденное на компьютере важнее ответа ИИ
+                    how = f"Часть данных прочитал ИИ ({res['provider'].split(' (')[0]}) — сканы были отправлены в этот сервис."
+                except Exception as e:
+                    how = "Распознано на этом компьютере. ИИ не ответил: " + str(e)[:120] + "."
+            return {"found": found, "how": how}
+
+        def done(res):
+            cur = self.values()
+            dlg = CardScanDialog(res["found"], cur, res["how"], self)
+            if dlg.exec() == QDialog.Accepted:
+                self.merge(dlg.chosen())
+
+        if allow_ai and not self.win._ai_ready():
+            allow_ai = False
+        self.win._ai_run("Читаю сканы", work, done)
+
+    def _save(self):
+        card = {k: v for k, v in self.stored.items() if k not in self.edits}      # служебные записи (номера) сохраняем
+        card.update(self.values())
+        if not SW.card_save(self.folder, card):
+            QMessageBox.warning(self, "Карточка клиента", "Не удалось записать карточку в папку:\n" + self.folder
+                                + "\nПроверьте, что папка доступна для записи.")
+            return
+        self.accept()
+
+
 class WordFillPage(QDialog):
     """Редактор документов Word внутри главного окна: слева сам документ с оформлением, справа — поля.
     Меняется только текст; шрифты, таблицы, нумерация и отступы остаются как в файле."""
@@ -7278,6 +7613,8 @@ class WordFillPage(QDialog):
         self.wd = None
         self.path = ""
         self.rows = []
+        self.client_dir = ""
+        self.card = {}
         root = QVBoxLayout(self)
         root.setContentsMargins(16, 10, 16, 10)
         root.setSpacing(8)
@@ -7298,21 +7635,22 @@ class WordFillPage(QDialog):
         self.lbl_doc.setObjectName("hint")
         self.lbl_doc.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         head.addWidget(self.lbl_doc, 1)
-        cap = QLabel("Клиент:")
-        cap.setObjectName("plain")
-        head.addWidget(cap)
-        self.cmb_client = QComboBox()
-        self.cmb_client.setMinimumWidth(170)
-        self.cmb_client.setMinimumHeight(30)
-        self.cmb_client.setToolTip("Данные клиента, сохранённые из прошлых документов: ФИО, паспорт, адрес, VIN…\n"
-                                   "Выберите — и поля заполнятся сами.")
-        self.cmb_client.activated.connect(self._pick_client)
-        head.addWidget(self.cmb_client)
-        self.b_keep = QPushButton("Запомнить")
-        self.b_keep.setToolTip("Сохранить введённые данные клиента, чтобы подставить их в следующий документ\n"
-                               "(счёт, акт, CMR). Данные хранятся только на этом компьютере.")
-        self.b_keep.clicked.connect(self._keep_client)
-        head.addWidget(self.b_keep)
+        self.lbl_client = ClickLabel("")
+        self.lbl_client.setObjectName("plain")
+        self.lbl_client.setCursor(Qt.PointingHandCursor)
+        self.lbl_client.setToolTip("Карточка клиента лежит в его папке: ФИО, паспорт, адрес, автомобиль, суммы.\n"
+                                   "Поля документа заполняются из неё сами. Щелчок — открыть карточку.")
+        self.lbl_client.clicked.connect(self._open_card)
+        head.addWidget(self.lbl_client)
+        self.b_card = QPushButton("Карточка…")
+        self.b_card.setToolTip("Посмотреть и поправить данные клиента")
+        self.b_card.clicked.connect(self._open_card)
+        head.addWidget(self.b_card)
+        self.b_dir = QPushButton("Папка клиента…")
+        self.b_dir.setToolTip("Шаблон лежит отдельно от клиентов? Укажите папку клиента:\n"
+                              "данные возьмутся из его карточки, а документ сохранится в эту папку.")
+        self.b_dir.clicked.connect(self._pick_dir)
+        head.addWidget(self.b_dir)
         root.addLayout(head)
 
         body = QHBoxLayout()
@@ -7481,7 +7819,13 @@ class WordFillPage(QDialog):
             if a is None:
                 continue
             before = self.wd.text(f.par)[:f.start][-70:]
-            key = SW.guess_key(f.label if f.kind in ("cell", "tail") else before)
+            ctx = f.meta.get("ctx", "")
+            if f.kind in ("cell", "sum") and ctx:
+                key = SW.guess_label(ctx)
+            elif f.kind == "tail":
+                key = SW.guess_label(f.label) or SW.guess_key(f.label)
+            else:
+                key = SW.guess_key(before) or (SW.guess_label(ctx) if ctx and len(before.strip()) < 3 else "")
             if f.kind == "date":
                 ref = re.search(r"договор\w*\s*№[^№]{0,40}\bот\s*$", before.lower())
                 own = bool(re.search(r"к договору\s*№", before.lower()))
@@ -7490,13 +7834,16 @@ class WordFillPage(QDialog):
                                                                    for n, t, _c in self.wd.dummies)) else ""
             elif f.kind == "blank" and re.search(r"(?<!к )договор(?:ом|а|у)?\s*№\s*$", before.lower()):
                 key = "contract_no"
-            rows.append(self._new_row(f.label, key, f.kind, [(a, b)], field=f))
+            row = self._new_row(f.label, key, f.kind, [(a, b)], field=f)
+            row["table"] = f.meta.get("table", "")
+            row["total"] = bool(f.kind == "sum" and SW.TOTAL_RE.search(ctx or ""))
+            rows.append(row)
         for name, text, cnt in self.wd.dummies:
             spans = self._find_all(text)
             if spans:
                 key = SW.DUMMY_KEYS.get(name, "")
                 if key == "contract_no" and not re.match(r"[А-ЯЁA-Z]", text):
-                    key = ""                             # «000–2026» — собственный номер этого документа
+                    key = "doc_no"                       # «000–2026» — собственный номер этого документа
                 rows.append(self._new_row(f"{name}: «{text}»" + (f" ×{len(spans)}" if len(spans) > 1 else ""),
                                           key, "dummy", spans, dummy=name))
         taken = [(c.selectionStart(), c.selectionEnd()) for r in rows for c in r["cursors"]]
@@ -7508,11 +7855,124 @@ class WordFillPage(QDialog):
                                           m.get("key", ""), "mark", spans, mark=m))
                 taken += spans
         rows.sort(key=lambda r: (bool(r["current"]), r["cursors"][0].selectionStart()))
+        # номер этого документа: первое по тексту поле-номер (заголовок «ДОГОВОР № …», «Счёт № …»)
+        nums = [r for r in rows if r["key"] == "doc_no" or (r["kind"] == "dummy" and r["dummy"] == "Номер договора")]
+        own = min(nums, key=lambda r: r["cursors"][0].selectionStart()) if nums else None
+        for r in rows:
+            r["docnum"] = r is own
+            if r["key"] == "doc_no" and r is not own and r["kind"] == "dummy":
+                r["twin"] = True                         # тот же номер в другом написании («000-2026»)
         self.rows = rows
+        self.client_dir = os.path.dirname(path)
         self._build_panel()
-        self._load_clients()
+        self._apply_card()
         self._paint_marks()
         self.lbl_info.setText(self._home)
+
+    # ---- карточка клиента и номер документа
+    def _counter(self):
+        return dict((settings_load().get("doc_counters") or {}).get(self._tpl_id()) or {})
+
+    def _set_counter(self, **kw):
+        st = settings_load()
+        c = st.setdefault("doc_counters", {}).setdefault(self._tpl_id(), {})
+        c.update(kw)
+        settings_save(st)
+
+    def _num_key(self):
+        return "doc_no:" + self._tpl_id()
+
+    def _apply_card(self, only_empty=True):
+        """Подставить данные клиента из карточки в папке и следующий номер документа."""
+        self.card = SW.card_load(self.client_dir) if self.client_dir else {}
+        data = SW.derive(self.card)
+        who = data.get("fio_short") or data.get("fio") or ""
+        self.lbl_client.setText(("Клиент: " + who) if who else "Клиент: карточки нет")
+        n = 0
+        for r in self.rows:
+            if r["edit"] is None:
+                continue
+            val = data.get(r["key"]) if r["key"] and r["key"] != "doc_no" else None
+            if r.get("docnum"):
+                val = self.card.get(self._num_key()) or (val if r["key"] == "contract_no" else None)
+                if not val and self._num_mode() == "auto":
+                    cnt = self._counter()
+                    val = SW.next_number(cnt.get("last", ""), AI.today().year, cnt.get("reset", True))
+            if val and (not r["edit"].text().strip() or r["auto"] or (not only_empty)):
+                r["edit"].setText(val)
+                r["auto"] = True
+                self._write(r, val)
+                n += 1
+        own = next((r for r in self.rows if r.get("docnum")), None)
+        if own is not None and own["edit"] is not None and own["edit"].text().strip():
+            for r in self.rows:
+                if r.get("twin") and r["edit"] is not None:
+                    val = self._twin_text(r, own["edit"].text().strip())
+                    r["edit"].setText(val)
+                    r["auto"] = True
+                    self._write(r, val)
+        self._recalc()
+        self._count()
+        return n
+
+    @staticmethod
+    def _twin_text(row, value):
+        """Тот же номер, но с тем тире, которое стоит в этом месте шаблона («000-2026» и «000–2026»)."""
+        orig = row["orig"][0] if row["orig"] else ""
+        dash = "–" if "–" in orig else ("-" if "-" in orig else "")
+        return re.sub(r"[–-]", dash, value) if dash else value
+
+    def _num_mode(self):
+        return self._counter().get("mode", "auto")
+
+    def _open_card(self):
+        if not self.client_dir:
+            return
+        merged = dict(self.card)
+        merged.update({k: v for k, v in self.client_values().items() if k in SW.CARD_KEYS})
+        dlg = ClientCardDialog(self.client_dir, self, values=merged)
+        if dlg.exec() == QDialog.Accepted:
+            n = self._apply_card(only_empty=False)
+            self._say(f"Карточка сохранена, подставлено полей: {n}")
+
+    def _pick_dir(self):
+        d = QFileDialog.getExistingDirectory(self, "Папка клиента", self.client_dir or self.win.current_dir())
+        if not d:
+            return
+        self.client_dir = d
+        n = self._apply_card(only_empty=False)
+        self._say(f"Папка клиента: {os.path.basename(d)}. Подставлено полей: {n}" if n else
+                  f"Папка клиента: {os.path.basename(d)}. Карточки в ней пока нет — она появится, когда сохраните документ")
+
+    def _recalc(self):
+        """«Итого» и «Общая стоимость» — сумма остальных сумм той же таблицы; составные значения."""
+        for tot in self.rows:
+            if not tot.get("total") or tot["edit"] is None or not (not tot["edit"].text().strip() or tot["auto"]):
+                continue
+            parts = [r for r in self.rows if r is not tot and r["kind"] == "sum" and not r.get("total")
+                     and r.get("table") and r.get("table") == tot.get("table") and r["edit"] is not None]
+            nums = [SW.parse_number(r["edit"].text()) for r in parts if r["edit"].text().strip()]
+            if not nums and tot["auto"] and tot["edit"].text().strip():
+                tot["edit"].clear()                  # слагаемые стёрли — итог тоже пустой
+                self._write(tot, "")
+                continue
+            if not nums or any(x is None for x in nums):
+                continue
+            kop = sum(w * 100 + f for w, f in nums)
+            text = SW.format_number(kop // 100) + (f",{kop % 100:02d}" if kop % 100 else "")
+            if tot["edit"].text().strip() != text:
+                tot["edit"].setText(text)
+                tot["auto"] = True
+                self._write(tot, text)
+        vals = self.client_values()
+        combo = " / ".join(x for x in (vals.get("engine_volume", ""), vals.get("engine_type", "")) if x)
+        if combo:
+            for r in self.rows:
+                if r["key"] == "engine_combo" and r["edit"] is not None and (not r["edit"].text().strip() or r["auto"]) \
+                        and r["edit"].text().strip() != combo:
+                    r["edit"].setText(combo)
+                    r["auto"] = True
+                    self._write(r, combo)
 
     def _build_panel(self):
         holder = QWidget()
@@ -7538,6 +7998,18 @@ class WordFillPage(QDialog):
             lab.setToolTip(row["label"] + "\nЩелчок — показать это место в документе")
             lab.clicked.connect(lambda r=row: self._jump(r))
             top.addWidget(lab, 1)
+            if row.get("docnum"):
+                cmb = QComboBox()
+                cmb.addItem("номер: авто", "auto")
+                cmb.addItem("номер: вручную", "manual")
+                cmb.setCurrentIndex(0 if self._num_mode() == "auto" else 1)
+                cmb.setFixedHeight(20)
+                cmb.setStyleSheet("QComboBox { min-height: 0; padding: 0 4px; font-size: 11px; }")
+                cmb.setToolTip("Авто — программа сама ставит следующий номер после последнего сохранённого.\n"
+                               "Вручную — номер вписываете вы. Выбор запоминается для этого шаблона.")
+                cmb.currentIndexChanged.connect(lambda _i, c=cmb, r=row: self._num_mode_changed(r, c.currentData()))
+                top.addWidget(cmb)
+                row["num_cmb"] = cmb
             if row["mark"] is not None:
                 x = QToolButton()
                 x.setObjectName("ghost")
@@ -7551,7 +8023,8 @@ class WordFillPage(QDialog):
             v.addLayout(top)
             ed = QLineEdit()
             ed.setMinimumHeight(28)
-            ed.setPlaceholderText(tips.get(row["kind"], SW.KEY_TITLES.get(row["key"], "")))
+            ed.setPlaceholderText("первый номер впишите сами — дальше пойдёт сам" if row.get("docnum") else
+                                  tips.get(row["kind"], SW.KEY_TITLES.get(row["key"], "")))
             if row["current"]:
                 ed.setText(row["current"])
             ed.textEdited.connect(lambda t, r=row: self._typed(r, t))
@@ -7570,6 +8043,21 @@ class WordFillPage(QDialog):
         self.sc.setWidget(holder)
         self._count()
 
+    def _num_mode_changed(self, row, mode):
+        self._set_counter(mode=mode)
+        if row["edit"] is None:
+            return
+        if mode == "manual" and row["auto"]:
+            row["edit"].clear()
+            self._typed(row, "")
+        elif mode == "auto" and not row["edit"].text().strip():
+            cnt = self._counter()
+            val = self.card.get(self._num_key()) or SW.next_number(cnt.get("last", ""), AI.today().year, cnt.get("reset", True))
+            if val:
+                row["edit"].setText(val)
+                self._typed(row, val)
+                row["auto"] = True
+
     def _jump(self, row):
         c = QTextCursor(row["cursors"][0])
         self.view.setTextCursor(c)
@@ -7582,6 +8070,14 @@ class WordFillPage(QDialog):
         self._write(row, text)
         if spread and row["key"]:
             self._spread_key(row["key"], text, skip=row)
+        if row.get("docnum"):
+            for r in self.rows:
+                if r.get("twin") and r["edit"] is not None and (not r["edit"].text().strip() or r["auto"]):
+                    val = self._twin_text(r, text.strip())
+                    r["edit"].setText(val)
+                    r["auto"] = True
+                    self._write(r, val)
+        self._recalc()
         self._count()
 
     def _spread_key(self, key, text, skip=None):
@@ -7590,7 +8086,7 @@ class WordFillPage(QDialog):
             if r is skip or r["edit"] is None:
                 continue
             val = None
-            if r["key"] == key:
+            if r["key"] == key and key != "doc_no":
                 val = text
             elif key == "fio" and r["key"] == "fio_short":
                 val = SW.initials(text)
@@ -7709,59 +8205,12 @@ class WordFillPage(QDialog):
         self._paint_marks()
 
     # ---- данные клиента
-    def _load_clients(self):
-        self.cmb_client.blockSignals(True)
-        self.cmb_client.clear()
-        self.cmb_client.addItem("— выбрать —", None)
-        for name in sorted((settings_load().get("word_clients") or {}).keys(), key=str.lower):
-            self.cmb_client.addItem(name, name)
-        self.cmb_client.blockSignals(False)
-
     def client_values(self):
         out = {}
         for r in self.rows:
             if r["key"] and r["edit"] is not None and r["edit"].text().strip() and r["key"] not in out:
                 out[r["key"]] = r["edit"].text().strip()
         return out
-
-    def _keep_client(self):
-        vals = self.client_values()
-        name = vals.get("fio") or vals.get("fio_short") or ""
-        if not vals:
-            self._say("Сначала заполните поля клиента: ФИО, паспорт, адрес…", warn=True)
-            return
-        if not name:
-            name, ok = QInputDialog.getText(self, "Клиент", "Под каким именем сохранить данные:")
-            name = (name or "").strip()
-            if not ok or not name:
-                return
-        st = settings_load()
-        cl = st.setdefault("word_clients", {})
-        merged = dict(cl.get(name) or {})
-        merged.update(vals)
-        cl[name] = merged
-        settings_save(st)
-        self._load_clients()
-        self.cmb_client.setCurrentIndex(max(0, self.cmb_client.findData(name)))
-        self._say(f"Данные клиента «{name}» сохранены — в следующем документе выберите его вверху")
-
-    def _pick_client(self, *_):
-        name = self.cmb_client.currentData()
-        if not name:
-            return
-        data = (settings_load().get("word_clients") or {}).get(name) or {}
-        if "fio" in data and "fio_short" not in data:
-            data = dict(data, fio_short=SW.initials(data["fio"]))
-        n = 0
-        for r in self.rows:
-            if r["key"] in data and r["edit"] is not None:
-                r["edit"].setText(data[r["key"]])
-                r["auto"] = True
-                self._write(r, data[r["key"]])
-                n += 1
-        self._count()
-        self._say(f"Подставлено полей: {n}" if n else "В этом документе нет полей под данные клиента — отметьте их: "
-                                                      "выделите значение, правая кнопка → «Сделать полем шаблона»", warn=not n)
 
     # ---- сохранение
     def save(self):
@@ -7771,7 +8220,7 @@ class WordFillPage(QDialog):
         if not edits:
             QMessageBox.information(self, "Редактор Word", "В документе пока ничего не изменено.")
             return
-        folder = os.path.dirname(self.path)
+        folder = self.client_dir or os.path.dirname(self.path)
         base = os.path.splitext(os.path.basename(self.path))[0]
         vals = self.client_values()
         name = base
@@ -7802,11 +8251,28 @@ class WordFillPage(QDialog):
         except Exception as e:
             QMessageBox.critical(self, "Редактор Word", f"Не удалось сохранить:\n{e}")
             return
+        # номер документа занят только теперь, когда файл записан
+        own = next((r for r in self.rows if r.get("docnum") and r["edit"] is not None), None)
+        num = own["edit"].text().strip() if own is not None else ""
+        if num:
+            cnt = self._counter()
+            if SW.number_value(num) >= SW.number_value(cnt.get("last", "")) or not cnt.get("last") \
+                    or str(AI.today().year) in num:
+                self._set_counter(last=num)
+        # карточка клиента — в папку, куда сохранён документ
+        out_dir = os.path.dirname(out)
+        card = SW.card_load(out_dir)
+        card.update({k: v for k, v in vals.items() if k in SW.CARD_KEYS})
+        if num:
+            card[self._num_key()] = num
+        card.pop("fio_short", None)
+        saved = SW.card_save(out_dir, card) if card else True
         self.wd = None                              # следующий документ открывается с чистого шаблона
         self.win.reload_files()
         self.win.ai_mode(False)
         self.win.open_word(out, quiet=True)
-        self.win.show_toast(f"✔  Сохранено: {os.path.basename(out)} — изменено абзацев: {n}. Проверьте документ", 5200)
+        self.win.show_toast(f"✔  Сохранено: {os.path.basename(out)} — изменено абзацев: {n}. "
+                            + ("Карточка клиента обновлена" if saved else "Карточку клиента записать не удалось"), 5200)
 
 
 class AiPlaceDialog(QDialog):
@@ -7985,6 +8451,7 @@ class MainWindow(QMainWindow):
         self._build_dir_bar()
         self._build_side_panel()
         self._build_menubar()
+        self._sign_all_state()
         self._update_geom_title()
         self.reload_library()
         self.theme = settings_load().get("theme", "light")
@@ -8290,6 +8757,9 @@ class MainWindow(QMainWindow):
                              "Поставить выбранную печать в центр страницы", doc=True)
         m.addAction(self.act_place)
         m.addAction(self.act_pen)
+        self.act_sign_all = act("Подписать все места…", self.sign_all, None,
+                                "Поставить подпись выбранного человека на все строки его подписи в документе", doc=True)
+        m.addAction(self.act_sign_all)
         m.addAction(self.act_delete)
         m.addSeparator()
         self.act_rot_l = act("Повернуть страницу влево", lambda: self.rotate_page(-90), "Ctrl+L", doc=True)
@@ -8552,6 +9022,146 @@ class MainWindow(QMainWindow):
     def ai_center(self, *_):
         """Окно «ИИ-помощник»: сервис, счётчики, все функции и результат."""
         self.ai_mode(not self._ai_on())
+
+    def _sign_all_state(self):
+        """Пункт «Подписать все места» виден, только если пользователь сам включил это в настройках."""
+        if hasattr(self, "act_sign_all"):
+            self.act_sign_all.setVisible(bool(settings_load().get("sign_all_enabled", False)))
+
+    def find_sign_places(self, surname):
+        """[(страница, cx, cy)] — строки подписи рядом с фамилией: «Фамилия И. О. / ______ /»."""
+        key = AI._letters(surname)
+        out = []
+        if not key or self.doc is None:
+            return out
+        for pi in range(self.doc.page_count):
+            words = AI.page_words(self.doc[pi])
+            lines = [w for w in words if w[4].count("_") >= 6]
+            used = set()
+            for w in words:
+                if not AI._letters(w[4]).startswith(key):
+                    continue
+                h = max(4.0, w[3] - w[1])
+                cy = (w[1] + w[3]) / 2
+                best, score = None, 1e9
+                for k, u in enumerate(lines):
+                    if k in used:
+                        continue
+                    ucy = (u[1] + u[3]) / 2
+                    dy = abs(ucy - cy)
+                    if dy < h * 1.1:                                   # та же строка
+                        dx = u[0] - w[2] if u[0] >= w[2] else w[0] - u[2]
+                        if -h <= dx <= 260 and dx + dy < score:
+                            best, score = k, dx + dy
+                    elif dy < h * 3.2 and u[0] < w[2] + 30 and u[2] > w[0] - 30:   # строкой выше или ниже
+                        if 300 + dy < score:
+                            best, score = k, 300 + dy
+                if best is not None:
+                    used.add(best)
+                    u = lines[best]
+                    out.append((pi, (u[0] + u[2]) / 2, u[1] + (u[3] - u[1]) * 0.25))
+        return out
+
+    def sign_all(self):
+        if not settings_load().get("sign_all_enabled", False) or not self._ai_need_doc():
+            return
+        signs = [e for e in lib_load() if "подпис" in (e.get("category", "") + " " + e.get("name", "")).lower()] or lib_load()
+        if not signs:
+            QMessageBox.information(self, "Подписать все места", "В библиотеке нет подписей. Добавьте подпись "
+                                                                  "в «Мои печати» (категория «Подписи»).")
+            return
+        st = settings_load()
+        names = st.get("sign_names") or {}
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Подписать все места")
+        dlg.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
+        dlg.setMinimumWidth(520)
+        lay = QVBoxLayout(dlg)
+        lay.setContentsMargins(18, 16, 18, 14)
+        lay.setSpacing(10)
+        hint = QLabel("Программа найдёт в документе строки вида «Фамилия И. О. / ________ /» и поставит подпись на каждую. "
+                      "Ставьте так только свою подпись или подпись того, кто это разрешил.")
+        hint.setObjectName("hint")
+        hint.setWordWrap(True)
+        lay.addWidget(hint)
+        cmb = QComboBox()
+        cmb.setMinimumHeight(30)
+        for e in signs:
+            cmb.addItem(e.get("name", "подпись"), e)
+        ed = QLineEdit()
+        ed.setMinimumHeight(30)
+        ed.setPlaceholderText("фамилия, как в документе — например Воронцов")
+        g = QGridLayout()
+        g.addWidget(QLabel("Подпись:"), 0, 0)
+        g.addWidget(cmb, 0, 1)
+        g.addWidget(QLabel("Чья (фамилия):"), 1, 0)
+        g.addWidget(ed, 1, 1)
+        lay.addLayout(g)
+        info = QLabel("")
+        info.setObjectName("plain")
+        lay.addWidget(info)
+
+        def sync_name(*_):
+            e = cmb.currentData()
+            ed.setText(names.get(os.path.basename(e.get("file", "")), ""))
+
+        def count(*_):
+            n = len(self.find_sign_places(ed.text().strip())) if ed.text().strip() else 0
+            info.setText(f"Найдено мест для подписи: {n}" if ed.text().strip() else "")
+            ok.setEnabled(n > 0)
+
+        row = QHBoxLayout()
+        row.addStretch(1)
+        ok = QPushButton("Поставить")
+        ok.setObjectName("primary")
+        ok.clicked.connect(dlg.accept)
+        row.addWidget(ok)
+        b = QPushButton("Отмена")
+        b.clicked.connect(dlg.reject)
+        row.addWidget(b)
+        lay.addLayout(row)
+        cmb.currentIndexChanged.connect(sync_name)
+        ed.textChanged.connect(count)
+        sync_name()
+        count()
+        if dlg.exec() != QDialog.Accepted:
+            return
+        entry, surname = cmb.currentData(), ed.text().strip()
+        st = settings_load()
+        st.setdefault("sign_names", {})[os.path.basename(entry.get("file", ""))] = surname
+        settings_save(st)
+        places = self.find_sign_places(surname)
+        lift = float(entry.get("mm_h", 18)) * MM_TO_PT * 0.18
+        page_now = self.current_page
+        n = 0
+        for pi, cx, cy in places:
+            if self._place_entry(entry, pi, cx, cy - lift) is not None:
+                n += 1
+        if places:
+            self.page_list.setCurrentRow(places[0][0])
+        self.show_toast(f"✔  Подпись «{entry.get('name', '')}» поставлена: {n} мест. Проверьте каждое и подвиньте, "
+                        "если нужно", 5200)
+
+    def _client_line(self):
+        if not hasattr(self, "lbl_client"):
+            return
+        data = SW.derive(SW.card_load(self.current_dir()))
+        who = data.get("fio_short") or data.get("fio") or ""
+        car = data.get("car", "")
+        text = ("Клиент: " + who + (f" · {car}" if car else "")) if who else "Клиент: карточки нет — создать"
+        fm = self.lbl_client.fontMetrics()
+        self.lbl_client.setText(fm.elidedText(text, Qt.ElideRight, max(120, self.lbl_client.width() - 4)))
+
+    def open_client_card(self):
+        folder = self.current_dir()
+        if not os.path.isdir(folder):
+            return
+        if ClientCardDialog(folder, self).exec() == QDialog.Accepted:
+            self._client_line()
+            pg = getattr(self, "_word_page", None)
+            if pg is not None and pg.wd is not None and os.path.normcase(pg.client_dir) == os.path.normcase(folder):
+                pg._apply_card(only_empty=False)
+            self.show_toast("✔  Карточка клиента сохранена в папке", 3000)
 
     def act_word_fill_run(self):
         self.word_fill()
@@ -9325,6 +9935,14 @@ class MainWindow(QMainWindow):
         cap_row.addWidget(b_del, 0)
         cap_row.addWidget(b_ref, 0)
         tl.addLayout(cap_row)
+        self.lbl_client = ClickLabel("")
+        self.lbl_client.setObjectName("hint")
+        self.lbl_client.setCursor(Qt.PointingHandCursor)
+        self.lbl_client.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        self.lbl_client.setToolTip("Карточка клиента этой папки: ФИО, паспорт, адрес, автомобиль, суммы.\n"
+                                   "Из неё редактор Word заполняет документы. Щелчок — открыть или создать.")
+        self.lbl_client.clicked.connect(self.open_client_card)
+        tl.addWidget(self.lbl_client)
 
         self.file_list = QListWidget()
         self.file_list.setAlternatingRowColors(True)
@@ -9592,6 +10210,7 @@ class MainWindow(QMainWindow):
         folder = self.current_dir()
         self._watch_folder(folder)
         self.lbl_path.setText(folder)
+        self._client_line()
         self.file_list.clear()
         col = self._icon_color() if hasattr(self, "_icon_color") else "#888888"
         try:
