@@ -511,7 +511,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.4.8"
+APP_VERSION = "6.4.9"
 EDITION = "main"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -3787,6 +3787,62 @@ def builtin_scanner_bg():
     return _BUILTIN_BG or None
 
 
+_DUST_LAYER = None
+
+
+def scanner_dust_layer():
+    """Только пылинки встроенного стекла (L: 0 — чисто, больше — темнее точка).
+    Волоски и царапины — длинные следы — убраны: на «скане» они выглядят как дефект."""
+    global _DUST_LAYER
+    if _DUST_LAYER is None:
+        bed = builtin_scanner_bg()
+        if bed is None:
+            _DUST_LAYER = False
+            return None
+        gray = bed.convert("L")
+        smooth = gray.filter(ImageFilter.GaussianBlur(12))
+        specks = ImageChops.subtract(smooth, gray)           # >0 там, где точка темнее фона
+        specks = specks.point(lambda v: 0 if v < 7 else min(255, int(v * 1.6)))
+        try:
+            W, H = specks.size
+            # склеиваем разрывы волоска и ищем связные пятна
+            mask = specks.point(lambda v: 255 if v else 0).filter(ImageFilter.MaxFilter(7))
+            data = bytearray(mask.tobytes())
+            kill = bytearray(W * H)
+            limit = max(26, W // 55)                          # длиннее ~4,5 мм — уже не пылинка
+            pos = data.find(255)
+            while pos != -1:
+                stack, comp = [pos], [pos]
+                data[pos] = 1
+                x0 = x1 = pos % W
+                y0 = y1 = pos // W
+                while stack:
+                    p = stack.pop()
+                    x, y = p % W, p // W
+                    for q in (p - 1 if x else -1, p + 1 if x < W - 1 else -1, p - W, p + W,
+                              p - W - 1 if x else -1, p - W + 1 if x < W - 1 else -1,
+                              p + W - 1 if x else -1, p + W + 1 if x < W - 1 else -1):
+                        if 0 <= q < W * H and data[q] == 255:
+                            data[q] = 1
+                            stack.append(q)
+                            comp.append(q)
+                            qx, qy = q % W, q // W
+                            if qx < x0: x0 = qx
+                            if qx > x1: x1 = qx
+                            if qy < y0: y0 = qy
+                            if qy > y1: y1 = qy
+                if max(x1 - x0, y1 - y0) > limit:
+                    for q in comp:
+                        kill[q] = 255
+                pos = data.find(255, pos + 1)
+            keep = ImageChops.invert(Image.frombytes("L", (W, H), bytes(kill)))
+            specks = ImageChops.multiply(specks, keep)
+        except Exception:
+            pass
+        _DUST_LAYER = specks
+    return _DUST_LAYER or None
+
+
 def load_scanner_bg(path):
     """Отсканированный пустой фон сканера: PDF (первая страница) или картинка → PIL RGB."""
     if not path or not os.path.isfile(path):
@@ -4707,18 +4763,13 @@ def scan_look_page(page, dpi=190, preset="normal", color=True, seed=0, back_page
         pass
 
     # 4. настоящие пылинки и разводы стекла — из встроенного пустого скана
-    bed = builtin_scanner_bg()
-    if bed is not None:
-        bed = bed.resize((W, H), Image.LANCZOS)
+    specks = scanner_dust_layer()            # только точки: волоски и царапины стекла убраны
+    if specks is not None:
+        specks = specks.resize((W, H), Image.LANCZOS)
         if rnd.random() < 0.5:
-            bed = bed.transpose(Image.FLIP_LEFT_RIGHT)
+            specks = specks.transpose(Image.FLIP_LEFT_RIGHT)
         if rnd.random() < 0.5:
-            bed = bed.transpose(Image.FLIP_TOP_BOTTOM)
-        gray = bed.convert("L")
-        smooth = gray.filter(ImageFilter.GaussianBlur(14 * k))
-        # разница со сглаженной копией = только пылинки; полосы и тени стекла уходят
-        specks = ImageChops.subtract(smooth, gray)              # >0 там, где точка темнее фона
-        specks = specks.point(lambda v: 0 if v < 7 else min(255, int(v * 1.6)))
+            specks = specks.transpose(Image.FLIP_TOP_BOTTOM)
         dust = ImageChops.invert(specks)
         paper = ImageChops.multiply(paper, Image.merge("RGB", (dust, dust, dust)))
 
