@@ -6,7 +6,9 @@ import sys
 
 ver = sys.argv[1].lstrip("v")
 try:
-    notes = open("NOTES.md", encoding="utf-8").read().strip()
+    lines = [l for l in open("NOTES.md", encoding="utf-8").read().strip().splitlines() if l.strip()]
+    # в окне обновления показываем только свежее: у старых версий это окно не прокручивается
+    notes = "\n".join(lines[:8]) + ("\n• …и другие улучшения — полный список на странице релиза" if len(lines) > 8 else "")
 except FileNotFoundError:
     notes = ""
 base = f"https://github.com/alegawhats-del/StampStudio/releases/download/v{ver}"

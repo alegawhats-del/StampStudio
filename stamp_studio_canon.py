@@ -511,7 +511,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.4.10"
+APP_VERSION = "6.4.11"
 EDITION = "canon"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -5136,7 +5136,16 @@ class UpdateDialog(QDialog):
             t = QLabel(notes)
             t.setWordWrap(True)
             t.setTextInteractionFlags(Qt.TextSelectableByMouse)
-            bl.addWidget(t)
+            t.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+            # длинный список прокручивается внутри — окно не вылезает за экран
+            sc = QScrollArea()
+            sc.setWidgetResizable(True)
+            sc.setFrameShape(QFrame.NoFrame)
+            sc.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            sc.setWidget(t)
+            sc.setMaximumHeight(300)
+            sc.setMinimumHeight(min(300, max(60, t.heightForWidth(470) + 6)))
+            bl.addWidget(sc)
             lay.addWidget(box)
         self.chk_auto = QCheckBox("проверять обновления при запуске")
         self.chk_auto.setChecked(bool(settings_load().get("auto_update", True)))
