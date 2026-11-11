@@ -637,11 +637,107 @@ def ocr_text_for(bundle):
 
 
 # --------------------------------------------------------------------------- задачи
+DATE_ZONES = (("pc", "Как на этом компьютере"), ("3", "Москва, Минск (UTC+3)"),
+              ("2", "Калининград, Киев зимой (UTC+2)"), ("1", "Варшава, Берлин зимой (UTC+1)"),
+              ("5", "Екатеринбург, Ташкент (UTC+5)"), ("8", "Пекин (UTC+8)"))
+
+
+def today():
+    """Сегодняшняя дата: по часам компьютера или по выбранному в программе поясу."""
+    zone = "pc"
+    try:
+        zone = str((SETTINGS_LOAD() or {}).get("date_zone") or "pc")
+    except Exception:
+        pass
+    if zone != "pc":
+        try:
+            tz = datetime.timezone(datetime.timedelta(hours=float(zone)))
+            return datetime.datetime.now(tz).date()
+        except Exception:
+            pass
+    return datetime.date.today()
+
+
+def today_text():
+    d = today()
+    return f"{d.strftime('%d.%m.%Y')}, {('пн', 'вт', 'ср', 'чт', 'пт', 'сб', 'вс')[d.weekday()]}"
+
+
+OFFICE_EXT = (".docx", ".doc", ".rtf", ".odt")
+
+
+def _word_com_pdf(path):
+    """PDF из документа через установленный Microsoft Word — вид точно как при печати."""
+    import tempfile
+    import pythoncom
+    import win32com.client
+    pythoncom.CoInitialize()
+    tmp = tempfile.mkdtemp(prefix="stampstudio_w_")
+    out = os.path.join(tmp, "doc.pdf")
+    word = None
+    try:
+        word = win32com.client.DispatchEx("Word.Application")
+        word.Visible = False
+        word.DisplayAlerts = 0
+        d = word.Documents.Open(os.path.abspath(path), ConfirmConversions=False, ReadOnly=True,
+                                AddToRecentFiles=False)
+        try:
+            d.ExportAsFixedFormat(out, 17)             # 17 = PDF
+        finally:
+            d.Close(False)
+        with open(out, "rb") as f:
+            return f.read()
+    finally:
+        try:
+            if word is not None:
+                word.Quit()
+        except Exception:
+            pass
+        try:
+            if os.path.exists(out):
+                os.remove(out)
+            os.rmdir(tmp)
+        except OSError:
+            pass
+        try:
+            pythoncom.CoUninitialize()
+        except Exception:
+            pass
+
+
+def office_to_pdf(path):
+    """Документ Word → PDF в памяти. Возвращает (bytes, "word" | "simple"). Исходный файл не меняется."""
+    err = ""
+    if sys.platform == "win32":
+        try:
+            data = _word_com_pdf(path)
+            if data and data[:4] == b"%PDF":
+                return data, "word"
+        except Exception as e:
+            err = str(e)
+    if not path.lower().endswith(".docx"):
+        raise RuntimeError("Этот формат открывается только через Microsoft Word, а Word на компьютере "
+                           "не найден или не ответил. Сохраните документ как .docx или PDF."
+                           + (f"\n({err[:160]})" if err else ""))
+    import fitz
+    src = fitz.open(path)
+    try:
+        try:
+            src.layout(width=595, height=842, fontsize=11)
+        except Exception:
+            pass
+        data = src.convert_to_pdf()
+    finally:
+        src.close()
+    return data, "simple"
+
+
 def sys_prompt():
-    today = datetime.date.today().strftime("%d.%m.%Y")
+    today_s = today().strftime("%d.%m.%Y")
     return ("Ты помощник по документам (договоры, CMR, счета, акты, доверенности, таможенные и "
             "автомобильные документы; русский, украинский, белорусский, английский, польский, немецкий). "
-            f"Сегодня {today} — даты около этого числа нормальные, они не «в будущем». "
+            f"Сегодня {today_s} — документ с этой или близкой датой составлен "
+            "сейчас, это нормально, такая дата не «неправильная» и не «в будущем». "
             "Читай внимательно, ничего не выдумывай: если чего-то в документе нет — оставляй пустую строку. "
             "Отвечай только JSON без пояснений.")
 
@@ -709,10 +805,83 @@ def task_extract(bundle, fields=None, status=None, cancel=None):
     return {"fields": out, "other": other[:8], "provider": prov, "model": model}
 
 
+_UNITS = {"ноль": 0, "один": 1, "одна": 1, "одно": 1, "два": 2, "две": 2, "три": 3, "четыре": 4, "пять": 5,
+          "шесть": 6, "семь": 7, "восемь": 8, "девять": 9, "десять": 10, "одиннадцать": 11, "двенадцать": 12,
+          "тринадцать": 13, "четырнадцать": 14, "пятнадцать": 15, "шестнадцать": 16, "семнадцать": 17,
+          "восемнадцать": 18, "девятнадцать": 19, "двадцать": 20, "тридцать": 30, "сорок": 40,
+          "пятьдесят": 50, "шестьдесят": 60, "семьдесят": 70, "восемьдесят": 80, "девяносто": 90,
+          "сто": 100, "двести": 200, "триста": 300, "четыреста": 400, "пятьсот": 500, "шестьсот": 600,
+          "семьсот": 700, "восемьсот": 800, "девятьсот": 900}
+_SCALES = (("тысяч", 1000), ("миллион", 10 ** 6), ("миллиард", 10 ** 9))
+
+
+def words_to_number(text):
+    """«Один миллион девятьсот девяносто две тысячи» → 1992000. None, если это не число словами."""
+    total = cur = 0
+    seen = False
+    for w in re.findall(r"[а-яё]+", (text or "").lower()):
+        if w in _UNITS:
+            cur += _UNITS[w]
+            seen = True
+            continue
+        for stem, mult in _SCALES:
+            if w.startswith(stem):
+                total += (cur or 1) * mult
+                cur = 0
+                seen = True
+                break
+    return total + cur if seen else None
+
+
+def sum_in_words_ok(quote):
+    """True — в цитате сумма цифрами и прописью совпадают; False — расходятся; None — проверить нельзя."""
+    m = re.search(r"(\d[\d\s\u00a0.]*)(?:[,.](\d{1,2}))?\s*\(([^)]{3,})\)", quote or "")
+    if not m:
+        return None
+    digits = re.sub(r"[^\d]", "", m.group(1))
+    words = words_to_number(m.group(3))
+    if not digits or words is None:
+        return None
+    return int(digits) == words
+
+
+_VAGUE = re.compile(r"^\s*(не)?(правильн|верн|корректн|точн)\w*\s+[^.:—-]{0,60}$", re.I)
+
+
+def filter_issues(issues):
+    """Убрать замечания, которые ИИ не обосновал или которые опровергаются простой проверкой."""
+    out = []
+    for it in issues:
+        text, quote, why = it["text"], it["quote"], it.get("expected", "")
+        low = (text + " " + why).lower()
+        if "пропис" in low and sum_in_words_ok(quote) is True:
+            continue                                   # сумма прописью пересчитана: она верная
+        if _VAGUE.match(text) and not why:
+            continue                                   # «Неправильная дата» без объяснения — не замечание
+        if why and why.strip(" .«»\"").lower() == quote.strip(" .«»\"").lower():
+            continue                                   # «должно быть» то же самое, что и написано
+        if re.search(r"\b(ноль|0[,.]00|бесплатн)", quote.lower()) and re.search(r"стоимост|цен|тариф|сумм", low) \
+                and not re.search(r"не совпад|расход|противореч|в другом месте|на стр", low):
+            continue                                   # ноль / бесплатно — допустимое значение
+        out.append(it)
+    return out
+
+
 def task_check(bundle, status=None, cancel=None):
     answer = ('Ответ: {"summary": "одна фраза", "issues": [{"page": 1, "severity": "error", '
-              '"text": "что не так и как должно быть", "quote": "точная цитата из документа"}]}\n\n')
-    common = ("Не придирайся к стилю и оформлению. Если проблем нет — верни пустой список.\n"
+              '"text": "что именно не так", "quote": "точная цитата из документа", '
+              '"expected": "как должно быть ИЛИ с чем не совпадает (цитата второго места и его страница)"}]}\n\n')
+    common = ("ЖЁСТКИЕ ПРАВИЛА:\n"
+              "• Ты не знаешь, какие ФИО, паспортные данные, адреса, номера, даты и суммы «правильные». "
+              "Нельзя писать «неправильное ФИО / дата / сумма» само по себе. Замечание допустимо, только если "
+              "ты показываешь ДВА места документа, которые противоречат друг другу, либо явную ошибку в слове.\n"
+              "• Поле «expected» обязательно: что должно быть написано или с чем расходится. Не можешь заполнить — "
+              "не сообщай об этом.\n"
+              "• Сумму прописью проверяй пересчётом: переведи слова в число и сравни с цифрами. Совпало — всё верно.\n"
+              "• Ноль, «0,00», «бесплатно», «не предусмотрено» — допустимые значения, не ошибка.\n"
+              "• Дата документа, равная сегодняшней или близкая к ней, — нормальная.\n"
+              "• Лучше не сообщить ничего, чем сообщить о том, в чём не уверен. Если проблем нет — пустой список.\n"
+              "Не придирайся к стилю и оформлению.\n"
               "В «page» ставь номер страницы из заголовка «=== Страница N ===».\n"
               "severity: «error» — нельзя отправлять, «warn» — стоит глянуть.\n")
     q = ("Проверь документ перед отправкой. Ищи только настоящие проблемы:\n"
@@ -748,11 +917,14 @@ def task_check(bundle, status=None, cancel=None):
         except (TypeError, ValueError):
             page = 0
         issues.append({"page": page, "severity": "error" if str(r.get("severity")).lower().startswith("err") else "warn",
-                       "text": str(r.get("text")).strip(), "quote": str(r.get("quote") or "").strip()})
+                       "text": str(r.get("text")).strip(), "quote": str(r.get("quote") or "").strip(),
+                       "expected": str(r.get("expected") or "").strip()})
+    raw_count = len(issues)
+    issues = filter_issues(issues)
     issues.sort(key=lambda x: (x["severity"] != "error", x["page"]))
     return {"summary": str(d.get("summary") or "").strip() if isinstance(d, dict) else "",
             "issues": issues, "skipped": bundle.get("skipped", 0), "provider": prov, "model": model,
-            "mode": mode, "problems": problems}
+            "mode": mode, "problems": problems, "dropped": raw_count - len(issues)}
 
 
 # --------------------------------------------------------------------------- слова на странице

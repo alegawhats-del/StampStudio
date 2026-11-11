@@ -134,16 +134,19 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git fetch origin main
-          git checkout main
-          python bump_manifest.py ${{ steps.ver.outputs.ver }}
-          git add version.json
-          git diff --cached --quiet
-          if ($LASTEXITCODE -eq 0) { "version.json already up to date"; exit 0 }
-          git commit -m "version.json -> ${{ steps.ver.outputs.ver }} [skip ci]"
+          $ver = "${{ steps.ver.outputs.ver }}"
           $ok = $false
           for ($i = 0; $i -lt 5 -and -not $ok; $i++) {
-            git pull --rebase origin main
+            # всегда от свежего main: соседняя сборка могла уже поменять version.json
+            git fetch origin main
+            git checkout -B main origin/main
+            $cur = (Get-Content version.json -Raw | ConvertFrom-Json).version
+            if ([version]$cur -gt [version]$ver) { "version.json is already newer ($cur)"; exit 0 }
+            python bump_manifest.py $ver
+            git add version.json
+            git diff --cached --quiet
+            if ($LASTEXITCODE -eq 0) { "version.json already up to date"; exit 0 }
+            git commit -m "version.json -> $ver [skip ci]"
             git push origin main
             if ($LASTEXITCODE -eq 0) { $ok = $true } else { Start-Sleep -Seconds 10 }
           }

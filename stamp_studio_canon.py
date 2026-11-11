@@ -39,7 +39,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtWidgets import (QProgressBar, QTableWidget, QTableWidgetItem, QHeaderView,
                                QAbstractItemView, QStackedWidget)
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtCore import QUrl, QFileSystemWatcher
+from PySide6.QtCore import QUrl, QFileSystemWatcher, QEventLoop, QPoint
 import stamp_ai as AI
 
 PREVIEW_DPI = 150          # DPI отрисовки страницы в редакторе
@@ -517,7 +517,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.4.12"
+APP_VERSION = "6.4.13"
 EDITION = "canon"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -1525,6 +1525,10 @@ def draw_icon(kind: str, color: str, size: int = 64) -> QIcon:
         rect(3.4, 5.6, 9.2, 8.0)
         line(8, 2.2, 8, 4.4)
         line(5.8, 4.2, 8, 2.0); line(10.2, 4.2, 8, 2.0)
+    elif kind == "word":
+        rect(3.4, 2.2, 9.2, 11.6)
+        line(5.4, 6.0, 6.6, 10.4); line(6.6, 10.4, 8.0, 7.2)
+        line(8.0, 7.2, 9.4, 10.4); line(9.4, 10.4, 10.6, 6.0)
     elif kind == "compress":
         line(3, 3, 6.4, 6.4); line(6.4, 6.4, 6.4, 4.0); line(6.4, 6.4, 4.0, 6.4)
         line(13, 13, 9.6, 9.6); line(9.6, 9.6, 9.6, 12.0); line(9.6, 9.6, 12.0, 9.6)
@@ -4630,10 +4634,10 @@ def page_cropbox_for_visible_rect(page, rect):
 # ======================================================================
 
 SCAN_LOOK_PRESETS = {
-    # угол°, размытие, зерно бумаги, самый тёмный тон, затемнение края, сдвиг мм, jpeg
-    "light":  dict(angle=0.12, blur=0.40, grain=1.6, ink=50, edge=0.000, shift=0.5, q=84),
-    "normal": dict(angle=0.25, blur=0.55, grain=2.2, ink=62, edge=0.006, shift=1.0, q=80),
-    "strong": dict(angle=0.60, blur=0.85, grain=3.6, ink=78, edge=0.020, shift=2.2, q=72),
+    # угол° (0 — лист лежит ровно), размытие, зерно бумаги, самый тёмный тон, затемнение края, сдвиг мм, jpeg
+    "light":  dict(angle=0.0, blur=0.40, grain=1.6, ink=50, edge=0.000, shift=0.5, q=84),
+    "normal": dict(angle=0.0, blur=0.55, grain=2.2, ink=62, edge=0.006, shift=1.0, q=80),
+    "strong": dict(angle=0.0, blur=0.85, grain=3.6, ink=78, edge=0.020, shift=2.2, q=72),
 }
 SCAN_PAPER_TONE = (231, 234, 239)     # тон бумаги на настоящем скане (образец договора)
 
@@ -4733,11 +4737,8 @@ def scan_look_page(page, dpi=190, preset="normal", color=True, seed=0, back_page
     # 1б. чернила печати и подписи поверх тонера
     if ink is not None:
         try:
+            # оттиск ровный, как на настоящем скане: без «выцветших» пятен — правило для всех печатей
             ink = ink.filter(ImageFilter.GaussianBlur(0.35 * k))
-            # неравномерный оттиск: местами бледнее
-            blot = Image.effect_noise((max(8, W // 14), max(8, H // 14)), 26).resize((W, H), Image.BICUBIC)
-            blot = blot.point(lambda v: max(0, min(60, (v - 128) + 18)))
-            ink = ImageChops.add(ink, Image.merge("RGB", (blot, blot, blot)))
             paper = ImageChops.multiply(paper, ink)
         except Exception:
             pass
@@ -4909,8 +4910,9 @@ class ScanLookDialog(QDialog):
             cmb.setCurrentIndex(k if k >= 0 else 0)
             cmb.currentIndexChanged.connect(self.update_preview)
 
-        b_again = QPushButton("Другой вариант наклона")
-        b_again.setToolTip("Каждый «скан» чуть отличается — нажмите, чтобы перебросить")
+        b_again = QPushButton("Другой вариант")
+        b_again.setToolTip("Зерно бумаги и пылинки каждый раз чуть другие — нажмите, чтобы перебросить.\n"
+                           "Лист всегда лежит ровно, без наклона.")
         b_again.clicked.connect(self._reroll)
         side.addWidget(b_again)
 
@@ -4944,8 +4946,9 @@ class ScanLookDialog(QDialog):
         self.rb_here = QRadioButton("В открытый документ")
         self.rb_here.setToolTip("Страницы открытого документа заменяются на «скан».\n"
                                 "В файл это попадёт, когда вы нажмёте «Сохранить».")
-        self.rb_new = QRadioButton("Новым PDF — исходный не меняется")
+        self.rb_new = QRadioButton("Новым PDF — только выбранные страницы")
         self.rb_new.setToolTip("Программа спросит имя и сохранит «скан» отдельным файлом.\n"
+                               "В новый файл попадут только выбранные страницы, остальные не добавляются.\n"
                                "Открытый документ и печати на нём останутся как были.")
         (self.rb_new if st.get("target") == "new" else self.rb_here).setChecked(True)
         tl.addWidget(self.rb_here)
@@ -5994,7 +5997,15 @@ class AiCheckDialog(QDialog):
                                              "распознанный на компьютере, поэтому опечатки не проверялись.")
         if result.get("provider"):
             text += (" " if text else "") + f"Ответил: {result['provider'].split(' (')[0]} · {result.get('model', '')}."
-        text += (" " if text else "") + "ИИ может ошибаться — это подсказка, а не гарантия."
+        stars = next((p["stars"] for p in AI.PROVIDERS if p["name"] == result.get("provider")), 5)
+        if stars and stars <= 3:
+            text += (" Это запасной сервис, он читает документы слабее — для важного документа "
+                     "выберите вверху сервис с 4–5 звёздами и повторите.")
+        if result.get("dropped"):
+            text += (f" Скрыто замечаний без обоснования: {result['dropped']} "
+                     "(ИИ назвал что-то «неправильным», но не показал, с чем это расходится).")
+        text += (" " if text else "") + (f"Сегодня {AI.today().strftime('%d.%m.%Y')}. "
+                                         "ИИ может ошибаться — это подсказка, а не гарантия.")
         sub = QLabel(text.strip())
         sub.setObjectName("hint")
         sub.setWordWrap(True)
@@ -6010,6 +6021,8 @@ class AiCheckDialog(QDialog):
             line = f"{mark}  {page}{it['text']}"
             if it["quote"]:
                 line += f"\n      «{it['quote'][:160]}»"
+            if it.get("expected"):
+                line += f"\n      → {it['expected'][:200]}"
             li = QListWidgetItem(line)
             li.setData(Qt.UserRole, it["page"])
             self.lst.addItem(li)
@@ -6045,15 +6058,32 @@ class AiCenterDialog(QDialog):
     def __init__(self, win):
         super().__init__(win)
         self.win = win
-        self.setWindowTitle("ИИ-помощник")
-        self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
-        self.setModal(False)
-        self.resize(1000, 660)
-        self.setMinimumSize(940, 620)
+        self.setWindowFlags(Qt.Widget)          # не отдельное окно, а страница внутри главного
+        self.setObjectName("aipage")
         self._embedded = None
         root = QVBoxLayout(self)
-        root.setContentsMargins(16, 14, 16, 12)
-        root.setSpacing(10)
+        root.setContentsMargins(16, 10, 16, 10)
+        root.setSpacing(8)
+
+        head = QHBoxLayout()
+        head.setSpacing(10)
+        self.b_back = QPushButton("←  К документу")
+        self.b_back.setCursor(Qt.PointingHandCursor)
+        self.b_back.setToolTip("Вернуться к странице документа (Esc). Результат ИИ останется здесь.")
+        self.b_back.clicked.connect(lambda: win.ai_mode(False))
+        head.addWidget(self.b_back)
+        ttl = QLabel("ИИ-ПОМОЩНИК")
+        ttl.setObjectName("paneltitle")
+        head.addWidget(ttl)
+        self.lbl_doc = QLabel("")
+        self.lbl_doc.setObjectName("hint")
+        self.lbl_doc.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        head.addWidget(self.lbl_doc, 1)
+        self.lbl_date = QLabel("")
+        self.lbl_date.setObjectName("hint")
+        self.lbl_date.setToolTip("Эту дату ИИ считает сегодняшней. Изменить пояс — щелчок по дате внизу окна.")
+        head.addWidget(self.lbl_date)
+        root.addLayout(head)
 
         # ---- через кого
         top = QHBoxLayout()
@@ -6063,7 +6093,7 @@ class AiCenterDialog(QDialog):
         top.addWidget(cap)
         self.cmb = QComboBox()
         self.cmb.setMinimumHeight(32)
-        self.cmb.setMinimumWidth(360)
+        self.cmb.setMinimumWidth(200)
         self.cmb.setToolTip("Какой сервис ИИ читает документ. В списке — только подключённые (с ключом).")
         top.addWidget(self.cmb, 1)
         self.chk_fail = QCheckBox("если не отвечает — перейти к следующему")
@@ -6075,43 +6105,35 @@ class AiCenterDialog(QDialog):
         top.addWidget(b_set)
         root.addLayout(top)
 
-        body = QHBoxLayout()
-        body.setSpacing(12)
-        root.addLayout(body, 1)
-
-        # ---- слева: функции и счётчики
-        left = QVBoxLayout()
-        left.setSpacing(8)
-        acts = QGroupBox("Что сделать")
-        al = QVBoxLayout(acts)
-        al.setSpacing(6)
+        # ---- что сделать: пять функций в один ряд
+        acts = QHBoxLayout()
+        acts.setSpacing(8)
         self.btns = []
         for text, sub, slot in (
-                ("Проверить перед отправкой", "опечатки, даты, суммы, пустые поля", win.ai_check),
-                ("Данные из документа", "номер, дата, сумма, VIN — в таблицу", win.ai_extract),
-                ("Предложить имя файла", "переименовать или сохранить так", win.ai_name),
-                ("Печать и подпись на место", "найти «М.П.» и строку подписи", win.ai_place),
-                ("Распознать текст скана", "поиск и копирование в PDF", win.ai_ocr)):
-            b = QPushButton(f"{text}\n{sub}")
-            b.setObjectName("aiact")
+                ("Проверить", "Проверить перед отправкой: опечатки, расхождения в датах и суммах, пустые поля", win.ai_check),
+                ("Данные", "Данные из документа: номер, дата, сумма, VIN — таблицей, можно скопировать", win.ai_extract),
+                ("Имя файла", "Предложить имя файла: переименовать или сохранить под этим именем", win.ai_name),
+                ("Печать на место", "Печать и подпись на место: найти «М.П.» и строку подписи", win.ai_place),
+                ("Текст скана", "Распознать текст скана: в PDF заработают поиск и копирование", win.ai_ocr)):
+            b = QPushButton(text)
+            b.setObjectName("primary" if not self.btns else "")
             b.setCursor(Qt.PointingHandCursor)
-            b.setMinimumHeight(50)
+            b.setMinimumHeight(36)
+            b.setToolTip(sub)
             b.clicked.connect(lambda _=False, s=slot: s())
-            al.addWidget(b)
+            acts.addWidget(b, 1)
             self.btns.append(b)
-        left.addWidget(acts)
-        cnt = QGroupBox("Запросы сегодня")
-        self.cl = QGridLayout(cnt)
-        self.cl.setHorizontalSpacing(8)
-        self.cl.setVerticalSpacing(5)
-        left.addWidget(cnt)
-        left.addStretch(1)
-        lw = QWidget()
-        lw.setLayout(left)
-        lw.setFixedWidth(370)
-        body.addWidget(lw)
+        root.addLayout(acts)
 
-        # ---- справа: результат
+        # ---- счётчики запросов — компактной строкой
+        cnt = QWidget()
+        self.cl = QGridLayout(cnt)
+        self.cl.setContentsMargins(2, 0, 2, 0)
+        self.cl.setHorizontalSpacing(14)
+        self.cl.setVerticalSpacing(4)
+        root.addWidget(cnt)
+
+        # ---- результат — на всю ширину
         self.res_box = QGroupBox("Результат")
         self.rl = QVBoxLayout(self.res_box)
         self.home = QLabel("")
@@ -6120,7 +6142,7 @@ class AiCenterDialog(QDialog):
         self.home.setAlignment(Qt.AlignTop | Qt.AlignLeft)
         self.home.setTextFormat(Qt.RichText)
         self.rl.addWidget(self.home, 1)
-        body.addWidget(self.res_box, 1)
+        root.addWidget(self.res_box, 1)
 
         self.lbl_info = QLabel("")
         self.lbl_info.setObjectName("hint")
@@ -6155,31 +6177,45 @@ class AiCenterDialog(QDialog):
         while self.cl.count():
             it = self.cl.takeAt(0)
             if it.widget():
+                it.widget().hide()
                 it.widget().deleteLater()
         warn = []
-        for r, p in enumerate(sorted(ready, key=lambda p: -p["stars"])):
+        cap = QLabel("Запросы сегодня:")
+        cap.setObjectName("hint")
+        self.cl.addWidget(cap, 0, 0)
+        per_row = 4
+        for r, p in enumerate(sorted(ready, key=lambda p: -p["stars"])[:8]):
             name = p["name"]
             today, lim, share = AI.limit_state(name, s)
-            n = QLabel(name.split(" (")[0])
-            n.setObjectName("plain")
-            self.cl.addWidget(n, r, 0)
+            cell = QWidget()
+            v = QVBoxLayout(cell)
+            v.setContentsMargins(0, 0, 0, 0)
+            v.setSpacing(2)
+            n = QLabel(f"{name.split(' (')[0]} · " + (f"{today} из ~{lim}" if lim else f"{today}, без лимита"))
+            n.setObjectName("hint")
+            v.addWidget(n)
             bar = QProgressBar()
-            bar.setFixedHeight(6)
+            bar.setFixedHeight(4)
             bar.setTextVisible(False)
             bar.setRange(0, 100)
             bar.setValue(int(min(1.0, share) * 100) if lim else 0)
             if lim and share >= 0.8:
-                bar.setStyleSheet("QProgressBar::chunk { background: #d9534f; border-radius: 3px; }")
+                bar.setStyleSheet("QProgressBar::chunk { background: #d9534f; border-radius: 2px; }")
                 warn.append(name.split(" (")[0])
-            self.cl.addWidget(bar, r, 1)
-            v = QLabel(f"{today} из ~{lim}" if lim else f"{today} · без лимита")
-            v.setObjectName("hint")
-            v.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            self.cl.addWidget(v, r, 2)
-        self.cl.setColumnStretch(1, 1)
+            v.addWidget(bar)
+            cell.setToolTip(f"{name}\nСделано запросов сегодня: {today}" + (f" из примерно {lim} бесплатных" if lim else ""))
+            self.cl.addWidget(cell, r // per_row, 1 + r % per_row)
+        for col in range(1, 1 + per_row):
+            self.cl.setColumnStretch(col, 1)
         has_doc = self.win.doc is not None
         for b in self.btns:
             b.setEnabled(has_doc)
+        name = os.path.basename(str(self.win.doc_path or "")) if has_doc else ""
+        fm = self.lbl_doc.fontMetrics()
+        self.lbl_doc.setText(fm.elidedText(("Документ: " + name) if name else "Документ не открыт — выберите файл слева",
+                                           Qt.ElideMiddle, max(120, self.lbl_doc.width() - 6)))
+        self.lbl_doc.setToolTip(name)
+        self.lbl_date.setText("Сегодня: " + AI.today_text())
         info = []
         if AI.LAST.get("provider"):
             info.append(f"Последний ответ: {AI.LAST['provider'].split(' (')[0]} · {AI.LAST['model']} · "
@@ -6191,7 +6227,7 @@ class AiCenterDialog(QDialog):
                         (" — программа сама перейдёт к следующему сервису" if s.get("ai_failover", True)
                          else " — выберите другой сервис или включите переход к следующему"))
         if not has_doc:
-            info.append("Откройте PDF или отсканируйте документ — и функции станут активны")
+            info.append("Откройте PDF или Word двойным щелчком в списке слева — и функции станут активны")
         self.lbl_info.setText("\n".join(info))
 
     def _pick(self, *_):
@@ -6205,18 +6241,36 @@ class AiCenterDialog(QDialog):
         self.win.ai_settings()
         self.refresh()
 
+    def reject(self):                           # Esc — назад к документу, страницу не прячем
+        self.win.ai_mode(False)
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        QTimer.singleShot(0, self._doc_label)
+
+    def _doc_label(self):
+        try:
+            name = os.path.basename(str(self.win.doc_path or "")) if self.win.doc is not None else ""
+            fm = self.lbl_doc.fontMetrics()
+            self.lbl_doc.setText(fm.elidedText(("Документ: " + name) if name else
+                                               "Документ не открыт — выберите файл слева",
+                                               Qt.ElideMiddle, max(120, self.lbl_doc.width() - 6)))
+        except RuntimeError:
+            pass
+
     # ---- результат
     def show_home(self):
         self._drop()
         self.res_box.setTitle("Результат")
         self.home.setText(
-            "<p>Выберите слева, что сделать с открытым документом. Результат появится здесь же: "
+            "<p>Откройте документ в списке файлов слева (PDF или Word) и нажмите кнопку вверху. "
+            "Результат появится здесь же: "
             "его можно поправить, скопировать, сохранить в таблицу или применить к файлу.</p>"
             "<p><b>Как ИИ читает документ.</b> Страницы с текстом уходят текстом, сканы — изображениями "
             "(по 4 страницы за запрос). Если ни один сервис не смог прочитать изображения, уходит текст, "
             "распознанный на компьютере; тогда опечатки не проверяются, потому что в таком тексте "
             "искажены буквы. Чем читал последний ответ — написано внизу окна.</p>"
-            "<p><b>Счётчик.</b> Слева видно, сколько запросов сделано сегодня у каждого сервиса. "
+            "<p><b>Счётчик.</b> Над этим окном видно, сколько запросов сделано сегодня у каждого сервиса. "
             "Когда лимит близко, полоска краснеет, а программа сама начинает со следующего сервиса.</p>"
             "<p><b>Порядок работы.</b> Если документ ещё с текстом (из Word, не скан) — сначала "
             "проверка и данные, потом печать с подписью, и только в конце «Как скан». "
@@ -6250,7 +6304,6 @@ class AiCenterDialog(QDialog):
         self._embedded = dlg
         dlg.show()
         self.refresh()
-        self.raise_()
 
     def note(self, text):
         self._drop()
@@ -6422,7 +6475,9 @@ class MainWindow(QMainWindow):
 
         self.scene = QGraphicsScene()
         self.view = EditorView(self.scene)
-        self.setCentralWidget(self.view)
+        self.center_stack = QStackedWidget()    # 0 — страница документа, 1 — ИИ-помощник
+        self.center_stack.addWidget(self.view)
+        self.setCentralWidget(self.center_stack)
         self.scene.selectionChanged.connect(self.sync_panel_from_selection)
         self.scene.selectionChanged.connect(self._update_geom_title)
 
@@ -6524,8 +6579,9 @@ class MainWindow(QMainWindow):
         # ИИ-помощник: то же меню стоит в строке меню сверху
         self.btn_ai = QToolButton()
         self.btn_ai.setText("ИИ")
-        self.btn_ai.setToolTip("ИИ-помощник: открыть окно со всеми функциями  (Ctrl+Shift+I)\n"
-                               "Стрелка рядом — быстрое меню: имя файла, печать на место, данные, проверка, текст")
+        self._ai_btn_tip = ("ИИ-помощник: открыть его прямо в этом окне, на месте страницы  (Ctrl+Shift+I)\n"
+                            "Стрелка рядом — быстрое меню: имя файла, печать на место, данные, проверка, текст")
+        self.btn_ai.setToolTip(self._ai_btn_tip)
         self.btn_ai.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self.btn_ai.setPopupMode(QToolButton.MenuButtonPopup)
         self.btn_ai.setMenu(self._build_ai_menu())
@@ -6785,7 +6841,7 @@ class MainWindow(QMainWindow):
                 self._doc_actions.append(a)
             return a
 
-        self.act_ai_center = act("ИИ-помощник — всё в одном окне…", self.ai_center, "Ctrl+Shift+I",
+        self.act_ai_center = act("ИИ-помощник — показать / вернуться к документу", self.ai_center, "Ctrl+Shift+I",
                                  "Выбор сервиса, счётчик запросов, все функции ИИ и результат в одном окне",
                                  doc=False)
         m.addSeparator()
@@ -6941,21 +6997,46 @@ class MainWindow(QMainWindow):
 
     def ai_center(self, *_):
         """Окно «ИИ-помощник»: сервис, счётчики, все функции и результат."""
-        c = getattr(self, "_ai_center_dlg", None)
-        if c is None:
-            c = AiCenterDialog(self)
-            self._ai_center_dlg = c
-        c.refresh()
-        c.show()
-        c.raise_()
-        c.activateWindow()
+        self.ai_mode(not self._ai_on())
+
+    def _ai_on(self):
+        return self.center_stack.currentIndex() == 1
+
+    def ai_mode(self, on=True):
+        """ИИ-помощник занимает середину главного окна вместо страницы; список файлов слева остаётся."""
+        if on:
+            if self.view.pen_active():
+                self.pen_finish(commit=True)
+            c = getattr(self, "_ai_center_dlg", None)
+            if c is None:
+                c = AiCenterDialog(self)
+                self._ai_center_dlg = c
+                self.center_stack.addWidget(c)
+            self.right_dock.hide()
+            self.center_stack.setCurrentWidget(c)
+            c.refresh()
+        else:
+            self.center_stack.setCurrentIndex(0)
+            self.right_dock.show()
+            self.view.setFocus()
+        try:
+            self.btn_ai.setToolTip("Вернуться к странице документа (Esc)" if on else self._ai_btn_tip)
+        except AttributeError:
+            pass
 
     def _center(self):
         c = getattr(self, "_ai_center_dlg", None)
-        try:
-            return c if c is not None and c.isVisible() else None
-        except RuntimeError:
-            return None
+        return c if c is not None and self._ai_on() else None
+
+    def _ai_go_page(self, i):
+        """Из списка замечаний — к странице документа (результат остаётся в ИИ-помощнике)."""
+        if self.doc is None or not (0 <= i < self.doc.page_count):
+            return
+        if self._ai_on():
+            self.ai_mode(False)
+            self.statusBar().showMessage("Страница замечания. Вернуться к списку — кнопка «ИИ» "
+                                         "или Ctrl+Shift+I", 8000)
+        self.page_list.setCurrentRow(i)
 
     def _ai_center_refresh(self):
         c = self._center()
@@ -6983,7 +7064,7 @@ class MainWindow(QMainWindow):
 
     def _doc_title(self):
         name = os.path.basename(str(self.doc_path or "документ"))
-        return name.replace(" (из изображений)", "")
+        return name.replace(" (из изображений)", "").replace(" (из Word)", "")
 
     # ---------------------------------------------------------- 1. имя файла
 
@@ -7243,10 +7324,11 @@ class MainWindow(QMainWindow):
         msg = "✔  Поставил: " + ", ".join(parts) + ". Проверьте и подвиньте мышью, если нужно"
         if many:
             msg += f". На стр. {', '.join(map(str, many))} мест несколько — лишнее удалите клавишей Del"
-        self.show_toast(msg, 5200)
         c = self._center()
         if c is not None:
             c.note(msg)
+            self.ai_mode(False)                 # печати стоят на странице — показываем её
+        self.show_toast(msg, 5200)
 
     # ---------------------------------------------------------- 3. данные
 
@@ -7302,8 +7384,7 @@ class MainWindow(QMainWindow):
 
         def show(res):
             dlg = AiCheckDialog(res, title, self)
-            dlg.go_page.connect(lambda i: self.page_list.setCurrentRow(i)
-                                if self.doc is not None and 0 <= i < self.doc.page_count else None)
+            dlg.go_page.connect(self._ai_go_page)
             self._ai_check_dlg = dlg
             c = self._center()
             if c is not None:
@@ -7562,7 +7643,18 @@ class MainWindow(QMainWindow):
         self.btn_version.setCursor(Qt.PointingHandCursor)
         self.btn_version.setToolTip("Проверить обновления")
         self.btn_version.clicked.connect(lambda: self.check_updates(silent=False))
+        self.btn_date = QPushButton("")
+        self.btn_date.setFlat(True)
+        self.btn_date.setObjectName("verbtn")
+        self.btn_date.setCursor(Qt.PointingHandCursor)
+        self.btn_date.clicked.connect(self._date_menu)
+        self.statusBar().addPermanentWidget(self.btn_date)
         self.statusBar().addPermanentWidget(self.btn_version)
+        self._date_timer = QTimer(self)
+        self._date_timer.setInterval(30000)
+        self._date_timer.timeout.connect(self._date_tick)
+        self._date_timer.start()
+        self._date_tick()
         if settings_load().get("auto_update", True):
             QTimer.singleShot(2500, lambda: self.check_updates(silent=True))
         self._guard_wheel()
@@ -7651,6 +7743,7 @@ class MainWindow(QMainWindow):
         self.page_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.page_list.setSpacing(2)
         self.page_list.currentRowChanged.connect(self.show_page)
+        self.page_list.itemClicked.connect(lambda *_: self.ai_mode(False) if self._ai_on() else None)
         self.page_list.model().rowsMoved.connect(self._pages_dragged)
         self.page_list.setToolTip("Страницы можно перетаскивать мышкой")
         self.page_list.setMinimumHeight(120)
@@ -7869,19 +7962,33 @@ class MainWindow(QMainWindow):
             return
         subdirs = [e for e in entries
                    if os.path.isdir(os.path.join(folder, e)) and not e.startswith(".")]
-        exts = (".pdf", ".png", ".jpg", ".jpeg")
-        files = [e for e in entries if e.lower().endswith(exts)]
+        exts = (".pdf", ".png", ".jpg", ".jpeg") + AI.OFFICE_EXT
+        files = [e for e in entries if e.lower().endswith(exts) and not e.startswith("~$")]
+        dark = getattr(self, "theme", "light") == "dark"
+        c_pdf = QColor("#F08A99" if dark else "#8E1B2E")       # PDF — бордовым
+        c_doc = QColor("#7DB1FF" if dark else "#1B55B8")       # Word — синим
         for d in subdirs:
             it = QListWidgetItem(draw_icon("folder", col), d)
             it.setToolTip(d)
             it.setData(Qt.UserRole, ("dir", os.path.join(folder, d)))
             self.file_list.addItem(it)
         for f in files:
-            kind = "to_pdf" if f.lower().endswith(".pdf") else "images"
-            it = QListWidgetItem(draw_icon(kind, col), f)
+            low = f.lower()
+            is_doc = low.endswith(AI.OFFICE_EXT)
+            if low.endswith(".pdf"):
+                it = QListWidgetItem(draw_icon("to_pdf", c_pdf.name()), f)
+                it.setForeground(c_pdf)
+            elif is_doc:
+                it = QListWidgetItem(draw_icon("word", c_doc.name()), f)
+                it.setForeground(c_doc)
+            else:
+                it = QListWidgetItem(draw_icon("images", col), f)
             full = os.path.join(folder, f)
             try:
-                it.setToolTip(f"{f}\n{human_size(os.path.getsize(full))}")
+                tip = f"{f}\n{human_size(os.path.getsize(full))}"
+                if is_doc:
+                    tip += "\nWord: откроется копия для просмотра и проверки ИИ, сам файл не меняется"
+                it.setToolTip(tip)
             except OSError:
                 pass
             it.setData(Qt.UserRole, ("file", full))
@@ -7906,8 +8013,52 @@ class MainWindow(QMainWindow):
                 QMessageBox.critical(self, "Ошибка", f"Не удалось открыть PDF:\n{e}")
                 return
             self._set_document(doc, path)
+        elif path.lower().endswith(AI.OFFICE_EXT):
+            self.open_word(path)
         else:
             self._open_image_paths([path])
+
+    def open_word(self, path):
+        """Открыть документ Word: в программе появляется его копия-PDF, сам файл не меняется."""
+        box = {}
+
+        class _T(QThread):
+            def run(self_t):
+                try:
+                    box["res"] = AI.office_to_pdf(path)
+                except Exception as e:
+                    box["err"] = str(e)
+
+        th = _T(self)
+        prog = QProgressDialog("Открываю документ Word…", None, 0, 0, self)
+        prog.setWindowTitle("Word")
+        prog.setWindowModality(Qt.WindowModal)
+        prog.setMinimumDuration(300)
+        prog.setCancelButton(None)
+        loop = QEventLoop(self)
+        th.finished.connect(loop.quit)
+        th.start()
+        if th.isRunning():
+            loop.exec()
+        th.wait()
+        prog.close()
+        prog.deleteLater()
+        if "res" not in box:
+            QMessageBox.critical(self, "Word", "Не удалось открыть документ:\n" + box.get("err", "неизвестная ошибка"))
+            return
+        data, how = box["res"]
+        try:
+            doc = fitz.open("pdf", data)
+        except Exception as e:
+            QMessageBox.critical(self, "Word", f"Не удалось открыть документ:\n{e}")
+            return
+        self._set_document(doc, path + " (из Word)")
+        msg = ("Word открыт как копия: можно проверять ИИ, ставить печать и сохранять в PDF. "
+               "Сам файл Word не меняется")
+        if how != "word":
+            msg += ". Microsoft Word не найден — вид упрощённый, текст полный"
+        self.show_toast("✔  Word открыт как копия — сам файл не меняется", 3600)
+        self.statusBar().showMessage(msg, 10000)
 
     def file_menu(self, pos):
         item = self.file_list.itemAt(pos)
@@ -8148,7 +8299,10 @@ class MainWindow(QMainWindow):
         prog.close()
         src.close()
         if o.get("target") == "new":
-            self._scan_look_save_new(new, len(pages))
+            keep = sorted(set(i for i in pages if 0 <= i < new.page_count))
+            if keep and len(keep) < new.page_count:
+                new.select(keep)                      # в новый файл — только выбранные страницы
+            self._scan_look_save_new(new, len(keep) or len(pages))
             return
         n = self.doc.page_count
         self.doc.insert_pdf(new)
@@ -8169,7 +8323,7 @@ class MainWindow(QMainWindow):
     def _scan_look_save_new(self, new, n_pages):
         """Сохранить «скан» отдельным файлом; открытый документ и печати не трогаем."""
         base = os.path.splitext(os.path.basename(str(self.doc_path or "документ")))[0]
-        base = base.replace(" (из изображений)", "")
+        base = base.replace(" (из изображений)", "").replace(" (из Word)", "")
         folder = self.current_dir()
         if self.doc_path and os.path.isfile(str(self.doc_path)):
             folder = os.path.dirname(str(self.doc_path))
@@ -8197,8 +8351,8 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Ошибка", f"Не удалось сохранить:\n{e}")
             return
         self.reload_files()
-        self.show_toast(f"✔  «Скан» сохранён новым файлом: {os.path.basename(path)}. "
-                        f"Открытый документ не изменён", 5200)
+        self.show_toast(f"✔  «Скан» сохранён новым файлом: {os.path.basename(path)} "
+                        f"(страниц: {n_pages}). Открытый документ не изменён", 5200)
 
     # ---------------------------------------------------------- ручка
     def toggle_pen(self):
@@ -8213,6 +8367,8 @@ class MainWindow(QMainWindow):
                                     "Сначала откройте PDF или отсканируйте документ.")
             self.act_pen.setChecked(False)
             return
+        if self._ai_on():
+            self.ai_mode(False)
         layer = PenLayer(self.scene.sceneRect())
         self.scene.addItem(layer)
         self.scene.clearSelection()
@@ -8770,7 +8926,38 @@ class MainWindow(QMainWindow):
 
         dock.setWidget(holder)
         dock.setFixedWidth(372)
+        self.right_dock = dock
         self.addDockWidget(Qt.RightDockWidgetArea, dock)
+
+    def _date_tick(self):
+        zone = str(settings_load().get("date_zone") or "pc")
+        label = dict(AI.DATE_ZONES).get(zone, "")
+        self.btn_date.setText(f" Сегодня: {AI.today_text()} ")
+        self.btn_date.setToolTip("Эту дату ИИ считает сегодняшней, когда проверяет документ.\n"
+                                 f"Сейчас: {label.lower() if zone == 'pc' else label}.\n"
+                                 "Щёлкните, чтобы выбрать часовой пояс.")
+        c = getattr(self, "_ai_center_dlg", None)
+        if c is not None:
+            try:
+                c.lbl_date.setText("Сегодня: " + AI.today_text())
+            except RuntimeError:
+                pass
+
+    def _date_menu(self):
+        s = settings_load()
+        cur = str(s.get("date_zone") or "pc")
+        menu = QMenu(self)
+        for key, text in AI.DATE_ZONES:
+            a = menu.addAction(text)
+            a.setCheckable(True)
+            a.setChecked(key == cur)
+            a.setData(key)
+        got = menu.exec(self.btn_date.mapToGlobal(QPoint(0, -menu.sizeHint().height())))
+        if got is not None:
+            s = settings_load()
+            s["date_zone"] = got.data()
+            settings_save(s)
+            self._date_tick()
 
     def _adv_toggle(self, on, save=True):
         """Свернуть/развернуть блок «Файл, фон и краска»."""
@@ -9021,9 +9208,12 @@ class MainWindow(QMainWindow):
     # ---------------- документ ----------------
 
     def open_pdf(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Открыть PDF",
-                                              self.current_dir(), "PDF (*.pdf)")
+        path, _ = QFileDialog.getOpenFileName(self, "Открыть документ", self.current_dir(),
+                                              "PDF и Word (*.pdf *.docx *.doc *.rtf *.odt);;PDF (*.pdf)")
         if not path:
+            return
+        if path.lower().endswith(AI.OFFICE_EXT):
+            self.open_word(path)
             return
         try:
             doc = fitz.open(path)
@@ -9597,7 +9787,7 @@ class MainWindow(QMainWindow):
                 "тогда появится окно с именем файла.")
             return
         src_name = os.path.splitext(os.path.basename(str(self.doc_path)))[0]
-        src_name = src_name.replace(" (из изображений)", "") or "документ"
+        src_name = src_name.replace(" (из изображений)", "").replace(" (из Word)", "") or "документ"
         dlg = SaveDialog(src_name, self, default_dir=self.current_dir(),
                          compress_profile=getattr(self, 'compress_profile', None))
         if isinstance(suggest, str) and suggest:
@@ -9631,7 +9821,7 @@ class MainWindow(QMainWindow):
                                     "Сначала откройте PDF или отсканируйте документ.")
             return
         src_name = os.path.splitext(os.path.basename(str(self.doc_path)))[0]
-        src_name = src_name.replace(" (из изображений)", "") or "документ"
+        src_name = src_name.replace(" (из изображений)", "").replace(" (из Word)", "") or "документ"
         dlg = PngExportDialog(src_name, self.doc.page_count, self,
                               default_dir=self.current_dir())
         if dlg.exec() != QDialog.Accepted:
