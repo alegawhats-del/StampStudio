@@ -511,7 +511,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.4.7"
+APP_VERSION = "6.4.8"
 EDITION = "canon"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -4823,9 +4823,17 @@ class ScanLookDialog(QDialog):
 
         side = QVBoxLayout()
         side.setSpacing(8)
-        hint = QLabel("Порядок как в жизни: документ напечатан → на нём печать и подпись "
-                      "→ скан. Поэтому сначала поставьте печать и подпись, потом жмите "
-                      "сюда — они окажутся на бумаге и «отсканируются» вместе с листом.")
+        tip_ai = ""
+        try:
+            if any(AI.page_has_text(src_doc[i]) and not AI.is_scan_page(src_doc[i])
+                   for i in range(src_doc.page_count)):
+                tip_ai = ("<br><b>Совет:</b> проверку ИИ делайте <b>до</b> этого шага — пока в документе "
+                          "текст, ИИ читает его точно.")
+        except Exception:
+            pass
+        hint = QLabel("Сначала поставьте печать и подпись, потом жмите сюда — они окажутся "
+                      "на бумаге и «отсканируются» вместе с листом." + tip_ai)
+        hint.setTextFormat(Qt.RichText)
         hint.setObjectName("hint")
         hint.setWordWrap(True)
         side.addWidget(hint)
@@ -6159,6 +6167,9 @@ class AiCenterDialog(QDialog):
             "искажены буквы. Чем читал последний ответ — написано внизу окна.</p>"
             "<p><b>Счётчик.</b> Слева видно, сколько запросов сделано сегодня у каждого сервиса. "
             "Когда лимит близко, полоска краснеет, а программа сама начинает со следующего сервиса.</p>"
+            "<p><b>Порядок работы.</b> Если документ ещё с текстом (из Word, не скан) — сначала "
+            "проверка и данные, потом печать с подписью, и только в конце «Как скан». "
+            "Пока текст настоящий, ИИ читает его без ошибок и одним запросом.</p>"
             "<p>ИИ может ошибаться — цифры и реквизиты сверяйте с документом.</p>")
         self.home.setVisible(True)
 
