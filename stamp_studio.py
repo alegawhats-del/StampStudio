@@ -406,13 +406,13 @@ QToolButton#ghost:hover { background: rgba(214, 154, 51, 0.22); }
 QToolButton#ghost:pressed { background: rgba(214, 154, 51, 0.40); }
 QPushButton#aiact { text-align: left; padding: 6px 12px; }
 QDialog#embedded { background: transparent; }
-QToolBar#tools { background: #171a22; border: none; border-right: 1px solid #262b39; padding: 6px 5px; spacing: 3px; }
-QToolBar#tools QToolButton { min-width: 30px; max-width: 30px; min-height: 30px; max-height: 30px; padding: 0;
+QToolBar#tools { background: #171a22; border: none; border-right: 1px solid #262b39; padding: 4px 5px; spacing: 2px; }
+QToolBar#tools QToolButton { min-width: 30px; max-width: 30px; min-height: 28px; max-height: 28px; padding: 0;
     background: transparent; border: 1px solid transparent; border-radius: 8px; }
 QToolBar#tools QToolButton:hover { background: #232735; border-color: #e8b04b; }
 QToolBar#tools QToolButton:checked { background: #3a321c; border-color: #e8b04b; }
 QToolBar#tools QToolButton:disabled { background: transparent; border-color: transparent; }
-QToolBar#tools::separator { background: #2a2f3d; height: 1px; margin: 4px 5px; }
+QToolBar#tools::separator { background: #2a2f3d; height: 1px; margin: 3px 5px; }
 QMenuBar { background: #171a22; border-bottom: 1px solid #262b39; padding: 1px 6px; }
 QMenuBar::item { background: transparent; padding: 4px 12px; border-radius: 6px; color: #c9cddb; }
 QMenuBar::item:selected, QMenuBar::item:pressed { background: #2c3145; color: #e8b04b; }
@@ -481,13 +481,13 @@ QToolButton#ghost:hover { background: rgba(214, 154, 51, 0.22); }
 QToolButton#ghost:pressed { background: rgba(214, 154, 51, 0.40); }
 QPushButton#aiact { text-align: left; padding: 6px 12px; }
 QDialog#embedded { background: transparent; }
-QToolBar#tools { background: #fbf9f4; border: none; border-right: 1px solid #e6e1d6; padding: 6px 5px; spacing: 3px; }
-QToolBar#tools QToolButton { min-width: 30px; max-width: 30px; min-height: 30px; max-height: 30px; padding: 0;
+QToolBar#tools { background: #fbf9f4; border: none; border-right: 1px solid #e6e1d6; padding: 4px 5px; spacing: 2px; }
+QToolBar#tools QToolButton { min-width: 30px; max-width: 30px; min-height: 28px; max-height: 28px; padding: 0;
     background: transparent; border: 1px solid transparent; border-radius: 8px; }
 QToolBar#tools QToolButton:hover { background: #ffffff; border-color: #d69a33; }
 QToolBar#tools QToolButton:checked { background: #fbefd3; border-color: #d69a33; }
 QToolBar#tools QToolButton:disabled { background: transparent; border-color: transparent; }
-QToolBar#tools::separator { background: #e6e1d6; height: 1px; margin: 4px 5px; }
+QToolBar#tools::separator { background: #e6e1d6; height: 1px; margin: 3px 5px; }
 QMenuBar { background: #fbf9f4; border-bottom: 1px solid #e6e1d6; padding: 1px 6px; }
 QMenuBar::item { background: transparent; padding: 4px 12px; border-radius: 6px; color: #4a4636; }
 QMenuBar::item:selected, QMenuBar::item:pressed { background: #f4e3c2; color: #6b4a00; }
@@ -525,7 +525,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.6.0"
+APP_VERSION = "6.6.1"
 EDITION = "main"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -1650,6 +1650,12 @@ def draw_icon(kind: str, color: str, size: int = 64) -> QIcon:
     elif kind == "word":
         sheet()
         fl(5.8, 8.0, 6.9, 11.6, 8.2, 8.8, 9.5, 11.6, 10.6, 8.0)
+    elif kind == "word_edit":
+        fl(7.0, 13.6, 3.4, 13.6, 3.4, 2.4, 8.6, 2.4, 11.4, 5.2, 11.4, 6.6)      # лист Word
+        fl(8.6, 2.4, 8.6, 5.2, 11.4, 5.2)
+        fl(5.4, 7.4, 6.2, 10.0, 7.2, 8.0, 8.2, 10.0, 9.0, 7.4)                  # буква W
+        fl(9.0, 14.4, 9.6, 11.8, 13.4, 8.0, 15.4, 10.0, 11.6, 13.8, 9.0, 14.4)  # карандаш
+        fl(12.4, 9.0, 14.4, 11.0)
     elif kind == "to_pdf":
         sheet()
         fl(8.2, 6.8, 8.2, 11.4); fl(6.2, 9.4, 8.2, 11.4, 10.2, 9.4)
@@ -5433,6 +5439,215 @@ class DateTimeDialog(QDialog):
         self.accept()
 
 
+class SettingsDialog(QDialog):
+    """Файл → Настройки: всё, что настраивается в программе, в одном окне по разделам."""
+
+    def __init__(self, win):
+        super().__init__(win)
+        self.win = win
+        self.setWindowTitle("Настройки")
+        self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
+        self.resize(760, 500)
+        self.setMinimumSize(700, 460)
+        st = settings_load()
+        root = QVBoxLayout(self)
+        root.setContentsMargins(16, 14, 16, 12)
+        root.setSpacing(10)
+        body = QHBoxLayout()
+        body.setSpacing(12)
+        root.addLayout(body, 1)
+        self.cats = QListWidget()
+        self.cats.setFixedWidth(180)
+        self.cats.setSpacing(2)
+        self.cats.setFocusPolicy(Qt.NoFocus)
+        body.addWidget(self.cats)
+        self.stack = QStackedWidget()
+        body.addWidget(self.stack, 1)
+
+        def page(title, hint=""):
+            wdg = QWidget()
+            lay = QVBoxLayout(wdg)
+            lay.setContentsMargins(6, 2, 6, 2)
+            lay.setSpacing(9)
+            h = QLabel(title)
+            h.setObjectName("aihead")
+            lay.addWidget(h)
+            if hint:
+                t = QLabel(hint)
+                t.setObjectName("hint")
+                t.setWordWrap(True)
+                lay.addWidget(t)
+            self.cats.addItem(title)
+            self.stack.addWidget(wdg)
+            return lay
+
+        def check(lay, text, key, default, tip=""):
+            c = QCheckBox(text)
+            c.setChecked(bool(st.get(key, default)))
+            if tip:
+                c.setToolTip(tip)
+            lay.addWidget(c)
+            self._checks.append((c, key))
+            return c
+
+        def button(lay, text, slot, tip=""):
+            row = QHBoxLayout()
+            b = QPushButton(text)
+            b.setMinimumHeight(30)
+            if tip:
+                b.setToolTip(tip)
+            b.clicked.connect(slot)
+            row.addWidget(b)
+            row.addStretch(1)
+            lay.addLayout(row)
+            return b
+
+        self._checks = []
+        # ---- Общие
+        l = page("Общие")
+        self.rb_light = QRadioButton("Светлая тема")
+        self.rb_dark = QRadioButton("Тёмная тема")
+        (self.rb_dark if win.theme == "dark" else self.rb_light).setChecked(True)
+        tr = QHBoxLayout()
+        tr.addWidget(self.rb_light)
+        tr.addWidget(self.rb_dark)
+        tr.addStretch(1)
+        l.addLayout(tr)
+        l.addStretch(1)
+        # ---- Обновления
+        l = page("Обновления", f"Сейчас установлена версия {APP_VERSION}.")
+        check(l, "Проверять обновления при запуске", "auto_update", True,
+              "Программа сама спросит, когда выйдет новая версия")
+        button(l, "Проверить сейчас", lambda: win.check_updates(silent=False))
+        button(l, "Версии и откат…", win.show_versions, "Вернуться к прежней версии, если новая не подошла")
+        l.addStretch(1)
+        # ---- Дата и время
+        l = page("Дата и время", "Дата внизу окна; её же ИИ считает сегодняшней, когда проверяет документ.")
+        self.lbl_date = QLabel("")
+        self.lbl_date.setObjectName("plain")
+        l.addWidget(self.lbl_date)
+        button(l, "Настроить дату и время…", self._date)
+        l.addStretch(1)
+        # ---- Сохранение
+        l = page("Сохранение", "Значения по умолчанию для окна «Сохранить как». В самом окне их можно менять на ходу.")
+        check(l, "Вшивать печати и подписи в страницу", "flatten_on_save", True,
+              "Печать становится частью страницы — её нельзя сдвинуть или вытащить из PDF")
+        check(l, "Очищать метаданные PDF (автор, программа, даты)", "clean_metadata", True)
+        l.addStretch(1)
+        # ---- Сканер
+        l = page("Сканер")
+        check(l, "Сканировать через окно драйвера сканера", "scan_via_dialog", False,
+              "Включите, если нужны настройки самого сканера: двусторонняя подача, яркость и т. п.")
+        l.addStretch(1)
+        # ---- ИИ
+        l = page("ИИ-помощник", "Что ИИ делает сам и через какие сервисы работает.")
+        self.chk_ai = QCheckBox("Работать автоматически")
+        self.chk_ai.setChecked(bool(st.get("ai_auto")))
+        self.chk_ai.setToolTip("То же, что галочка в меню «ИИ»")
+        l.addWidget(self.chk_ai)
+        check(l, "   после сканирования предлагать имя файла", "ai_auto_name", True)
+        check(l, "   после сканирования распознавать текст", "ai_auto_ocr", True)
+        check(l, "Если сервис не отвечает — перейти к следующему", "ai_failover", True)
+        button(l, "Ключи и сервисы ИИ…", win.ai_settings)
+        l.addStretch(1)
+        # ---- Редактор Word
+        l = page("Редактор Word", "Сохранённые данные клиентов и поля, которые вы отметили в шаблонах. "
+                                  "Хранятся только на этом компьютере.")
+        cap = QLabel("Клиенты:")
+        cap.setObjectName("plain")
+        l.addWidget(cap)
+        self.lst_cl = QListWidget()
+        self.lst_cl.setMaximumHeight(110)
+        l.addWidget(self.lst_cl)
+        button(l, "Удалить выбранного клиента", self._del_client)
+        cap = QLabel("Шаблоны со своими полями:")
+        cap.setObjectName("plain")
+        l.addWidget(cap)
+        self.lst_tp = QListWidget()
+        self.lst_tp.setMaximumHeight(90)
+        l.addWidget(self.lst_tp)
+        button(l, "Забыть поля выбранного шаблона", self._del_marks)
+        l.addStretch(1)
+        # ---- Данные программы
+        l = page("Данные программы", "Библиотека печатей, настройки и ключи лежат в одной папке. "
+                                     "Скопируйте её — и перенесёте программу на другой компьютер со всеми печатями.")
+        pth = QLabel(LIB_DIR)
+        pth.setObjectName("path")
+        pth.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        pth.setWordWrap(True)
+        l.addWidget(pth)
+        button(l, "Открыть папку", lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(LIB_DIR)))
+        l.addStretch(1)
+
+        row = QHBoxLayout()
+        row.addStretch(1)
+        ok = QPushButton("Сохранить")
+        ok.setObjectName("primary")
+        ok.clicked.connect(self._save)
+        row.addWidget(ok)
+        b = QPushButton("Закрыть")
+        b.clicked.connect(self.reject)
+        row.addWidget(b)
+        root.addLayout(row)
+        self.cats.currentRowChanged.connect(self.stack.setCurrentIndex)
+        self.cats.setCurrentRow(0)
+        self._fill()
+
+    def _fill(self):
+        st = settings_load()
+        mode, zone, _shift = AI.date_settings(st)
+        how = {"pc": "как на этом компьютере", "zone": AI.zone_title(zone), "manual": "дата задана вручную"}.get(mode, "")
+        self.lbl_date.setText(f"Сегодня: {AI.today_text(True)}  ·  {how}")
+        self.lst_cl.clear()
+        for name, data in sorted((st.get("word_clients") or {}).items(), key=lambda x: x[0].lower()):
+            it = QListWidgetItem(f"{name}  ·  полей: {len(data)}")
+            it.setData(Qt.UserRole, name)
+            self.lst_cl.addItem(it)
+        self.lst_tp.clear()
+        for name, marks in sorted((st.get("word_marks") or {}).items()):
+            if marks:
+                it = QListWidgetItem(f"{name}  ·  полей: {len(marks)}")
+                it.setData(Qt.UserRole, name)
+                self.lst_tp.addItem(it)
+
+    def _date(self):
+        if DateTimeDialog(self).exec() == QDialog.Accepted:
+            self.win._date_tick()
+            self._fill()
+
+    def _del_client(self):
+        it = self.lst_cl.currentItem()
+        if it is None:
+            return
+        st = settings_load()
+        (st.get("word_clients") or {}).pop(it.data(Qt.UserRole), None)
+        settings_save(st)
+        self._fill()
+
+    def _del_marks(self):
+        it = self.lst_tp.currentItem()
+        if it is None:
+            return
+        st = settings_load()
+        (st.get("word_marks") or {}).pop(it.data(Qt.UserRole), None)
+        settings_save(st)
+        self._fill()
+
+    def _save(self):
+        st = settings_load()
+        for c, key in self._checks:
+            st[key] = c.isChecked()
+        settings_save(st)
+        want = "dark" if self.rb_dark.isChecked() else "light"
+        if want != self.win.theme:
+            self.win.toggle_theme()
+        if self.chk_ai.isChecked() != bool(settings_load().get("ai_auto")):
+            self.win.act_ai_auto.setChecked(self.chk_ai.isChecked())
+            self.win.ai_toggle_auto(self.chk_ai.isChecked())
+        self.win._ai_center_refresh()
+        self.accept()
+
+
 class ReleasesThread(QThread):
     """Список выпущенных версий с GitHub — для возврата к прежней версии."""
     result = Signal(object, str)        # ([{version, date, url, notes}], текст ошибки)
@@ -7760,6 +7975,9 @@ class MainWindow(QMainWindow):
         self.center_stack = QStackedWidget()    # 0 — страница документа, 1 — ИИ-помощник
         self.center_stack.addWidget(self.view)
         self.setCentralWidget(self.center_stack)
+        self._sc_esc = QShortcut(QKeySequence(Qt.Key_Escape), self)
+        self._sc_esc.setContext(Qt.WindowShortcut)
+        self._sc_esc.activated.connect(self._esc)
         self.scene.selectionChanged.connect(self.sync_panel_from_selection)
         self.scene.selectionChanged.connect(self._update_geom_title)
 
@@ -7862,11 +8080,10 @@ class MainWindow(QMainWindow):
         self.btn_ai = QToolButton()
         self.btn_ai.setText("ИИ")
         self._ai_btn_tip = ("ИИ-помощник: открыть его прямо в этом окне, на месте страницы  (Ctrl+Shift+I)\n"
-                            "Стрелка рядом — быстрое меню: имя файла, печать на место, данные, проверка, текст")
+                            "Отдельные функции — в меню «ИИ» вверху")
         self.btn_ai.setToolTip(self._ai_btn_tip)
         self.btn_ai.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
-        self.btn_ai.setPopupMode(QToolButton.MenuButtonPopup)
-        self.btn_ai.setMenu(self._build_ai_menu())
+        self._build_ai_menu()                   # само меню — в строке меню «ИИ»; кнопка цельная, без стрелки
         self.btn_ai.clicked.connect(self.ai_center)
         tb.addWidget(self.btn_ai)
         self._themed_toolbtns = [(self.btn_ai, "ai")]
@@ -8056,11 +8273,15 @@ class MainWindow(QMainWindow):
         for a in (self.act_save, self.act_save_as, self.act_png):
             m.addAction(a)
         m.addSeparator()
-        self.act_word = act("Редактор Word — заполнить и поправить документ…", self.act_word_fill_run, "Ctrl+Shift+W",
+        self.act_settings = act("Настройки…", lambda: SettingsDialog(self).exec(), "Ctrl+,",
+                                "Все настройки программы по разделам: тема, обновления, дата, сохранение, сканер, ИИ, Word")
+        self.act_word = act("Редактор Word…", self.act_word_fill_run, "Ctrl+Shift+W",
                             "Заполнить шаблон Word: ФИО, паспорт, даты, суммы прописью — оформление не меняется")
         m.addAction(self.act_word)
         m.addAction(self.act_meta)
         m.addAction(self.act_close)
+        m.addSeparator()
+        m.addAction(self.act_settings)
         m.addSeparator()
         m.addAction(act("Выход", self.close, "Ctrl+Q", "Закрыть программу"))
 
@@ -8141,7 +8362,7 @@ class MainWindow(QMainWindow):
             [(self.act_place, "stamp"), (self.act_pen, "pen"), (self.act_ai_place, "aim"), (self.act_delete, "trash")],
             [(self.act_rot_l, "rot_left"), (self.act_rot_r, "rot_right"), (self.act_crop, "crop"),
              (self.act_frame, "frame"), (self.act_split, "split")],
-            [(self.act_scanlook, "scanlook"), (self.act_ai_ocr, "ocr")],
+            [(self.act_scanlook, "scanlook"), (self.act_ai_ocr, "ocr"), (self.act_word, "word_edit")],
             [(self.act_zoom_in, "zoom_in"), (self.act_zoom_out, "zoom_out"), (self.act_fit, "fit")],
         ]
         for n, group in enumerate(groups):
@@ -9132,7 +9353,7 @@ class MainWindow(QMainWindow):
                                  "Оформление документа не меняется, исходный файл остаётся чистым  (Ctrl+Shift+W)")
         self.btn_fill.clicked.connect(self._fill_selected)
         self.btn_fill.setVisible(False)
-        self._themed_buttons.append((self.btn_fill, "word", False))
+        self._themed_buttons.append((self.btn_fill, "word_edit", False))
         orow = QHBoxLayout()
         orow.setSpacing(6)
         orow.addWidget(b_open, 1)
@@ -9550,7 +9771,7 @@ class MainWindow(QMainWindow):
         else:
             menu.addAction("Открыть", lambda: self.open_from_browser(item))
             if path.lower().endswith(".docx"):
-                menu.addAction(draw_icon("word", self._icon_color()), "Открыть в редакторе Word", lambda: self.word_fill(path))
+                menu.addAction(draw_icon("word_edit", self._icon_color()), "Открыть в редакторе Word", lambda: self.word_fill(path))
             menu.addSeparator()
             menu.addAction("Показать метаданные", lambda: self._meta_for_file(path))
             menu.addSeparator()
@@ -9876,6 +10097,39 @@ class MainWindow(QMainWindow):
         if layer is not None and self.view.pen_bar is not None:
             layer.color = self.view.pen_bar.ink()
             layer.update()
+
+    def _esc(self):
+        """Esc: выйти из ручки → вернуться со страницы ИИ/Word → снять выделение → закрыть документ."""
+        if self.view.pen_active():
+            self.pen_finish(False)
+            return
+        if self._page_on():
+            self.ai_mode(False)
+            return
+        if self.scene.selectedItems():
+            self.scene.clearSelection()
+            return
+        if self.doc is None:
+            return
+        path = str(self.doc_path or "")
+        unsaved = not (path and os.path.isfile(path))
+        try:
+            unsaved = unsaved or bool(self.doc.is_dirty)
+        except Exception:
+            pass
+        if unsaved and not self.stamps:               # про печати close_document спросит сам
+            box = QMessageBox(self)
+            box.setWindowTitle("Закрыть документ")
+            box.setIcon(QMessageBox.Question)
+            box.setText("В документе есть несохранённые изменения.")
+            box.setInformativeText("Закрыть без сохранения?")
+            b_yes = box.addButton("Закрыть без сохранения", QMessageBox.DestructiveRole)
+            b_no = box.addButton("Отмена", QMessageBox.RejectRole)
+            box.setDefaultButton(b_no)
+            box.exec()
+            if box.clickedButton() is not b_yes:
+                return
+        self.close_document()
 
     def _pen_key(self, event):
         if event.key() == Qt.Key_Escape:
