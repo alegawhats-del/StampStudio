@@ -39,7 +39,11 @@ from PySide6.QtWidgets import (
 from PySide6.QtWidgets import (QProgressBar, QTableWidget, QTableWidgetItem, QHeaderView,
                                QAbstractItemView, QStackedWidget)
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtCore import QUrl, QFileSystemWatcher, QEventLoop, QPoint
+from PySide6.QtCore import QUrl, QFileSystemWatcher, QEventLoop, QPoint, QDate
+from PySide6.QtWidgets import QDateEdit
+from PySide6.QtCore import QFile
+from PySide6.QtGui import QShortcut
+import datetime
 import stamp_ai as AI
 
 PREVIEW_DPI = 150          # DPI отрисовки страницы в редакторе
@@ -517,7 +521,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.4.15"
+APP_VERSION = "6.4.16"
 EDITION = "main"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -749,6 +753,26 @@ class ColumnGrid(QListWidget):
         # по умолчанию QListWidget просит 192px — из-за этого панель
         # переставала помещаться на невысоких экранах
         return QSize(220, self.minimumHeight() or 96)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.fit_grid()
+
+
+class PageGrid(QListWidget):
+    """Миниатюры страниц: всегда не меньше двух столбцов, размер подстраивается под ширину панели."""
+
+    def fit_grid(self):
+        vp = self.viewport().width()
+        if vp <= 0:
+            return
+        cols = max(2, vp // 150)
+        cell = max(70, (vp - 2) // cols)
+        if self.gridSize().width() != cell:
+            iw = max(48, cell - 30)
+            ih = int(iw * 1.36)
+            self.setIconSize(QSize(iw, ih))
+            self.setGridSize(QSize(cell, ih + 30))
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -1085,7 +1109,9 @@ class PenBar(QFrame):
             lay.addWidget(b)
             return b
 
-        self.b_undo = btn("↶", "Отменить последний штрих  (Ctrl+Z)", on_undo)
+        self.b_undo = btn("", "Отменить последний штрих  (Ctrl+Z)", on_undo)
+        self.b_undo.setIcon(draw_icon("undo", ui_icon_color()))
+        self.b_undo.setIconSize(QSize(18, 18))
         self.b_undo.setFixedWidth(40)
         self.b_clear = btn("Очистить", "Стереть всё нарисованное", on_clear)
         self.b_sets = QPushButton("Наборы")
@@ -1472,6 +1498,11 @@ from PySide6.QtGui import QPen, QColor, QPainterPath, QBrush
 from PySide6.QtCore import QPointF
 
 
+def ui_icon_color() -> str:
+    """Цвет значков под текущую тему — для окон, которые создаются по ходу работы."""
+    return "#e8e6e1" if settings_load().get("theme") == "dark" else "#4a4636"
+
+
 def draw_icon(kind: str, color: str, size: int = 64) -> QIcon:
     """Единый набор нарисованных иконок — выглядит цельно в обеих темах."""
     pm = QPixmap(size, size)
@@ -1493,7 +1524,96 @@ def draw_icon(kind: str, color: str, size: int = 64) -> QIcon:
     def rect(x, y, w, h, r=1.5):
         p.drawRoundedRect(int(x * u), int(y * u), int(w * u), int(h * u), r * u, r * u)
 
-    if kind == "folder":
+    def fl(*pts):
+        """Ломаная по точкам в сетке 16×16 — без округления до пикселя, линии выходят чистыми."""
+        path = QPainterPath()
+        path.moveTo(pts[0] * u, pts[1] * u)
+        for i in range(2, len(pts), 2):
+            path.lineTo(pts[i] * u, pts[i + 1] * u)
+        p.drawPath(path)
+
+    def sheet():
+        """Лист с загнутым уголком — основа значков файлов."""
+        path = QPainterPath()
+        path.moveTo(4.0 * u, 2.4 * u); path.lineTo(9.4 * u, 2.4 * u); path.lineTo(12.4 * u, 5.4 * u)
+        path.lineTo(12.4 * u, 13.6 * u); path.lineTo(4.0 * u, 13.6 * u)
+        path.closeSubpath()
+        p.drawPath(path)
+        fl(9.4, 2.4, 9.4, 5.4, 12.4, 5.4)
+
+    def turn(mirror, sweep=290, dot=False):
+        """Круговая стрелка в том же начертании, что и «Обновить»."""
+        if mirror:
+            p.save()
+            p.translate(s, 0)
+            p.scale(-1, 1)
+        path = QPainterPath()
+        path.arcMoveTo(3.0 * u, 3.0 * u, 10.0 * u, 10.0 * u, 50)
+        path.arcTo(3.0 * u, 3.0 * u, 10.0 * u, 10.0 * u, 50, sweep)
+        p.drawPath(path)
+        p.setBrush(QBrush(c))
+        p.setPen(Qt.NoPen)
+        p.drawPolygon([QPointF(13.9 * u, 2.6 * u), QPointF(13.9 * u, 7.0 * u), QPointF(9.7 * u, 6.2 * u)])
+        if dot:
+            p.drawEllipse(QPointF(8 * u, 8 * u), 1.5 * u, 1.5 * u)
+        p.setBrush(Qt.NoBrush)
+        p.setPen(pen)
+        if mirror:
+            p.restore()
+
+    if kind == "back":
+        fl(12.8, 8, 3.4, 8)
+        fl(7.4, 3.8, 3.2, 8, 7.4, 12.2)
+    elif kind == "undo":
+        path = QPainterPath()
+        path.moveTo(3.6 * u, 6.4 * u); path.lineTo(9.6 * u, 6.4 * u)
+        path.arcTo(6.6 * u, 6.4 * u, 6.0 * u, 6.0 * u, 90, -180)
+        path.lineTo(6.2 * u, 12.4 * u)
+        p.drawPath(path)
+        fl(6.6, 3.4, 3.4, 6.4, 6.6, 9.4)
+    elif kind == "rot_left":
+        turn(True, 250, dot=True)
+    elif kind == "rot_right":
+        turn(False, 250, dot=True)
+    elif kind == "moon":
+        big = QPainterPath(); big.addEllipse(QPointF(7.6 * u, 8.4 * u), 5.2 * u, 5.2 * u)
+        cut = QPainterPath(); cut.addEllipse(QPointF(10.6 * u, 5.6 * u), 4.4 * u, 4.4 * u)
+        p.drawPath(big.subtracted(cut))
+    elif kind == "pdf":
+        sheet()
+        fl(6.2, 8.6, 10.2, 8.6); fl(6.2, 11.0, 10.2, 11.0)
+    elif kind == "word":
+        sheet()
+        fl(5.8, 8.0, 6.9, 11.6, 8.2, 8.8, 9.5, 11.6, 10.6, 8.0)
+    elif kind == "to_pdf":
+        sheet()
+        fl(8.2, 6.8, 8.2, 11.4); fl(6.2, 9.4, 8.2, 11.4, 10.2, 9.4)
+    elif kind == "to_png":
+        rect(2.4, 3.0, 11.2, 8.4)
+        fl(4.2, 9.4, 6.8, 6.8, 8.6, 8.6, 10.2, 7.0, 11.8, 8.6)
+        fl(8, 12.4, 8, 15.0); fl(6.2, 13.4, 8, 15.2, 9.8, 13.4)
+    elif kind == "half_v":
+        rect(3.0, 2.6, 10.0, 10.8)
+        fl(1.6, 8, 14.4, 8)
+    elif kind == "half_h":
+        rect(2.6, 3.0, 10.8, 10.0)
+        fl(8, 1.6, 8, 14.4)
+    elif kind == "external":
+        fl(7.0, 3.6, 3.4, 3.6, 3.4, 12.6, 12.4, 12.6, 12.4, 9.0)
+        fl(9.2, 3.2, 12.8, 3.2, 12.8, 6.8); fl(12.6, 3.4, 7.6, 8.4)
+    elif kind == "up":
+        fl(8, 12.8, 8, 3.4); fl(4.0, 7.4, 8, 3.2, 12.0, 7.4)
+    elif kind == "down":
+        fl(8, 3.2, 8, 12.6); fl(4.0, 8.6, 8, 12.8, 12.0, 8.6)
+    elif kind == "close":
+        fl(4.2, 4.2, 11.8, 11.8); fl(11.8, 4.2, 4.2, 11.8)
+    elif kind == "plus":
+        fl(8, 3.2, 8, 12.8); fl(3.2, 8, 12.8, 8)
+    elif kind == "chev_down":
+        fl(4.4, 6.2, 8, 9.8, 11.6, 6.2)
+    elif kind == "chev_right":
+        fl(6.2, 4.4, 9.8, 8, 6.2, 11.6)
+    elif kind == "folder":
         path = QPainterPath()
         path.moveTo(2 * u, 5 * u)
         path.lineTo(2 * u, 3.4 * u); path.lineTo(6.4 * u, 3.4 * u)
@@ -4300,11 +4420,13 @@ class FrameCropDialog(QDialog):
             b_auto = QPushButton("Найти два листа")
             b_auto.setToolTip("Автоматически найти два документа на странице")
             b_auto.clicked.connect(self.auto_two)
-            b_v = QPushButton("Пополам ↕")
-            b_v.setToolTip("Верхняя и нижняя половины")
+            b_v = QPushButton(" Пополам")
+            b_v.setIcon(draw_icon("half_v", ui_icon_color()))
+            b_v.setToolTip("Разделить на верхнюю и нижнюю половины")
             b_v.clicked.connect(lambda: self._halves(True))
-            b_h = QPushButton("Пополам ↔")
-            b_h.setToolTip("Левая и правая половины")
+            b_h = QPushButton(" Пополам")
+            b_h.setIcon(draw_icon("half_h", ui_icon_color()))
+            b_h.setToolTip("Разделить на левую и правую половины")
             b_h.clicked.connect(lambda: self._halves(False))
             quick.addWidget(b_auto)
             row2 = QHBoxLayout()
@@ -5097,6 +5219,155 @@ class UpdateCheckThread(QThread):
             self.result.emit(None, str(e))
 
 
+class DateTimeDialog(QDialog):
+    """Дата и время программы: часы компьютера, любой часовой пояс или своя дата; сверка с интернетом."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Дата и время")
+        self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
+        self.setMinimumWidth(560)
+        st = settings_load()
+        mode, zone, shift = AI.date_settings(st)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(18, 16, 18, 14)
+        lay.setSpacing(10)
+        self.lbl_now = QLabel("")
+        self.lbl_now.setObjectName("aihead")
+        lay.addWidget(self.lbl_now)
+        sub = QLabel("Эта дата стоит внизу окна и передаётся ИИ как сегодняшняя — по ней он судит о датах в документе.")
+        sub.setObjectName("hint")
+        sub.setWordWrap(True)
+        lay.addWidget(sub)
+
+        self.rb_pc = QRadioButton("Автоматически — как на этом компьютере")
+        self.rb_pc.setToolTip("Дата и время берутся из Windows. Подходит почти всегда.")
+        lay.addWidget(self.rb_pc)
+
+        self.rb_zone = QRadioButton("Часовой пояс:")
+        self.rb_zone.setToolTip("Если часы компьютера стоят в другом поясе, а документы оформляются по времени другого города.")
+        self.cmb_zone = QComboBox()
+        self.cmb_zone.setMinimumHeight(30)
+        for key, _ in AI.DATE_ZONES:
+            self.cmb_zone.addItem(AI.zone_title(key), key)
+        i = self.cmb_zone.findData(zone if zone != "pc" else "3")
+        self.cmb_zone.setCurrentIndex(max(0, i))
+        rz = QHBoxLayout()
+        rz.addWidget(self.rb_zone)
+        rz.addWidget(self.cmb_zone, 1)
+        lay.addLayout(rz)
+
+        self.rb_man = QRadioButton("Своя дата:")
+        self.rb_man.setToolTip("Например, документы оформляются завтрашним числом.\n"
+                               "Программа запомнит разницу в днях и будет сама переходить на следующий день.")
+        self.ed_date = QDateEdit()
+        self.ed_date.setCalendarPopup(True)
+        self.ed_date.setDisplayFormat("dd.MM.yyyy")
+        self.ed_date.setMinimumHeight(30)
+        base = datetime.date.today() + datetime.timedelta(days=shift if mode == "manual" else 0)
+        self.ed_date.setDate(QDate(base.year, base.month, base.day))
+        self.lbl_shift = QLabel("")
+        self.lbl_shift.setObjectName("hint")
+        rm = QHBoxLayout()
+        rm.addWidget(self.rb_man)
+        rm.addWidget(self.ed_date)
+        rm.addWidget(self.lbl_shift, 1)
+        lay.addLayout(rm)
+
+        self.chk_time = QCheckBox("Показывать внизу окна и время (часы:минуты)")
+        self.chk_time.setChecked(bool(st.get("date_show_time")))
+        lay.addWidget(self.chk_time)
+
+        net = QHBoxLayout()
+        self.b_net = QPushButton("Сверить с интернетом")
+        self.b_net.setToolTip("Узнать точное время из сети и сравнить с часами компьютера")
+        self.b_net.clicked.connect(self._check_net)
+        net.addWidget(self.b_net)
+        self.lbl_net = QLabel("")
+        self.lbl_net.setObjectName("hint")
+        self.lbl_net.setWordWrap(True)
+        net.addWidget(self.lbl_net, 1)
+        lay.addLayout(net)
+
+        row = QHBoxLayout()
+        row.addStretch(1)
+        ok = QPushButton("Сохранить")
+        ok.setObjectName("primary")
+        ok.clicked.connect(self._save)
+        row.addWidget(ok)
+        b = QPushButton("Отмена")
+        b.clicked.connect(self.reject)
+        row.addWidget(b)
+        lay.addLayout(row)
+
+        {"pc": self.rb_pc, "zone": self.rb_zone, "manual": self.rb_man}.get(mode, self.rb_pc).setChecked(True)
+        for wdg in (self.rb_pc, self.rb_zone, self.rb_man):
+            wdg.toggled.connect(self._sync)
+        self.cmb_zone.currentIndexChanged.connect(lambda *_: (self.rb_zone.setChecked(True), self._sync()))
+        self.ed_date.dateChanged.connect(lambda *_: (self.rb_man.setChecked(True), self._sync()))
+        self._timer = QTimer(self)
+        self._timer.setInterval(1000)
+        self._timer.timeout.connect(self._sync)
+        self._timer.start()
+        self._sync()
+
+    def values(self):
+        mode = "zone" if self.rb_zone.isChecked() else ("manual" if self.rb_man.isChecked() else "pc")
+        qd = self.ed_date.date()
+        shift = (datetime.date(qd.year(), qd.month(), qd.day()) - datetime.date.today()).days
+        return {"date_mode": mode, "date_zone": self.cmb_zone.currentData() if mode == "zone" else "pc",
+                "date_shift": shift if mode == "manual" else 0, "date_show_time": self.chk_time.isChecked()}
+
+    def _sync(self, *_):
+        v = self.values()
+        t = AI.now(v)
+        day = ("понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье")[t.weekday()]
+        self.lbl_now.setText(f"{t.strftime('%d.%m.%Y')}, {day} · {t.strftime('%H:%M:%S')}")
+        sh = v["date_shift"]
+        self.lbl_shift.setText("" if v["date_mode"] != "manual" else
+                               ("совпадает с компьютером" if not sh else
+                                f"{'+' if sh > 0 else '−'}{abs(sh)} дн. к дате компьютера"))
+
+    def _check_net(self):
+        self.b_net.setEnabled(False)
+        self.lbl_net.setText("Спрашиваю время в интернете…")
+        box = {}
+
+        class _T(QThread):
+            def run(self_t):
+                box["utc"] = AI.internet_time()
+
+        th = _T(self)
+        loop = QEventLoop(self)
+        th.finished.connect(loop.quit)
+        th.start()
+        if th.isRunning():
+            loop.exec()
+        th.wait()
+        self.b_net.setEnabled(True)
+        utc = box.get("utc")
+        if utc is None:
+            self.lbl_net.setText("Не получилось — нет интернета. Программа продолжит брать время с компьютера.")
+            return
+        pc_utc = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+        diff = (pc_utc - utc).total_seconds()
+        local = utc + (datetime.datetime.now() - pc_utc)
+        if abs(diff) < 90:
+            self.lbl_net.setText(f"✔ Часы компьютера точные: в интернете сейчас {local.strftime('%d.%m.%Y %H:%M')} "
+                                 "(по поясу компьютера).")
+        else:
+            m = int(abs(diff) // 60)
+            self.lbl_net.setText(f"⚠ Часы компьютера {'спешат' if diff > 0 else 'отстают'} на {m} мин: "
+                                 f"в интернете {local.strftime('%d.%m.%Y %H:%M')}. Поправьте время в Windows "
+                                 "(Параметры → Время и язык → «Синхронизировать»).")
+
+    def _save(self):
+        st = settings_load()
+        st.update(self.values())
+        settings_save(st)
+        self.accept()
+
+
 class ReleasesThread(QThread):
     """Список выпущенных версий с GitHub — для возврата к прежней версии."""
     result = Signal(object, str)        # ([{version, date, url, notes}], текст ошибки)
@@ -5521,7 +5792,8 @@ class AiSettingsDialog(QDialog):
         self.btn_eye.setCheckable(True)
         self.btn_eye.toggled.connect(self._eye)
         krow.addWidget(self.btn_eye)
-        self.btn_get = QPushButton("Получить ключ ↗")
+        self.btn_get = QPushButton(" Получить ключ")
+        self.btn_get.setIcon(draw_icon("external", ui_icon_color()))
         self.btn_get.setToolTip("Откроется страница сервиса, где создаётся бесплатный ключ")
         self.btn_get.clicked.connect(self._open_key_page)
         krow.addWidget(self.btn_get)
@@ -6177,7 +6449,10 @@ class AiCenterDialog(QDialog):
 
         head = QHBoxLayout()
         head.setSpacing(10)
-        self.b_back = QPushButton("←  К документу")
+        self.b_back = QPushButton(" К документу")
+        self.b_back.setIcon(draw_icon("back", win._icon_color()))
+        self.b_back.setIconSize(QSize(16, 16))
+        win._themed_buttons.append((self.b_back, "back", False))
         self.b_back.setCursor(Qt.PointingHandCursor)
         self.b_back.setToolTip("Вернуться к странице документа (Esc). Результат ИИ останется здесь.")
         self.b_back.clicked.connect(lambda: win.ai_mode(False))
@@ -6932,6 +7207,8 @@ class MainWindow(QMainWindow):
         m.addSeparator()
         self.act_dark = act("Тёмная тема", self.toggle_theme, None, "Светлая / тёмная тема", checkable=True)
         m.addAction(self.act_dark)
+        m.addAction(act("Дата и время…", self._date_menu, None,
+                        "Какую дату программа и ИИ считают сегодняшней: компьютер, часовой пояс или своя дата"))
 
         # ---- ИИ (то же меню, что у кнопки «ИИ» в панели)
         mb.addMenu(self.ai_menu)
@@ -7860,6 +8137,16 @@ class MainWindow(QMainWindow):
         b_ref.setShortcut(QKeySequence("F5"))
         b_ref.clicked.connect(lambda: self.reload_files(manual=True))
         self._themed_toolbtns.append((b_ref, "refresh"))
+        b_del = QToolButton()
+        b_del.setObjectName("ghost")
+        b_del.setAutoRaise(True)
+        b_del.setCursor(Qt.PointingHandCursor)
+        b_del.setFixedSize(24, 24)
+        b_del.setIconSize(QSize(16, 16))
+        b_del.setToolTip("Удалить выбранный файл в корзину Windows  (Del)\nИз корзины его можно вернуть")
+        b_del.clicked.connect(self.trash_selected_file)
+        self._themed_toolbtns.append((b_del, "trash"))
+        cap_row.addWidget(b_del, 0)
         cap_row.addWidget(b_ref, 0)
         tl.addLayout(cap_row)
 
@@ -7872,6 +8159,9 @@ class MainWindow(QMainWindow):
         self.file_list.itemDoubleClicked.connect(self.open_from_browser)
         self.file_list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.file_list.customContextMenuRequested.connect(self.file_menu)
+        sc_del = QShortcut(QKeySequence(Qt.Key_Delete), self.file_list)
+        sc_del.setContext(Qt.WidgetShortcut)
+        sc_del.activated.connect(self.trash_selected_file)
         tl.addWidget(self.file_list, 1)
 
         b_open = QPushButton(" Открыть выбранный файл")
@@ -7890,7 +8180,7 @@ class MainWindow(QMainWindow):
         cap_pages = QLabel("<b>Страницы документа</b>")
         lay.addWidget(cap_pages)
 
-        self.page_list = QListWidget()
+        self.page_list = PageGrid()
         self.page_list.setViewMode(QListWidget.IconMode)
         self.page_list.setIconSize(QSize(104, 140))
         self.page_list.setGridSize(QSize(140, 170))
@@ -7898,7 +8188,8 @@ class MainWindow(QMainWindow):
         self.page_list.setMovement(QListWidget.Snap)
         self.page_list.setSelectionMode(QListWidget.ExtendedSelection)
         self.page_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.page_list.setSpacing(2)
+        self.page_list.setSpacing(0)
+        self.page_list.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
         self.page_list.currentRowChanged.connect(self.show_page)
         self.page_list.itemClicked.connect(lambda *_: self.ai_mode(False) if self._ai_on() else None)
         self.page_list.model().rowsMoved.connect(self._pages_dragged)
@@ -8133,7 +8424,7 @@ class MainWindow(QMainWindow):
             low = f.lower()
             is_doc = low.endswith(AI.OFFICE_EXT)
             if low.endswith(".pdf"):
-                it = QListWidgetItem(draw_icon("to_pdf", c_pdf.name()), f)
+                it = QListWidgetItem(draw_icon("pdf", c_pdf.name()), f)
                 it.setForeground(c_pdf)
             elif is_doc:
                 it = QListWidgetItem(draw_icon("word", c_doc.name()), f)
@@ -8217,6 +8508,64 @@ class MainWindow(QMainWindow):
         self.show_toast("✔  Word открыт как копия — сам файл не меняется", 3600)
         self.statusBar().showMessage(msg, 10000)
 
+    def trash_selected_file(self):
+        item = self.file_list.currentItem()
+        data = item.data(Qt.UserRole) if item is not None else None
+        if not data:
+            self.statusBar().showMessage("Сначала выберите файл в списке", 4000)
+            return
+        kind, path = data
+        if kind != "file":
+            self.statusBar().showMessage("Папки удаляются в Проводнике — здесь удаляются только файлы", 6000)
+            return
+        self.trash_file(path)
+
+    def trash_file(self, path):
+        """Удалить файл в корзину Windows, не выходя из программы."""
+        name = os.path.basename(path)
+        cur = str(self.doc_path or "")
+        for tail in (" (из изображений)", " (из Word)"):
+            if cur.endswith(tail):
+                cur = cur[:-len(tail)]
+        is_open = self.doc is not None and os.path.normcase(os.path.abspath(cur)) == os.path.normcase(os.path.abspath(path))
+        text = f"Удалить «{name}» в корзину?"
+        if is_open:
+            text += ("\n\nЭтот файл сейчас открыт в программе — он будет закрыт."
+                     + (" Печати на нём не сохранены и пропадут." if self.stamps else ""))
+        box = QMessageBox(self)
+        box.setWindowTitle("Удалить файл")
+        box.setIcon(QMessageBox.Question)
+        box.setText(text)
+        box.setInformativeText("Из корзины файл можно вернуть.")
+        b_yes = box.addButton("Удалить в корзину", QMessageBox.AcceptRole)
+        box.addButton("Отмена", QMessageBox.RejectRole)
+        box.setDefaultButton(b_yes)
+        box.exec()
+        if box.clickedButton() is not b_yes:
+            return
+        if is_open:
+            if self.view.pen_active():
+                self.pen_finish(commit=False)
+            for st in self.stamps:
+                self.scene.removeItem(st)
+            self.stamps.clear()
+            self.close_document()
+        row = self.file_list.currentRow()
+        ok = False
+        try:
+            ok = QFile.moveToTrash(path)
+        except Exception:
+            ok = False
+        if not ok or os.path.exists(path):
+            QMessageBox.warning(self, "Удалить файл",
+                                f"Не получилось удалить «{name}».\n"
+                                "Возможно, файл открыт в другой программе — закройте его там и повторите.")
+            return
+        self.reload_files()
+        if self.file_list.count():
+            self.file_list.setCurrentRow(min(row, self.file_list.count() - 1))
+        self.show_toast(f"✔  «{name}» — в корзине", 3200)
+
     def file_menu(self, pos):
         item = self.file_list.itemAt(pos)
         if item is None or not item.data(Qt.UserRole):
@@ -8230,6 +8579,9 @@ class MainWindow(QMainWindow):
             menu.addAction("Открыть", lambda: self.open_from_browser(item))
             menu.addSeparator()
             menu.addAction("Показать метаданные", lambda: self._meta_for_file(path))
+            menu.addSeparator()
+            menu.addAction(draw_icon("trash", self._icon_color()), "Удалить в корзину\tDel",
+                           lambda: self.trash_file(path))
         menu.exec(self.file_list.mapToGlobal(pos))
 
     def _tab_for(self, path):
@@ -9087,12 +9439,14 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.RightDockWidgetArea, dock)
 
     def _date_tick(self):
-        zone = str(settings_load().get("date_zone") or "pc")
-        label = dict(AI.DATE_ZONES).get(zone, "")
-        self.btn_date.setText(f" Сегодня: {AI.today_text()} ")
+        st = settings_load()
+        mode, zone, shift = AI.date_settings(st)
+        text = AI.today_text(bool(st.get("date_show_time")))
+        how = {"pc": "по часам этого компьютера", "zone": "часовой пояс " + AI.zone_title(zone),
+               "manual": "дата задана вручную"}.get(mode, "")
+        self.btn_date.setText(f" Сегодня: {text}{' ✎' if mode == 'manual' and shift else ''} ")
         self.btn_date.setToolTip("Эту дату ИИ считает сегодняшней, когда проверяет документ.\n"
-                                 f"Сейчас: {label.lower() if zone == 'pc' else label}.\n"
-                                 "Щёлкните, чтобы выбрать часовой пояс.")
+                                 f"Сейчас: {how}.\nЩёлкните, чтобы настроить дату и время.")
         c = getattr(self, "_ai_center_dlg", None)
         if c is not None:
             try:
@@ -9101,19 +9455,7 @@ class MainWindow(QMainWindow):
                 pass
 
     def _date_menu(self):
-        s = settings_load()
-        cur = str(s.get("date_zone") or "pc")
-        menu = QMenu(self)
-        for key, text in AI.DATE_ZONES:
-            a = menu.addAction(text)
-            a.setCheckable(True)
-            a.setChecked(key == cur)
-            a.setData(key)
-        got = menu.exec(self.btn_date.mapToGlobal(QPoint(0, -menu.sizeHint().height())))
-        if got is not None:
-            s = settings_load()
-            s["date_zone"] = got.data()
-            settings_save(s)
+        if DateTimeDialog(self).exec() == QDialog.Accepted:
             self._date_tick()
 
     def _adv_toggle(self, on, save=True):

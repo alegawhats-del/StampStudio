@@ -637,30 +637,79 @@ def ocr_text_for(bundle):
 
 
 # --------------------------------------------------------------------------- задачи
-DATE_ZONES = (("pc", "Как на этом компьютере"), ("3", "Москва, Минск (UTC+3)"),
-              ("2", "Калининград, Киев зимой (UTC+2)"), ("1", "Варшава, Берлин зимой (UTC+1)"),
-              ("5", "Екатеринбург, Ташкент (UTC+5)"), ("8", "Пекин (UTC+8)"))
+DATE_ZONES = (
+    ("-10", "Гонолулу"), ("-8", "Лос-Анджелес, Ванкувер"), ("-7", "Денвер"), ("-6", "Чикаго, Мехико"),
+    ("-5", "Нью-Йорк, Торонто"), ("-3", "Буэнос-Айрес, Сан-Паулу"), ("0", "Лондон, Лиссабон (зима)"),
+    ("1", "Берлин, Варшава, Париж (зима) · Лондон (лето)"), ("2", "Калининград, Киев, Вильнюс (зима) · Берлин, Варшава (лето)"),
+    ("3", "Москва, Минск, Стамбул · Киев, Вильнюс (лето)"), ("3.5", "Тегеран"), ("4", "Самара, Тбилиси, Баку, Дубай"),
+    ("4.5", "Кабул"), ("5", "Екатеринбург, Ташкент, Астана"), ("5.5", "Дели"), ("6", "Омск, Бишкек"),
+    ("7", "Новосибирск, Красноярск, Бангкок"), ("8", "Иркутск, Пекин, Сингапур"), ("9", "Якутск, Токио, Сеул"),
+    ("9.5", "Аделаида"), ("10", "Владивосток, Сидней"), ("11", "Магадан, Сахалин"), ("12", "Камчатка, Окленд"))
+
+
+def zone_title(key):
+    try:
+        h = float(key)
+    except (TypeError, ValueError):
+        return "как на этом компьютере"
+    sign = "+" if h >= 0 else "−"
+    hh, mm = int(abs(h)), int(round((abs(h) % 1) * 60))
+    return f"UTC{sign}{hh:02d}:{mm:02d}  {dict(DATE_ZONES).get(str(key), '')}".strip()
+
+
+def date_settings(s=None):
+    """(режим, пояс, сдвиг дней): режим «pc» — часы компьютера, «zone» — часовой пояс, «manual» — своя дата."""
+    try:
+        s = (SETTINGS_LOAD() or {}) if s is None else s
+    except Exception:
+        s = {}
+    zone = str(s.get("date_zone") or "pc")
+    mode = s.get("date_mode") or ("pc" if zone == "pc" else "zone")
+    try:
+        shift = int(s.get("date_shift") or 0)
+    except (TypeError, ValueError):
+        shift = 0
+    return mode, zone, shift
+
+
+def now(s=None):
+    """Текущие дата и время так, как их считает программа (и ИИ)."""
+    mode, zone, shift = date_settings(s)
+    if mode == "zone" and zone != "pc":
+        try:
+            tz = datetime.timezone(datetime.timedelta(hours=float(zone)))
+            return datetime.datetime.now(tz).replace(tzinfo=None)
+        except Exception:
+            pass
+    t = datetime.datetime.now()
+    if mode == "manual" and shift:
+        t += datetime.timedelta(days=shift)
+    return t
 
 
 def today():
-    """Сегодняшняя дата: по часам компьютера или по выбранному в программе поясу."""
-    zone = "pc"
-    try:
-        zone = str((SETTINGS_LOAD() or {}).get("date_zone") or "pc")
-    except Exception:
-        pass
-    if zone != "pc":
+    return now().date()
+
+
+def today_text(with_time=False):
+    t = now()
+    out = f"{t.strftime('%d.%m.%Y')}, {('пн', 'вт', 'ср', 'чт', 'пт', 'сб', 'вс')[t.weekday()]}"
+    return out + t.strftime(" %H:%M") if with_time else out
+
+
+def internet_time(timeout=8):
+    """Точное время из интернета (UTC) — по заголовку ответа сервера. None, если сети нет."""
+    from email.utils import parsedate_to_datetime
+    for url in ("https://www.google.com/generate_204", "https://github.com", "https://www.cloudflare.com"):
         try:
-            tz = datetime.timezone(datetime.timedelta(hours=float(zone)))
-            return datetime.datetime.now(tz).date()
+            req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "StampStudio"})
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                d = r.headers.get("Date")
+            if d:
+                return parsedate_to_datetime(d).astimezone(datetime.timezone.utc).replace(tzinfo=None)
         except Exception:
-            pass
-    return datetime.date.today()
-
-
-def today_text():
-    d = today()
-    return f"{d.strftime('%d.%m.%Y')}, {('пн', 'вт', 'ср', 'чт', 'пт', 'сб', 'вс')[d.weekday()]}"
+            continue
+    return None
 
 
 OFFICE_EXT = (".docx", ".doc", ".rtf", ".odt")
