@@ -272,12 +272,33 @@ def provider_ready(p, s=None):
     return bool(p.get("nokey")) or bool(key_for(p["name"], s)[0])
 
 
+def count_today(name, s=None):
+    s = SETTINGS_LOAD() if s is None else s
+    c = (s.get("ai_counts") or {}).get(name, {})
+    return c.get("today", 0) if c.get("day") == datetime.date.today().isoformat() else 0
+
+
+def limit_state(name, s=None):
+    """(сегодня, лимит, доля 0..1) — для счётчика и чтобы не упереться в лимит."""
+    p = provider(name) or {}
+    today = count_today(name, s)
+    lim = int(p.get("limit") or 0)
+    return today, lim, (today / lim if lim else 0.0)
+
+
 def provider_order(s=None):
-    """Выбранный провайдер первым, за ним остальные готовые — для автопереключения."""
+    """Выбранный сервис первым, за ним остальные готовые — для автоперехода.
+    Сервисы, у которых дневной лимит по нашему счётчику уже выбран, уходят в конец очереди.
+    Если автопереход выключен (ai_failover = False) — только выбранный."""
     s = SETTINGS_LOAD() if s is None else s
     chosen = s.get("ai_provider") or default_provider(s)
-    names = [chosen] + [p["name"] for p in PROVIDERS if p["name"] != chosen and not p.get("custom")]
-    return [provider(n) for n in names if provider(n) and provider_ready(provider(n), s)]
+    names = [chosen]
+    if s.get("ai_failover", True):
+        names += [p["name"] for p in PROVIDERS if p["name"] != chosen and not p.get("custom")]
+    ready = [provider(n) for n in names if provider(n) and provider_ready(provider(n), s)]
+    fresh = [p for p in ready if limit_state(p["name"], s)[2] < 1.0]
+    spent = [p for p in ready if limit_state(p["name"], s)[2] >= 1.0]
+    return fresh + spent
 
 
 def default_provider(s=None):
@@ -397,77 +418,92 @@ def _answer(data):
         return ""
 
 
+LAST = {"provider": "", "model": "", "mode": "", "problems": []}   # как был получен последний ответ
+
+
+def _ask_provider(p, s, system, text, images, max_tokens, status, cancel):
+    """Один сервис: перебрать его модели. Возвращает (ответ, модель) или бросает AiError с причиной."""
+    name = p["name"]
+    key = "" if p.get("nokey") else key_for(name, s)[0]
+    url = (s.get("ai_custom_url") or "").strip() if p.get("custom") else p["url"]
+    models = _candidates(p, s)
+    if p.get("custom") and not models:
+        models = list_models(p, key, s)[:1]
+    tried_discovery = False
+    i, last = 0, "нет подходящей модели"
+    while i < len(models):
+        if cancel and cancel():
+            raise AiCancelled()
+        model = models[i]
+        if status:
+            status(f"{name.split(' (')[0]} · {model}" + (" · читает изображения" if images else ""))
+        payload = {"model": model, "temperature": 0.1, "max_tokens": max_tokens,
+                   "messages": [{"role": "system", "content": system},
+                                {"role": "user", "content": _content(text, images)}]}
+        code, data = _http_json(url, payload, key)
+        if cancel and cancel():
+            raise AiCancelled()
+        if code == 200:
+            ans = _answer(data)
+            if ans:
+                count_inc(name)
+                _remember_model(name, model)
+                return ans, model
+            last = "пустой ответ"
+        elif code in (401, 403):
+            raise AiError(f"ключ не принят ({code})")
+        elif code == 429:
+            raise AiError("лимит запросов исчерпан")
+        elif code >= 500 or code == 0:
+            raise AiError("нет связи с сервисом" if code == 0 else f"сервис недоступен ({code})")
+        else:                           # 400/404/413/422: нет такой модели, не видит картинки, слишком большой запрос
+            last = f"{code}: " + (_err_text(data) or "запрос не принят")
+        i += 1
+        if i >= len(models) and not tried_discovery and not p.get("nokey"):
+            tried_discovery = True
+            try:
+                rx = re.compile(p.get("pick") or ".", re.I)
+                models += [m for m in list_models(p, key, s) if rx.search(m) and m not in models][:3]
+            except Exception:
+                pass
+    raise AiError(last)
+
+
 def chat(system, text, images=None, max_tokens=2000, status=None, cancel=None, only=None,
-         text_fallback=None):
+         text_fallback=None, fallback_text=None):
     """Запрос к ИИ с автопереключением. Возвращает (ответ, провайдер, модель).
 
-    text_fallback — текст страниц (распознанный на компьютере), который пойдёт вместо
-    картинок, если ни одна модель провайдера не принимает изображения."""
+    Сначала все сервисы по очереди пробуют прочитать ИЗОБРАЖЕНИЯ страниц. Только если ни один
+    не смог, уходит текст, распознанный на компьютере (text_fallback) — он с ошибками, поэтому
+    для этого случая можно дать другой вопрос (fallback_text)."""
     s = SETTINGS_LOAD()
     order = [provider(only)] if only else provider_order(s)
     order = [p for p in order if p]
     if not order:
-        raise AiError("ИИ не настроен: добавьте ключ в меню «ИИ → Настройки ИИ».")
+        raise AiError("ИИ не настроен: добавьте ключ в меню «ИИ → Настройки ИИ и ключи».")
     problems = []
-    for p in order:
-        name = p["name"]
-        key = "" if p.get("nokey") else key_for(name, s)[0]
-        url = (s.get("ai_custom_url") or "").strip() if p.get("custom") else p["url"]
-        tried_discovery = False
-        models = _candidates(p, s)
-        if p.get("custom") and not models:
-            models = list_models(p, key, s)[:1]
-        i = 0
-        use_images = bool(images)
-        last = ""
-        while i < len(models):
-            if cancel and cancel():
-                raise AiCancelled()
-            model = models[i]
+    LAST.update(provider="", model="", mode="", problems=problems)
+    passes = [("изображения страниц" if images else "текст документа", text, images)]
+    if images and text_fallback:
+        passes.append(("текст, распознанный на компьютере", None, None))
+    for mode, body, imgs in passes:
+        if body is None:                # второй заход: распознаём на компьютере только теперь
             if status:
-                status(f"{name.split(' (')[0]} · {model}")
-            body = text
-            if images and not use_images:
-                body = text + ("\n\nТЕКСТ СТРАНИЦ (распознан на компьютере, возможны ошибки):\n"
-                               + text_fallback)
-            payload = {"model": model, "temperature": 0.1, "max_tokens": max_tokens,
-                       "messages": [{"role": "system", "content": system},
-                                    {"role": "user",
-                                     "content": _content(body, images if use_images else None)}]}
-            code, data = _http_json(url, payload, key)
-            if cancel and cancel():
-                raise AiCancelled()
-            if code == 200:
-                ans = _answer(data)
-                if ans:
-                    count_inc(name)
-                    if use_images or not images:
-                        _remember_model(name, model)
-                    return ans, name, model
-                last = "пустой ответ"
-            elif code in (401, 403):
-                last = f"ключ не принят ({code})"
+                status("Сервисы не прочитали изображения — распознаю текст на компьютере")
+            ocr = text_fallback() if callable(text_fallback) else text_fallback
+            if not ocr:
                 break
-            elif code == 429 or code >= 500 or code == 0:
-                last = ("лимит запросов исчерпан" if code == 429 else
-                        "нет связи с сервисом" if code == 0 else f"сервис недоступен ({code})")
-                break
-            else:                       # 400/404/422: нет такой модели или она не видит картинки
-                last = _err_text(data) or str(code)
-            i += 1
-            if i >= len(models) and not tried_discovery and not p.get("nokey"):
-                tried_discovery = True
-                try:
-                    rx = re.compile(p.get("pick") or ".", re.I)
-                    models += [m for m in list_models(p, key, s)
-                               if rx.search(m) and m not in models][:3]
-                except Exception:
-                    pass
-            if i >= len(models) and use_images and text_fallback:
-                use_images = False      # ни одна модель не взяла картинку — отдаём текст
-                i = 0
-        problems.append(f"{name}: {last}")
-    raise AiError("Не получилось получить ответ ИИ.\n" + "\n".join("• " + x for x in problems[-6:]))
+            body = (fallback_text or text) + ("\n\nТЕКСТ СТРАНИЦ (распознан автоматически, "
+                                              "буквы могут быть искажены):\n" + ocr)
+        for p in order:
+            try:
+                ans, model = _ask_provider(p, s, system, body, imgs, max_tokens, status, cancel)
+            except AiError as e:
+                problems.append(f"{p['name'].split(' (')[0]}" + (" (картинки)" if imgs else "") + f": {e}")
+                continue
+            LAST.update(provider=p["name"], model=model, mode=mode)
+            return ans, p["name"], model
+    raise AiError("Не получилось получить ответ ИИ.\n" + "\n".join("• " + x for x in problems[-8:]))
 
 
 def test_provider(name):
@@ -531,6 +567,18 @@ def page_has_text(page):
         return False
 
 
+def is_scan_page(page):
+    """Скан: текста нет вовсе или он только невидимый (распознанный слой — в нём бывают ошибки).
+    Такие страницы ИИ должен читать изображением, а не этим текстом."""
+    if not page_has_text(page):
+        return True
+    try:
+        spans = [sp for sp in page.get_texttrace() if sp.get("chars")]
+        return bool(spans) and all(sp.get("type") == 3 for sp in spans)
+    except Exception:
+        return False
+
+
 def page_image(page, long_side=1500):
     r = page.rect
     zoom = long_side / max(r.width, r.height)
@@ -553,7 +601,7 @@ def collect(doc, pages=None, max_images=6, max_chars=14000):
     used = 0
     for i in pages:
         page = doc[i]
-        if page_has_text(page):
+        if not is_scan_page(page):
             t = page.get_text().strip()
             t = re.sub(r"[ \t]+", " ", t)
             t = re.sub(r"\n{3,}", "\n\n", t)
@@ -589,10 +637,13 @@ def ocr_text_for(bundle):
 
 
 # --------------------------------------------------------------------------- задачи
-SYS = ("Ты помощник по документам (договоры, CMR, счета, акты, доверенности, таможенные и "
-       "автомобильные документы; русский, украинский, белорусский, английский, польский, немецкий). "
-       "Читай внимательно, ничего не выдумывай: если чего-то в документе нет — оставляй пустую строку. "
-       "Отвечай только JSON без пояснений.")
+def sys_prompt():
+    today = datetime.date.today().strftime("%d.%m.%Y")
+    return ("Ты помощник по документам (договоры, CMR, счета, акты, доверенности, таможенные и "
+            "автомобильные документы; русский, украинский, белорусский, английский, польский, немецкий). "
+            f"Сегодня {today} — даты около этого числа нормальные, они не «в будущем». "
+            "Читай внимательно, ничего не выдумывай: если чего-то в документе нет — оставляй пустую строку. "
+            "Отвечай только JSON без пояснений.")
 
 
 def clean_filename(name, limit=120):
@@ -611,7 +662,7 @@ def task_name(bundle, rule=None, status=None, cancel=None):
          "Если какой-то части в документе нет — пропусти её. Дату бери из самого документа.\n"
          'Ответ: {"name": "...", "type": "...", "number": "...", "date": "ДД.ММ.ГГГГ", "party": "..."}\n\n'
          "ДОКУМЕНТ:\n" + bundle["text"])
-    ans, prov, model = chat(SYS, q, bundle["images"], 400, status, cancel, text_fallback=ocr_text_for(bundle))
+    ans, prov, model = chat(sys_prompt(), q, bundle["images"], 400, status, cancel, text_fallback=lambda: ocr_text_for(bundle))
     d = extract_json(ans)
     name = clean_filename(d.get("name") if isinstance(d, dict) else "")
     if not name:
@@ -638,7 +689,7 @@ def task_extract(bundle, fields=None, status=None, cancel=None):
          "В «other» добавь до 8 других важных данных, которых нет в списке (адреса, банк, срок, маршрут).\n"
          'Ответ: {"fields": [{"name": "...", "value": "..."}], "other": [{"name": "...", "value": "..."}]}\n\n'
          "ДОКУМЕНТ:\n" + bundle["text"])
-    ans, prov, model = chat(SYS, q, bundle["images"], 1800, status, cancel, text_fallback=ocr_text_for(bundle))
+    ans, prov, model = chat(sys_prompt(), q, bundle["images"], 1800, status, cancel, text_fallback=lambda: ocr_text_for(bundle))
     d = extract_json(ans)
     got = {}
     rows = d.get("fields") if isinstance(d, dict) else None
@@ -659,18 +710,34 @@ def task_extract(bundle, fields=None, status=None, cancel=None):
 
 
 def task_check(bundle, status=None, cancel=None):
+    answer = ('Ответ: {"summary": "одна фраза", "issues": [{"page": 1, "severity": "error", '
+              '"text": "что не так и как должно быть", "quote": "точная цитата из документа"}]}\n\n')
+    common = ("Не придирайся к стилю и оформлению. Если проблем нет — верни пустой список.\n"
+              "В «page» ставь номер страницы из заголовка «=== Страница N ===».\n"
+              "severity: «error» — нельзя отправлять, «warn» — стоит глянуть.\n")
     q = ("Проверь документ перед отправкой. Ищи только настоящие проблемы:\n"
-         "1) опечатки и ошибки в словах, именах, названиях;\n"
+         "1) опечатки и ошибки в словах, именах, названиях — только те, что действительно напечатаны в документе. "
+         "Если слово плохо видно (скан, печать поверх текста, подпись) — это не опечатка, пропусти его;\n"
          "2) несовпадения внутри документа и между страницами: даты, суммы (цифрами и прописью), "
          "номера, VIN, реквизиты, ФИО, названия организаций;\n"
          "3) незаполненные места: пустые поля, «____», пропущенные дата, номер, подпись;\n"
          "4) арифметика: итог не сходится со строками.\n"
-         "Не придирайся к стилю и оформлению. Если проблем нет — верни пустой список.\n"
-         "severity: «error» — нельзя отправлять, «warn» — стоит глянуть.\n"
-         'Ответ: {"summary": "одна фраза", "issues": [{"page": 1, "severity": "error", '
-         '"text": "что не так и как должно быть", "quote": "точная цитата из документа"}]}\n\n'
-         "ДОКУМЕНТ:\n" + bundle["text"])
-    ans, prov, model = chat(SYS, q, bundle["images"], 2500, status, cancel, text_fallback=ocr_text_for(bundle))
+         "УНП, ИНН, ОГРН, БИН, ЕГРПОУ — обычные реквизиты разных стран, сами по себе не ошибка.\n"
+         + common + answer + "ДОКУМЕНТ:\n" + bundle["text"])
+    # если картинки прочитать не удалось и уходит автоматически распознанный текст —
+    # искажённые буквы в нём НЕ опечатки документа, поэтому орфографию не проверяем вовсе
+    q_ocr = ("Проверь документ перед отправкой. ВАЖНО: текст ниже получен автоматическим распознаванием скана, "
+             "в нём искажены буквы («тода» вместо «года», «рохийских» вместо «российских»). "
+             "Это ошибки распознавания, а НЕ документа: об опечатках и странных словах не сообщай вообще.\n"
+             "Проверяй только по смыслу:\n"
+             "1) несовпадения дат, сумм (цифрами и прописью), номеров, VIN, ФИО и реквизитов между частями документа;\n"
+             "2) незаполненные места: пустые поля, «____», пропущенные дата, номер;\n"
+             "3) арифметику: итог не сходится со строками.\n"
+             "Сообщай только о том, в чём уверен, несмотря на искажения. В «quote» восстанови нормальное написание.\n"
+             + common + answer + "ДОКУМЕНТ:\n" + bundle["text"])
+    ans, prov, model = chat(sys_prompt(), q, bundle["images"], 2500, status, cancel,
+                            text_fallback=lambda: ocr_text_for(bundle), fallback_text=q_ocr)
+    mode, problems = LAST.get("mode", ""), list(LAST.get("problems") or [])
     d = extract_json(ans)
     issues = []
     for r in (d.get("issues") if isinstance(d, dict) else d if isinstance(d, list) else None) or []:
@@ -684,7 +751,8 @@ def task_check(bundle, status=None, cancel=None):
                        "text": str(r.get("text")).strip(), "quote": str(r.get("quote") or "").strip()})
     issues.sort(key=lambda x: (x["severity"] != "error", x["page"]))
     return {"summary": str(d.get("summary") or "").strip() if isinstance(d, dict) else "",
-            "issues": issues, "skipped": bundle.get("skipped", 0), "provider": prov, "model": model}
+            "issues": issues, "skipped": bundle.get("skipped", 0), "provider": prov, "model": model,
+            "mode": mode, "problems": problems}
 
 
 # --------------------------------------------------------------------------- слова на странице
@@ -793,7 +861,7 @@ def task_choose_place(cands, words, stamp_name, status=None, cancel=None):
     q = (f"На странице несколько мест для печати («М.П.»). Наша печать называется «{stamp_name}».\n"
          "Определи, к какому месту она относится (чья это сторона договора). Если понять нельзя — 0.\n"
          'Ответ: {"place": номер}\n\n' + "\n\n".join(lines))
-    ans, _, _ = chat(SYS, q, None, 60, status, cancel)
+    ans, _, _ = chat(sys_prompt(), q, None, 60, status, cancel)
     d = extract_json(ans)
     try:
         k = int(d.get("place") if isinstance(d, dict) else 0)
@@ -811,7 +879,7 @@ def task_find_places_vision(jpeg, stamp_name="", status=None, cancel=None):
          "Координаты — центр места, в тысячных долях ширины и высоты изображения (0..1000), "
          "x слева направо, y сверху вниз. Если места нет — null.\n"
          'Ответ: {"stamp": [x, y], "sign": [x, y]}')
-    ans, _, _ = chat(SYS, q, [jpeg], 120, status, cancel)
+    ans, _, _ = chat(sys_prompt(), q, [jpeg], 120, status, cancel)
     d = extract_json(ans)
 
     def pt(v):
@@ -1076,3 +1144,19 @@ def hidden_words(page):
         return page_words(page)
     except Exception:
         return []
+
+
+def split_pages(doc, max_images=4):
+    """Разбить документ на части так, чтобы в одном запросе было не больше max_images сканов
+    (большие запросы бесплатные сервисы не принимают)."""
+    parts, cur, n = [], [], 0
+    for i in range(doc.page_count):
+        scan = is_scan_page(doc[i])
+        if scan and n >= max_images:
+            parts.append(cur)
+            cur, n = [], 0
+        cur.append(i)
+        n += 1 if scan else 0
+    if cur:
+        parts.append(cur)
+    return parts

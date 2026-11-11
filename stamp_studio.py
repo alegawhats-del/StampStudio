@@ -393,6 +393,8 @@ QListWidget#guidenav::item:selected { background: #2c3145; color: #e8b04b; }
 QListWidget#guidenav::item:hover { background: #232735; }
 QToolBar { padding: 4px 6px; spacing: 3px; }
 QToolBar QToolButton { min-height: 32px; max-height: 32px; padding: 0 6px; }
+QPushButton#aiact { text-align: left; padding: 6px 12px; }
+QDialog#embedded { background: transparent; }
 QToolBar#tools { background: #171a22; border: none; border-right: 1px solid #262b39; padding: 6px 5px; spacing: 3px; }
 QToolBar#tools QToolButton { min-width: 30px; max-width: 30px; min-height: 30px; max-height: 30px; padding: 0;
     background: transparent; border: 1px solid transparent; border-radius: 8px; }
@@ -463,6 +465,8 @@ QListWidget#guidenav::item:selected { background: #fbefd3; color: #8a5f0a; }
 QListWidget#guidenav::item:hover { background: #efeadf; }
 QToolBar { padding: 4px 6px; spacing: 3px; }
 QToolBar QToolButton { min-height: 32px; max-height: 32px; padding: 0 6px; }
+QPushButton#aiact { text-align: left; padding: 6px 12px; }
+QDialog#embedded { background: transparent; }
 QToolBar#tools { background: #fbf9f4; border: none; border-right: 1px solid #e6e1d6; padding: 6px 5px; spacing: 3px; }
 QToolBar#tools QToolButton { min-width: 30px; max-width: 30px; min-height: 30px; max-height: 30px; padding: 0;
     background: transparent; border: 1px solid transparent; border-radius: 8px; }
@@ -507,7 +511,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.4.6"
+APP_VERSION = "6.4.7"
 EDITION = "main"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -5924,6 +5928,14 @@ class AiCheckDialog(QDialog):
         if result.get("skipped"):
             text += (" " if text else "") + (f"Проверены не все страницы: за один раз ИИ читает до 6 сканов "
                                              f"(пропущено: {result['skipped']}).")
+        if result.get("parts", 1) > 1:
+            text += (" " if text else "") + (f"Документ проверен по частям ({result['parts']} запроса): "
+                                             "совпадение данных между далёкими страницами сверьте сами.")
+        if "распознан" in (result.get("mode") or ""):
+            text += (" " if text else "") + ("Изображения страниц ни один сервис прочитать не смог — проверен текст, "
+                                             "распознанный на компьютере, поэтому опечатки не проверялись.")
+        if result.get("provider"):
+            text += (" " if text else "") + f"Ответил: {result['provider'].split(' (')[0]} · {result.get('model', '')}."
         text += (" " if text else "") + "ИИ может ошибаться — это подсказка, а не гарантия."
         sub = QLabel(text.strip())
         sub.setObjectName("hint")
@@ -5967,6 +5979,224 @@ class AiCheckDialog(QDialog):
         page = item.data(Qt.UserRole)
         if page:
             self.go_page.emit(int(page) - 1)
+
+
+class AiCenterDialog(QDialog):
+    """ИИ-помощник одним окном: выбор сервиса, счётчики запросов, пять функций и результат тут же."""
+
+    def __init__(self, win):
+        super().__init__(win)
+        self.win = win
+        self.setWindowTitle("ИИ-помощник")
+        self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
+        self.setModal(False)
+        self.resize(1000, 660)
+        self.setMinimumSize(940, 620)
+        self._embedded = None
+        root = QVBoxLayout(self)
+        root.setContentsMargins(16, 14, 16, 12)
+        root.setSpacing(10)
+
+        # ---- через кого
+        top = QHBoxLayout()
+        top.setSpacing(8)
+        cap = QLabel("Через кого:")
+        cap.setObjectName("plain")
+        top.addWidget(cap)
+        self.cmb = QComboBox()
+        self.cmb.setMinimumHeight(32)
+        self.cmb.setMinimumWidth(360)
+        self.cmb.setToolTip("Какой сервис ИИ читает документ. В списке — только подключённые (с ключом).")
+        top.addWidget(self.cmb, 1)
+        self.chk_fail = QCheckBox("если не отвечает — перейти к следующему")
+        self.chk_fail.setToolTip("Включено: при лимите или сбое программа сама спросит следующий сервис из списка.\n"
+                                 "Выключено: спрашивается только выбранный сервис.")
+        top.addWidget(self.chk_fail)
+        b_set = QPushButton("Ключи и настройки…")
+        b_set.clicked.connect(self._settings)
+        top.addWidget(b_set)
+        root.addLayout(top)
+
+        body = QHBoxLayout()
+        body.setSpacing(12)
+        root.addLayout(body, 1)
+
+        # ---- слева: функции и счётчики
+        left = QVBoxLayout()
+        left.setSpacing(8)
+        acts = QGroupBox("Что сделать")
+        al = QVBoxLayout(acts)
+        al.setSpacing(6)
+        self.btns = []
+        for text, sub, slot in (
+                ("Проверить перед отправкой", "опечатки, даты, суммы, пустые поля", win.ai_check),
+                ("Данные из документа", "номер, дата, сумма, VIN — в таблицу", win.ai_extract),
+                ("Предложить имя файла", "переименовать или сохранить так", win.ai_name),
+                ("Печать и подпись на место", "найти «М.П.» и строку подписи", win.ai_place),
+                ("Распознать текст скана", "поиск и копирование в PDF", win.ai_ocr)):
+            b = QPushButton(f"{text}\n{sub}")
+            b.setObjectName("aiact")
+            b.setCursor(Qt.PointingHandCursor)
+            b.setMinimumHeight(50)
+            b.clicked.connect(lambda _=False, s=slot: s())
+            al.addWidget(b)
+            self.btns.append(b)
+        left.addWidget(acts)
+        cnt = QGroupBox("Запросы сегодня")
+        self.cl = QGridLayout(cnt)
+        self.cl.setHorizontalSpacing(8)
+        self.cl.setVerticalSpacing(5)
+        left.addWidget(cnt)
+        left.addStretch(1)
+        lw = QWidget()
+        lw.setLayout(left)
+        lw.setFixedWidth(370)
+        body.addWidget(lw)
+
+        # ---- справа: результат
+        self.res_box = QGroupBox("Результат")
+        self.rl = QVBoxLayout(self.res_box)
+        self.home = QLabel("")
+        self.home.setObjectName("plain")
+        self.home.setWordWrap(True)
+        self.home.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        self.home.setTextFormat(Qt.RichText)
+        self.rl.addWidget(self.home, 1)
+        body.addWidget(self.res_box, 1)
+
+        self.lbl_info = QLabel("")
+        self.lbl_info.setObjectName("hint")
+        self.lbl_info.setWordWrap(True)
+        self.lbl_info.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        root.addWidget(self.lbl_info)
+
+        self.cmb.currentIndexChanged.connect(self._pick)
+        self.chk_fail.toggled.connect(self._pick)
+        self.refresh()
+        self.show_home()
+
+    # ---- состояние
+    def refresh(self):
+        s = settings_load()
+        ready = [p for p in AI.PROVIDERS if AI.provider_ready(p, s)]
+        chosen = s.get("ai_provider") or AI.default_provider(s)
+        self.cmb.blockSignals(True)
+        self.cmb.clear()
+        for p in sorted(ready, key=lambda p: -p["stars"]):
+            today, lim, share = AI.limit_state(p["name"], s)
+            stars = "★" * p["stars"] + "☆" * (5 - p["stars"]) if p["stars"] else ""
+            left = f"осталось ~{max(0, lim - today)}" if lim else "без дневного лимита"
+            self.cmb.addItem(f"{p['name'].split(' (')[0]}  {stars}  ·  {p['short']}  ·  {left}", p["name"])
+        i = self.cmb.findData(chosen)
+        self.cmb.setCurrentIndex(max(0, i))
+        self.cmb.blockSignals(False)
+        self.chk_fail.blockSignals(True)
+        self.chk_fail.setChecked(bool(s.get("ai_failover", True)))
+        self.chk_fail.blockSignals(False)
+        # счётчики
+        while self.cl.count():
+            it = self.cl.takeAt(0)
+            if it.widget():
+                it.widget().deleteLater()
+        warn = []
+        for r, p in enumerate(sorted(ready, key=lambda p: -p["stars"])):
+            name = p["name"]
+            today, lim, share = AI.limit_state(name, s)
+            n = QLabel(name.split(" (")[0])
+            n.setObjectName("plain")
+            self.cl.addWidget(n, r, 0)
+            bar = QProgressBar()
+            bar.setFixedHeight(6)
+            bar.setTextVisible(False)
+            bar.setRange(0, 100)
+            bar.setValue(int(min(1.0, share) * 100) if lim else 0)
+            if lim and share >= 0.8:
+                bar.setStyleSheet("QProgressBar::chunk { background: #d9534f; border-radius: 3px; }")
+                warn.append(name.split(" (")[0])
+            self.cl.addWidget(bar, r, 1)
+            v = QLabel(f"{today} из ~{lim}" if lim else f"{today} · без лимита")
+            v.setObjectName("hint")
+            v.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            self.cl.addWidget(v, r, 2)
+        self.cl.setColumnStretch(1, 1)
+        has_doc = self.win.doc is not None
+        for b in self.btns:
+            b.setEnabled(has_doc)
+        info = []
+        if AI.LAST.get("provider"):
+            info.append(f"Последний ответ: {AI.LAST['provider'].split(' (')[0]} · {AI.LAST['model']} · "
+                        f"читал {AI.LAST['mode']}")
+        if AI.LAST.get("problems"):
+            info.append("Не ответили: " + "; ".join(AI.LAST["problems"][-4:]))
+        if warn:
+            info.append("⚠ Лимит на сегодня почти выбран: " + ", ".join(warn) +
+                        (" — программа сама перейдёт к следующему сервису" if s.get("ai_failover", True)
+                         else " — выберите другой сервис или включите переход к следующему"))
+        if not has_doc:
+            info.append("Откройте PDF или отсканируйте документ — и функции станут активны")
+        self.lbl_info.setText("\n".join(info))
+
+    def _pick(self, *_):
+        s = settings_load()
+        if self.cmb.currentData():
+            s["ai_provider"] = self.cmb.currentData()
+        s["ai_failover"] = self.chk_fail.isChecked()
+        settings_save(s)
+
+    def _settings(self):
+        self.win.ai_settings()
+        self.refresh()
+
+    # ---- результат
+    def show_home(self):
+        self._drop()
+        self.res_box.setTitle("Результат")
+        self.home.setText(
+            "<p>Выберите слева, что сделать с открытым документом. Результат появится здесь же: "
+            "его можно поправить, скопировать, сохранить в таблицу или применить к файлу.</p>"
+            "<p><b>Как ИИ читает документ.</b> Страницы с текстом уходят текстом, сканы — изображениями "
+            "(по 4 страницы за запрос). Если ни один сервис не смог прочитать изображения, уходит текст, "
+            "распознанный на компьютере; тогда опечатки не проверяются, потому что в таком тексте "
+            "искажены буквы. Чем читал последний ответ — написано внизу окна.</p>"
+            "<p><b>Счётчик.</b> Слева видно, сколько запросов сделано сегодня у каждого сервиса. "
+            "Когда лимит близко, полоска краснеет, а программа сама начинает со следующего сервиса.</p>"
+            "<p>ИИ может ошибаться — цифры и реквизиты сверяйте с документом.</p>")
+        self.home.setVisible(True)
+
+    def _drop(self):
+        if self._embedded is not None:
+            try:
+                self.rl.removeWidget(self._embedded)
+                self._embedded.setParent(None)
+                self._embedded.deleteLater()
+            except RuntimeError:
+                pass
+            self._embedded = None
+
+    def embed(self, dlg, title):
+        """Показать окно результата внутри помощника."""
+        self._drop()
+        self.home.setVisible(False)
+        self.res_box.setTitle(title)
+        dlg.setParent(self.res_box)
+        dlg.setWindowFlags(Qt.Widget)
+        dlg.setObjectName("embedded")
+        dlg.setMinimumSize(0, 0)
+        if dlg.layout() is not None:
+            dlg.layout().setContentsMargins(0, 0, 0, 0)
+        dlg.finished.connect(lambda *_: QTimer.singleShot(0, self.show_home))
+        self.rl.addWidget(dlg, 1)
+        self._embedded = dlg
+        dlg.show()
+        self.refresh()
+        self.raise_()
+
+    def note(self, text):
+        self._drop()
+        self.res_box.setTitle("Результат")
+        self.home.setText(f"<p style='font-size:14px'>{text}</p>")
+        self.home.setVisible(True)
+        self.refresh()
 
 
 class AiPlaceDialog(QDialog):
@@ -6233,10 +6463,12 @@ class MainWindow(QMainWindow):
         # ИИ-помощник: то же меню стоит в строке меню сверху
         self.btn_ai = QToolButton()
         self.btn_ai.setText("ИИ")
-        self.btn_ai.setToolTip("ИИ-помощник: имя файла, печать на место, данные, проверка, распознавание текста")
+        self.btn_ai.setToolTip("ИИ-помощник: открыть окно со всеми функциями  (Ctrl+Shift+I)\n"
+                               "Стрелка рядом — быстрое меню: имя файла, печать на место, данные, проверка, текст")
         self.btn_ai.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
-        self.btn_ai.setPopupMode(QToolButton.InstantPopup)
+        self.btn_ai.setPopupMode(QToolButton.MenuButtonPopup)
         self.btn_ai.setMenu(self._build_ai_menu())
+        self.btn_ai.clicked.connect(self.ai_center)
         tb.addWidget(self.btn_ai)
         self._themed_toolbtns = [(self.btn_ai, "ai")]
 
@@ -6492,6 +6724,10 @@ class MainWindow(QMainWindow):
                 self._doc_actions.append(a)
             return a
 
+        self.act_ai_center = act("ИИ-помощник — всё в одном окне…", self.ai_center, "Ctrl+Shift+I",
+                                 "Выбор сервиса, счётчик запросов, все функции ИИ и результат в одном окне",
+                                 doc=False)
+        m.addSeparator()
         self.act_ai_name = act("Предложить имя файла", self.ai_name, "Ctrl+I",
                                "ИИ читает документ и предлагает имя: «CMR №597 Иванов 26.09.2026»")
         self.act_ai_place = act("Поставить печать и подпись на место…", self.ai_place, "Ctrl+M",
@@ -6603,9 +6839,15 @@ class MainWindow(QMainWindow):
 
     def _ai_run(self, title, fn, on_done, quiet=False, on_fail=None):
         """Выполнить fn(status, cancelled) в фоне, показать окно ожидания, вернуть поток."""
+        if not quiet and getattr(self, "_ai_busy", False):
+            self.show_toast("ИИ ещё отвечает на прошлый запрос — подождите")
+            return None
         th = AiThread(fn, self)
         self._ai_threads = [t for t in getattr(self, "_ai_threads", []) if t.isRunning()] + [th]
         busy = None
+        if not quiet:
+            self._ai_busy = True
+            th.finished.connect(lambda: setattr(self, "_ai_busy", False))
         if not quiet:
             busy = AiBusyDialog(title, self)
             th.status.connect(busy.set_status)
@@ -6618,17 +6860,46 @@ class MainWindow(QMainWindow):
 
         def ok(res):
             close_busy()
+            if not quiet:
+                self._ai_busy = False
             on_done(res)
+            self._ai_center_refresh()
 
         def bad(msg):
             close_busy()
+            if not quiet:
+                self._ai_busy = False
             (on_fail or self._ai_fail)(msg)
+            self._ai_center_refresh()
         th.done.connect(ok)
         th.failed.connect(bad)
         th.start()
         if busy is not None:
             busy.open()
         return th
+
+    def ai_center(self, *_):
+        """Окно «ИИ-помощник»: сервис, счётчики, все функции и результат."""
+        c = getattr(self, "_ai_center_dlg", None)
+        if c is None:
+            c = AiCenterDialog(self)
+            self._ai_center_dlg = c
+        c.refresh()
+        c.show()
+        c.raise_()
+        c.activateWindow()
+
+    def _center(self):
+        c = getattr(self, "_ai_center_dlg", None)
+        try:
+            return c if c is not None and c.isVisible() else None
+        except RuntimeError:
+            return None
+
+    def _ai_center_refresh(self):
+        c = self._center()
+        if c is not None:
+            c.refresh()
 
     def _ai_fail(self, msg):
         box = QMessageBox(self)
@@ -6668,8 +6939,16 @@ class MainWindow(QMainWindow):
         path = str(self.doc_path or "")
         can = bool(path and os.path.isfile(path) and path.lower().endswith(".pdf"))
         dlg = AiNameDialog(res["name"], can, f"{res['provider'].split(' (')[0]} · {res['model']}", self)
+        c = self._center()
+        if c is not None:
+            dlg.finished.connect(lambda code, d=dlg: self._ai_name_action(d) if code == QDialog.Accepted else None)
+            c.embed(dlg, "Имя файла")
+            return
         if dlg.exec() != QDialog.Accepted:
             return
+        self._ai_name_action(dlg)
+
+    def _ai_name_action(self, dlg):
         name = dlg.name()
         if dlg.action == "copy":
             QApplication.clipboard().setText(name)
@@ -6904,34 +7183,75 @@ class MainWindow(QMainWindow):
         if many:
             msg += f". На стр. {', '.join(map(str, many))} мест несколько — лишнее удалите клавишей Del"
         self.show_toast(msg, 5200)
+        c = self._center()
+        if c is not None:
+            c.note(msg)
 
     # ---------------------------------------------------------- 3. данные
 
     def ai_extract(self):
         if not self._ai_need_doc() or not self._ai_ready():
             return
-        bundle = AI.collect(self.doc, None, max_images=6)
+        bundle = AI.collect(self.doc, None, max_images=4)
         title = self._doc_title()
+
+        def show(res):
+            dlg = AiDataDialog(res, title, self)
+            c = self._center()
+            if c is not None:
+                c.embed(dlg, "Данные из документа")
+            else:
+                dlg.exec()
         self._ai_run("ИИ выписывает данные из документа",
-                     lambda st, c: AI.task_extract(bundle, None, st, c),
-                     lambda res: AiDataDialog(res, title, self).exec())
+                     lambda st, c: AI.task_extract(bundle, None, st, c), show)
 
     # ---------------------------------------------------------- 4. проверка
 
     def ai_check(self):
         if not self._ai_need_doc() or not self._ai_ready():
             return
-        bundle = AI.collect(self.doc, None, max_images=6, max_chars=24000)
+        parts = AI.split_pages(self.doc, 4)
+        if len(parts) > 6:
+            q = QMessageBox.question(
+                self, "Большой документ",
+                f"В документе много сканов: проверка займёт {len(parts)} запросов к ИИ.\nПродолжить?")
+            if q != QMessageBox.Yes:
+                return
+        bundles = [AI.collect(self.doc, pg, max_images=4, max_chars=24000) for pg in parts]
         title = self._doc_title()
+
+        def work(status, cancelled):
+            total = {"summary": "", "issues": [], "skipped": 0, "provider": "", "model": "",
+                     "mode": "", "problems": [], "parts": len(bundles)}
+            notes = []
+            for n, b in enumerate(bundles):
+                if cancelled():
+                    raise AI.AiCancelled()
+                pre = f"часть {n + 1} из {len(bundles)} · " if len(bundles) > 1 else ""
+                res = AI.task_check(b, lambda t, pre=pre: status(pre + t), cancelled)
+                total["issues"] += res["issues"]
+                if res["summary"]:
+                    notes.append(res["summary"])
+                for k in ("provider", "model", "mode"):
+                    total[k] = res[k]
+                total["problems"] += res.get("problems") or []
+            total["issues"].sort(key=lambda x: (x["severity"] != "error", x["page"]))
+            total["summary"] = notes[0] if len(notes) == 1 else ""
+            return total
 
         def show(res):
             dlg = AiCheckDialog(res, title, self)
             dlg.go_page.connect(lambda i: self.page_list.setCurrentRow(i)
                                 if self.doc is not None and 0 <= i < self.doc.page_count else None)
-            dlg.setModal(False)
             self._ai_check_dlg = dlg
-            dlg.show()
-        self._ai_run("ИИ проверяет документ", lambda st, c: AI.task_check(bundle, st, c), show)
+            c = self._center()
+            if c is not None:
+                c.embed(dlg, "Проверка перед отправкой")
+            else:
+                dlg.setModal(False)
+                dlg.show()
+        self._ai_run("ИИ проверяет документ" + (f" — {len(bundles)} запроса(ов)" if len(bundles) > 1 else ""),
+                     work, show)
 
     # ---------------------------------------------------------- 5. распознавание текста
 
@@ -7017,6 +7337,9 @@ class MainWindow(QMainWindow):
             msg += f". Не получилось: {len(errors)} стр."
         self.show_toast(msg, 5200)
         self.statusBar().showMessage(msg.replace("✔  ", ""), 9000)
+        c = self._center()
+        if c is not None:
+            c.note(msg)
 
     def _ai_after_scan(self):
         """Автоматический режим: распознать текст, когда сканирование закончено."""
@@ -8420,6 +8743,8 @@ class MainWindow(QMainWindow):
                 act.setEnabled(has_doc)
         for act in getattr(self, "_doc_actions", []):
             act.setEnabled(has_doc)
+        if hasattr(self, "_ai_center_dlg"):
+            self._ai_center_refresh()
         if hasattr(self, "statusBar") and self.statusBar():
             if not has_doc:
                 self.statusBar().showMessage(
