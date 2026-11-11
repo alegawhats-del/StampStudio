@@ -507,7 +507,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.4.2"
+APP_VERSION = "6.4.3"
 EDITION = "main"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -5176,8 +5176,8 @@ class AiSettingsDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Настройки ИИ")
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
-        self.resize(860, 600)
-        self.setMinimumSize(820, 580)
+        self.resize(880, 680)
+        self.setMinimumSize(820, 640)
         s = settings_load()
         self.keys = dict(s.get("ai_keys") or {})
         self.models = dict(s.get("ai_models") or {})
@@ -5419,8 +5419,11 @@ class AiSettingsDialog(QDialog):
         self.lst.blockSignals(True)
         self.lst.clear()
         ranked = sorted(AI.PROVIDERS, key=lambda p: -p["stars"])
+        rest = [p for p in ranked if not self._connected(p)]
         groups = (("ПОДКЛЮЧЕНЫ", [p for p in ranked if self._connected(p)]),
-                  ("ДОСТУПНЫ — НУЖЕН КЛЮЧ", [p for p in ranked if not self._connected(p)]))
+                  ("МОЖНО ДОБАВИТЬ — БЕСПЛАТНЫЕ", [p for p in rest if not p.get("paid") and not p.get("custom")]),
+                  ("МОЖНО ДОБАВИТЬ — ПЛАТНЫЕ", [p for p in rest if p.get("paid")]),
+                  ("ДРУГОЕ", [p for p in rest if p.get("custom")]))
         for title, items in groups:
             if not items:
                 continue
@@ -5488,6 +5491,8 @@ class AiSettingsDialog(QDialog):
         self.lbl_name.setText(name.split(" (")[0] + ("   · основной" if name == self.chosen else ""))
         stars = ("★" * p["stars"] + "☆" * (5 - p["stars"]) + "   ") if p["stars"] else ""
         state = self._state(p)
+        if state == "нужен ключ":
+            state = "нужен ключ — нажмите «Получить ключ», вставьте его ниже и нажмите «Проверить»"
         self.lbl_best.setText(f"{stars}{state}<br><b>Лучше всего для:</b> {p['tasks']}<br>"
                               f"<b>Почему:</b> {p['why']}")
         self.lbl_count.setText(AI.count_text(name))
@@ -6039,12 +6044,14 @@ class MainWindow(QMainWindow):
         self.view = EditorView(self.scene)
         self.setCentralWidget(self.view)
         self.scene.selectionChanged.connect(self.sync_panel_from_selection)
+        self.scene.selectionChanged.connect(self._update_geom_title)
 
         self._build_mascot()
         self._build_toolbar()
         self._build_dir_bar()
         self._build_side_panel()
         self._build_menubar()
+        self._update_geom_title()
         self.reload_library()
         self.theme = settings_load().get("theme", "light")
         self.apply_theme()
@@ -7755,6 +7762,7 @@ class MainWindow(QMainWindow):
         self.stamp_raw = pil
         self.stamp_src_path = None
         self.current_lib_file = None
+        self._update_geom_title()
         self.stamp_pil = pil
         self.stamp_pixmap = pm
         self.stamp_status = "подпись ручкой"
@@ -7784,6 +7792,28 @@ class MainWindow(QMainWindow):
         if sel:
             return getattr(sel[0], "lib_file", None)
         return getattr(self, "current_lib_file", None)
+
+    def _update_geom_title(self):
+        """В заголовке карточки видно, за какой печатью закрепляется размер."""
+        if not hasattr(self, "gb_geom"):
+            return
+        name = ""
+        target = self._lib_target_file()
+        if target:
+            name = next((e["name"] for e in lib_load() if e.get("file") == target), "")
+        if len(name) > 17:
+            name = name[:16] + "…"
+        self.gb_geom.setTitle(f"Размер — закреплён за «{name}»" if name else "Размер и наклон")
+        self.btn_pin.setEnabled(bool(name))
+
+    def pin_stamp_size(self):
+        target = self._lib_target_file()
+        if not target:
+            self.show_toast("Сначала выберите печать в «Моих печатях»")
+            return
+        self._remember_stamp_now()
+        name = next((e["name"] for e in lib_load() if e.get("file") == target), "печать")
+        self.show_toast(f"✔  {self.spin_w.value():g}×{self.spin_h.value():g} мм закреплено за «{name}»")
 
     def _remember_stamp_later(self):
         """Отложенная запись — чтобы не писать на диск на каждое движение ползунка."""
@@ -8073,6 +8103,7 @@ class MainWindow(QMainWindow):
 
         # === размер и вид ===
         gb_geom = QGroupBox("Размер и наклон")
+        self.gb_geom = gb_geom
         gb_geom.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
         gl = QVBoxLayout(gb_geom)
         gl.setContentsMargins(8, 4, 8, 6)
@@ -8080,11 +8111,16 @@ class MainWindow(QMainWindow):
 
         self.preset_box = QComboBox()
         self.preset_box.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
-        self.preset_box.setMinimumContentsLength(14)
+        self.preset_box.setMinimumContentsLength(8)
         for name, w, h in PRESETS:
             self.preset_box.addItem(name, (w, h))
         self.preset_box.currentIndexChanged.connect(self.preset_changed)
-        gl.addLayout(hrow(cap("Пресет:"), self.preset_box))
+        self.btn_pin = QPushButton("Закрепить")
+        self.btn_pin.setToolTip("Закрепить этот размер, поворот и непрозрачность за выбранной печатью.\n"
+                                "В следующий раз она сразу встанет такой. У каждой печати — свои.\n"
+                                "Программа делает это и сама, когда вы меняете размер выбранной печати.")
+        self.btn_pin.clicked.connect(self.pin_stamp_size)
+        gl.addLayout(hrow(cap("Пресет:"), self.preset_box, self.btn_pin))
 
         self.spin_w = QDoubleSpinBox()
         self.spin_w.setRange(3, 300); self.spin_w.setValue(40)
@@ -8285,6 +8321,7 @@ class MainWindow(QMainWindow):
             return
         self._load_stamp_file(entry["file"], from_library=True)
         self.current_lib_file = entry["file"]
+        self._update_geom_title()
         self.scene.clearSelection()
         ws = (self.spin_w, self.spin_h, self.slider_rot, self.slider_op)
         for wd in ws:
@@ -8395,6 +8432,7 @@ class MainWindow(QMainWindow):
                 sel[0].lib_file = entry["file"]
             else:
                 self.current_lib_file = entry["file"]
+                self._update_geom_title()
         except Exception as e:
             QMessageBox.critical(
                 self, "Не удалось сохранить",
@@ -8529,6 +8567,7 @@ class MainWindow(QMainWindow):
         self.stamp_src_path = None if from_library else path
         if not from_library:
             self.current_lib_file = None
+            self._update_geom_title()
         self.reprocess_stamp()
         return True
 
