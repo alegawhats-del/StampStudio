@@ -517,7 +517,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.4.14"
+APP_VERSION = "6.4.15"
 EDITION = "canon"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -5096,6 +5096,107 @@ class UpdateCheckThread(QThread):
             self.result.emit(None, str(e))
 
 
+class ReleasesThread(QThread):
+    """Список выпущенных версий с GitHub — для возврата к прежней версии."""
+    result = Signal(object, str)        # ([{version, date, url, notes}], текст ошибки)
+
+    def run(self):
+        try:
+            import urllib.request
+            api = GITHUB_URL.replace("https://github.com/", "https://api.github.com/repos/") + "/releases?per_page=40"
+            req = urllib.request.Request(api, headers={"User-Agent": "StampStudio-Updater",
+                                                       "Accept": "application/vnd.github+json"})
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            want = "StampStudioCanon-Setup-" if EDITION == "canon" else "StampStudio-Setup-"
+            out = []
+            for r in data:
+                if r.get("draft") or r.get("prerelease"):
+                    continue
+                url = next((a.get("browser_download_url") for a in r.get("assets") or []
+                            if str(a.get("name", "")).startswith(want)), "")
+                if not url:
+                    continue
+                out.append({"version": str(r.get("tag_name", "")).lstrip("v"),
+                            "date": str(r.get("published_at") or "")[:10],
+                            "url": url, "notes": str(r.get("body") or "").strip()})
+            out.sort(key=lambda x: vtuple(x["version"]), reverse=True)
+            self.result.emit(out, "")
+        except Exception as e:
+            self.result.emit(None, str(e))
+
+
+class VersionsDialog(QDialog):
+    """Все выпущенные версии: можно вернуться к прежней или поставить любую заново."""
+
+    def __init__(self, releases, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Версии Stamp Studio")
+        self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
+        self.resize(760, 520)
+        self.releases = releases
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(16, 14, 16, 14)
+        lay.setSpacing(10)
+        head = QLabel(f"Сейчас установлена версия {APP_VERSION}")
+        head.setObjectName("aihead")
+        lay.addWidget(head)
+        sub = QLabel("Если после обновления что-то стало хуже — выберите прежнюю версию и нажмите «Установить». "
+                     "Печати, подписи, настройки и ключи ИИ сохраняются. После возврата программа не будет сама "
+                     "предлагать версию, с которой вы ушли, — только более новую.")
+        sub.setObjectName("hint")
+        sub.setWordWrap(True)
+        lay.addWidget(sub)
+        body = QHBoxLayout()
+        body.setSpacing(10)
+        self.lst = QListWidget()
+        self.lst.setFixedWidth(230)
+        newest = releases[0]["version"] if releases else ""
+        for r in releases:
+            tag = "  · установлена" if r["version"] == APP_VERSION else ("  · последняя" if r["version"] == newest else "")
+            d = r["date"]
+            d = f"{d[8:10]}.{d[5:7]}.{d[:4]}" if len(d) == 10 else d
+            it = QListWidgetItem(f"{r['version']}   {d}{tag}")
+            if r["version"] == APP_VERSION:
+                f = it.font(); f.setBold(True); it.setFont(f)
+            self.lst.addItem(it)
+        body.addWidget(self.lst)
+        self.txt = QTextBrowser()
+        self.txt.setOpenExternalLinks(True)
+        body.addWidget(self.txt, 1)
+        lay.addLayout(body, 1)
+        row = QHBoxLayout()
+        row.addStretch(1)
+        self.b_go = QPushButton("Установить")
+        self.b_go.setObjectName("primary")
+        self.b_go.clicked.connect(self.accept)
+        row.addWidget(self.b_go)
+        b = QPushButton("Закрыть")
+        b.clicked.connect(self.reject)
+        row.addWidget(b)
+        lay.addLayout(row)
+        self.lst.currentRowChanged.connect(self._show)
+        cur = next((i for i, r in enumerate(releases) if vtuple(r["version"]) < vtuple(APP_VERSION)), 0)
+        self.lst.setCurrentRow(cur)
+
+    def _show(self, row):
+        if not (0 <= row < len(self.releases)):
+            self.b_go.setEnabled(False)
+            return
+        r = self.releases[row]
+        same = r["version"] == APP_VERSION
+        older = vtuple(r["version"]) < vtuple(APP_VERSION)
+        self.b_go.setEnabled(not same)
+        self.b_go.setText("Уже установлена" if same else
+                          (f"Вернуться к {r['version']}" if older else f"Обновить до {r['version']}"))
+        notes = r["notes"] or "Описание для этой версии не сохранилось."
+        self.txt.setPlainText(f"Что вошло в версию {r['version']}:\n\n{notes}")
+
+    def chosen(self):
+        row = self.lst.currentRow()
+        return self.releases[row] if 0 <= row < len(self.releases) else None
+
+
 class UpdateDownloadThread(QThread):
     progress = Signal(int, int)         # скачано, всего (байт)
     done = Signal(str, str)             # путь к файлу, текст ошибки
@@ -6639,6 +6740,9 @@ class MainWindow(QMainWindow):
             if not silent:
                 self.show_toast(f"✔  У вас последняя версия — {APP_VERSION}")
             return
+        hold = str(settings_load().get("update_hold") or "")
+        if silent and hold and vtuple(latest) <= vtuple(hold):
+            return                              # пользователь сам вернулся с этой версии на прежнюю
         if hasattr(self, "btn_version"):
             self.btn_version.setText(f" Обновить до {latest} ")
             self.btn_version.setToolTip("Вышла новая версия — нажмите, чтобы обновить")
@@ -6652,9 +6756,16 @@ class MainWindow(QMainWindow):
             from PySide6.QtCore import QUrl
             QDesktopServices.openUrl(QUrl(url or (GITHUB_URL + "/releases/latest")))
             return
+        st = settings_load()
+        st.pop("update_hold", None)
+        settings_save(st)
+        self._install_from_url(url, "обновление")
+
+    def _install_from_url(self, url, what="обновление"):
+        """Скачать установщик и запустить его; программа закроется, установится и откроется снова."""
         dest = os.path.join(LIB_DIR, "updates", "StampStudio-Setup.exe")
-        prog = QProgressDialog("Скачиваю обновление…", "Отмена", 0, 100, self)
-        prog.setWindowTitle("Обновление")
+        prog = QProgressDialog(f"Скачиваю {what}…", "Отмена", 0, 100, self)
+        prog.setWindowTitle("Установка версии")
         prog.setWindowModality(Qt.WindowModal)
         prog.setMinimumDuration(0)
         prog.setAutoClose(False)
@@ -6665,21 +6776,20 @@ class MainWindow(QMainWindow):
         def on_progress(got, total):
             if total:
                 prog.setValue(int(got * 100 / total))
-                prog.setLabelText(f"Скачиваю обновление: {got / 1048576:.0f} из {total / 1048576:.0f} МБ")
+                prog.setLabelText(f"Скачиваю {what}: {got / 1048576:.0f} из {total / 1048576:.0f} МБ")
             else:
-                prog.setLabelText(f"Скачиваю обновление: {got / 1048576:.0f} МБ")
+                prog.setLabelText(f"Скачиваю {what}: {got / 1048576:.0f} МБ")
 
         def on_done(path, error):
             prog.close()
             if error:
                 if error != "отменено":
-                    QMessageBox.warning(self, "Обновление",
-                                        "Не удалось скачать обновление:\n" + error)
+                    QMessageBox.warning(self, "Установка версии", "Не удалось скачать:\n" + error)
                 return
             try:
                 apply_update_installer(path)
             except Exception as e:
-                QMessageBox.warning(self, "Обновление", f"Не удалось запустить установку:\n{e}")
+                QMessageBox.warning(self, "Установка версии", f"Не удалось запустить установку:\n{e}")
                 return
             QApplication.quit()
 
@@ -6687,6 +6797,42 @@ class MainWindow(QMainWindow):
         th.done.connect(on_done)
         prog.canceled.connect(lambda: setattr(th, "cancelled", True))
         th.start()
+
+    def show_versions(self):
+        """Помощь → Версии и откат: список выпущенных версий, возврат к прежней."""
+        if getattr(self, "_rel_thread", None) is not None and self._rel_thread.isRunning():
+            return
+        self.statusBar().showMessage("Загружаю список версий…", 5000)
+        self._rel_thread = ReleasesThread(self)
+        self._rel_thread.result.connect(self._on_releases)
+        self._rel_thread.start()
+
+    def _on_releases(self, releases, err):
+        if not releases:
+            QMessageBox.warning(self, "Версии", "Не удалось получить список версий. Проверьте интернет.\n\n" + (err or ""))
+            return
+        dlg = VersionsDialog(releases, self)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        r = dlg.chosen()
+        if not r or r["version"] == APP_VERSION:
+            return
+        older = vtuple(r["version"]) < vtuple(APP_VERSION)
+        if self.doc is not None and (self.stamps or self.view.pen_active()):
+            q = QMessageBox.question(self, "Версии", "На документе есть несохранённые печати. Программа закроется "
+                                                     "для установки — продолжить без сохранения?")
+            if q != QMessageBox.Yes:
+                return
+        st = settings_load()
+        if older:
+            st["update_hold"] = releases[0]["version"]      # не предлагать то, с чего ушли
+        else:
+            st.pop("update_hold", None)
+        settings_save(st)
+        if not INSTALLED or sys.platform != "win32":
+            QDesktopServices.openUrl(QUrl(r["url"]))
+            return
+        self._install_from_url(r["url"], f"версию {r['version']}")
 
     def closeEvent(self, event):
         try:
@@ -6795,6 +6941,8 @@ class MainWindow(QMainWindow):
         m.addAction(act("Что нового в этой версии", self.show_whats_new, None, "Список изменений на сайте"))
         m.addAction(act("Проверить обновления", lambda: self.check_updates(silent=False), None,
                         "Проверить, не вышла ли новая версия"))
+        m.addAction(act("Версии и откат…", self.show_versions, None,
+                        "Вернуться к прежней версии, если новая не подошла"))
         m.addSeparator()
         m.addAction(act("О программе", self.show_about))
         self._build_toolstrip()
