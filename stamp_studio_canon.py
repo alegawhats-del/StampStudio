@@ -522,7 +522,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.5.0"
+APP_VERSION = "6.5.1"
 EDITION = "canon"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -978,6 +978,60 @@ def pen_dense_points(pts):
     return out
 
 
+def pen_natural_ends(dense, raw):
+    """Живые концы штриха, как у настоящей ручки: перо касается бумаги не сразу в полную силу,
+    а в конце линия сходит на нет лёгким мазком. Возвращает (точки, насыщенность по точкам)."""
+    import math
+    n = len(dense)
+    if n < 4:
+        return dense, None
+    cum = [0.0]
+    for i in range(1, n):
+        cum.append(cum[-1] + math.hypot(dense[i][0] - dense[i - 1][0], dense[i][1] - dense[i - 1][1]))
+    total = cum[-1]
+    ws = sorted(d[2] for d in dense)
+    w0 = ws[len(ws) // 2]
+    if total < 3 * w0:
+        return dense, None
+    lead = min(1.6 * w0, 0.15 * total)                     # касание: первые доли миллиметра тоньше
+    tail = min(max(3.2 * w0, 0.06 * total), 0.35 * total, 10 * w0)   # отрыв: линия утоньшается и бледнеет
+    out, alpha = [], []
+    for i, (x, y, w) in enumerate(dense):
+        k, a = 1.0, 1.0
+        if cum[i] < lead:
+            k *= 0.62 + 0.38 * (cum[i] / lead)
+            a *= 0.86 + 0.14 * (cum[i] / lead)
+        rest = total - cum[i]
+        if rest < tail:
+            t = rest / tail
+            k *= 0.30 + 0.70 * t ** 0.8
+            a *= 0.58 + 0.42 * t
+        out.append((x, y, w * k))
+        alpha.append(a)
+    # мазок: если рука в конце ещё двигалась, перо уходит с бумаги по инерции
+    pts = [q for q in raw if True]
+    while len(pts) >= 2 and math.hypot(pts[-1][0] - pts[-2][0], pts[-1][1] - pts[-2][1]) < 1e-6:
+        pts = pts[:-1]
+    speed = math.hypot(pts[-1][0] - pts[-2][0], pts[-1][1] - pts[-2][1]) if len(pts) >= 2 else 0.0
+    if speed > 1.1 * w0:
+        j = n - 1
+        while j > 0 and cum[-1] - cum[j] < 2.0 * w0:
+            j -= 1
+        dx, dy = dense[-1][0] - dense[j][0], dense[-1][1] - dense[j][1]
+        d = math.hypot(dx, dy)
+        if d > 1e-6:
+            dx, dy = dx / d, dy / d
+            flick = min(4.5 * w0, 0.7 * speed)
+            steps = max(3, int(flick / 0.7))
+            x0, y0, wl = out[-1]
+            al = alpha[-1]
+            for s_ in range(1, steps + 1):
+                t = s_ / steps
+                out.append((x0 + dx * flick * t, y0 + dy * flick * t, max(0.22, wl * (1 - 0.82 * t))))
+                alpha.append(al * (1 - 0.72 * t))
+    return out, alpha
+
+
 def pen_paint_strokes(painter, strokes, color):
     """Нарисовать штрихи переменной толщины (как шариковая ручка)."""
     r, g, b = color
@@ -997,11 +1051,18 @@ def pen_paint_strokes(painter, strokes, color):
         pen.setCapStyle(Qt.RoundCap)
         pen.setJoinStyle(Qt.RoundJoin)
         px, py, pw = dense[0]
-        for x, y, w in dense[1:]:
-            pen.setWidthF(max(0.3, (pw + w) / 2))
+        alpha = st.get("alpha")
+        if alpha is not None and len(alpha) != len(dense):
+            alpha = None
+        for i, (x, y, w) in enumerate(dense[1:], 1):
+            pen.setWidthF(max(0.2, (pw + w) / 2))
+            if alpha is not None:
+                col.setAlpha(int(238 * alpha[i]))
+                pen.setColor(col)
             painter.setPen(pen)
             painter.drawLine(QPointF(px, py), QPointF(x, y))
             px, py, pw = x, y, w
+        col.setAlpha(238)
 
 
 class PenLayer(QGraphicsObject):
@@ -1311,7 +1372,7 @@ class EditorView(QGraphicsView):
             self._pen_advance(st, finishing=True)
             last = st["pts"][-1]
             st["pts"].append((last[0], last[1], last[2] * 0.7))    # перо отрывается — хвостик тоньше
-            st["dense"] = pen_dense_points(st["pts"])
+            st["dense"], st["alpha"] = pen_natural_ends(pen_dense_points(st["pts"]), st["pts"])
             self.pen_layer.update()
         self._pen_stroke = None
         event.accept()
