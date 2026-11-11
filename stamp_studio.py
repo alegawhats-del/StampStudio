@@ -49,6 +49,7 @@ import datetime
 import re
 import stamp_ai as AI
 import stamp_word as SW
+import stamp_cloud as CLOUD
 
 PREVIEW_DPI = 150          # DPI отрисовки страницы в редакторе
 EXPORT_STAMP_DPI = 300     # DPI растеризации печати при экспорте
@@ -525,7 +526,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.7.0"
+APP_VERSION = "6.8.0"
 EDITION = "main"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -590,10 +591,49 @@ def lib_load() -> list:
         return []
 
 
+LIB_CHANGED = []                 # кому сообщить, что библиотека печатей изменилась
+
+
 def lib_save(items: list):
     os.makedirs(LIB_DIR, exist_ok=True)
     with open(LIB_JSON, "w", encoding="utf-8") as f:
         json.dump(items, f, ensure_ascii=False, indent=2)
+    for fn in list(LIB_CHANGED):
+        try:
+            fn()
+        except Exception:
+            pass
+
+
+CLOUD_STATE = os.path.join(LIB_DIR, "cloud_state.json")       # что уже сверено с облаком
+CLOUD_CLIENTS = os.path.join(LIB_DIR, "clients_cloud.json")   # клиенты из облака, у которых здесь ещё нет папки
+
+
+def _json_read(path, default):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return default
+
+
+def _json_write(path, data):
+    try:
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=1)
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
+
+def client_key(folder):
+    """Клиент узнаётся по названию своей папки — оно одинаковое на всех компьютерах."""
+    return os.path.basename(os.path.normpath(str(folder))).strip().lower()
+
+
+def cloud_uri():
+    return CLOUD.unprotect(settings_load().get("cloud_uri", ""))
 
 
 STAMP_CATEGORIES = ["Без категории", "Печати компаний", "Штампы", "Подписи",
@@ -1500,6 +1540,24 @@ def find_resource(name: str):
 AI.SETTINGS_LOAD = settings_load
 AI.SETTINGS_SAVE = settings_save
 AI.FIND_RESOURCE = find_resource
+
+
+def _card_saved(folder):
+    st = settings_load()
+    reg = st.setdefault("client_dirs", {})
+    key = client_key(folder)
+    if reg.get(key) != folder:
+        reg[key] = folder
+        settings_save(st)
+    for fn in list(LIB_CHANGED):
+        try:
+            fn()
+        except Exception:
+            pass
+
+
+SW.ON_CARD_SAVED = _card_saved
+SW.CARD_FALLBACK = lambda folder: (_json_read(CLOUD_CLIENTS, {}) or {}).get(client_key(folder)) or {}
 
 
 def open_pdf_free(path):
@@ -5439,6 +5497,21 @@ class DateTimeDialog(QDialog):
         self.accept()
 
 
+class CloudThread(QThread):
+    done = Signal(object)
+    failed = Signal(str)
+
+    def __init__(self, uri, local, snap, private_local, parent=None):
+        super().__init__(parent)
+        self.args = (uri, local, snap, private_local)
+
+    def run(self):
+        try:
+            self.done.emit(CLOUD.sync(*self.args))
+        except Exception as e:
+            self.failed.emit(CLOUD.explain(e))
+
+
 class SettingsDialog(QDialog):
     """Файл → Настройки: всё, что настраивается в программе, в одном окне по разделам."""
 
@@ -5447,8 +5520,8 @@ class SettingsDialog(QDialog):
         self.win = win
         self.setWindowTitle("Настройки")
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
-        self.resize(760, 500)
-        self.setMinimumSize(700, 460)
+        self.resize(780, 580)
+        self.setMinimumSize(720, 560)
         st = settings_load()
         root = QVBoxLayout(self)
         root.setContentsMargins(16, 14, 16, 12)
@@ -5601,6 +5674,65 @@ class SettingsDialog(QDialog):
               "Появится пункт «Правка → Подписать все места…»: программа найдёт в документе строки\n"
               "подписи выбранного человека и поставит его подпись на каждую.")
         l.addStretch(1)
+        # ---- Облако
+        l = page("Облако", "Копия печатей, клиентов и настроек в вашей базе MongoDB Atlas. Всё остаётся и на компьютере: "
+                           "без интернета программа работает как обычно и досылает изменения позже.")
+        self.ed_uri = QLineEdit(cloud_uri())
+        self.ed_uri.setEchoMode(QLineEdit.Password)
+        self.ed_uri.setMinimumHeight(30)
+        self.ed_uri.setPlaceholderText("mongodb+srv://логин:пароль@cluster0.xxxxx.mongodb.net/")
+        self.ed_uri.setToolTip("Строка подключения из Atlas: Connect → Drivers. Как её получить — в справке (F1), раздел «Облако».")
+        l.addWidget(self.ed_uri)
+        urow = QHBoxLayout()
+        b_eye = QPushButton("Показать")
+        b_eye.setCheckable(True)
+        b_eye.toggled.connect(lambda on: (self.ed_uri.setEchoMode(QLineEdit.Normal if on else QLineEdit.Password),
+                                          b_eye.setText("Скрыть" if on else "Показать")))
+        urow.addWidget(b_eye)
+        b_chk = QPushButton("Проверить подключение")
+        b_chk.clicked.connect(self._cloud_check)
+        urow.addWidget(b_chk)
+        b_cp = QPushButton("Скопировать строку")
+        b_cp.setToolTip("Сохраните копию строки у себя: после переустановки Windows её придётся вставить заново")
+        b_cp.clicked.connect(lambda: (QApplication.clipboard().setText(self.ed_uri.text().strip()),
+                                      self.lbl_cloud.setText("Строка скопирована — сохраните её в надёжном месте.")))
+        urow.addWidget(b_cp)
+        urow.addStretch(1)
+        l.addLayout(urow)
+        self.lbl_cloud = QLabel("")
+        self.lbl_cloud.setObjectName("plain")
+        self.lbl_cloud.setWordWrap(True)
+        self.lbl_cloud.setMinimumHeight(38)
+        self.lbl_cloud.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        l.addWidget(self.lbl_cloud)
+        parts = st.get("cloud_parts") or {}
+        self.cloud_checks = {}
+        for key, text in (("stamps", "Печати и подписи"), ("clients", "Карточки клиентов"),
+                          ("settings", "Поля шаблонов Word, наборы ручки, шаблоны имён"),
+                          ("counters", "Номера документов (общий счётчик, без повторов)")):
+            c = QCheckBox(text)
+            c.setChecked(bool(parts.get(key, True)))
+            l.addWidget(c)
+            self.cloud_checks[key] = c
+        check(l, "Паспортные данные — только на этом компьютере", "cloud_private_local", False,
+              "Паспорт, кем выдан, адрес и дата рождения не уйдут в базу. Остальное в карточке — уйдёт.")
+        srow = QHBoxLayout()
+        b_sync = QPushButton("Синхронизировать сейчас")
+        b_sync.clicked.connect(self._cloud_now)
+        srow.addWidget(b_sync)
+        b_off = QPushButton("Отключить облако")
+        b_off.setToolTip("Стереть строку на этом компьютере. Данные в базе и на компьютере останутся.")
+        b_off.clicked.connect(lambda: (self.ed_uri.clear(), self.lbl_cloud.setText(
+            "Строка будет стёрта, когда нажмёте «Сохранить». Данные никуда не денутся.")))
+        srow.addWidget(b_off)
+        srow.addStretch(1)
+        l.addLayout(srow)
+        note = QLabel("Строка хранится в папке данных программы, зашифрованная средствами Windows: обновления и откат "
+                      "версии её не трогают. У кого строка одна и та же — у тех общие печати и клиенты.")
+        note.setObjectName("hint")
+        note.setWordWrap(True)
+        l.addWidget(note)
+        l.addStretch(1)
         # ---- Данные программы
         l = page("Данные программы", "Библиотека печатей, настройки и ключи лежат в одной папке. "
                                      "Скопируйте её — и перенесёте программу на другой компьютер со всеми печатями.")
@@ -5665,6 +5797,49 @@ class SettingsDialog(QDialog):
         settings_save(st)
         self._fill()
 
+    def _cloud_check(self):
+        uri = self.ed_uri.text().strip()
+        self.lbl_cloud.setText("Проверяю подключение…")
+        QApplication.processEvents()
+        box = {}
+
+        class _T(QThread):
+            def run(self_t):
+                box["res"] = CLOUD.check(uri)
+
+        th = _T(self)
+        loop = QEventLoop(self)
+        th.finished.connect(loop.quit)
+        th.start()
+        if th.isRunning():
+            loop.exec()
+        th.wait()
+        ok, msg = box.get("res", (False, "Не удалось проверить"))
+        self.lbl_cloud.setText(("✔ " if ok else "⚠ ") + msg)
+        return ok
+
+    def _cloud_store(self):
+        st = settings_load()
+        uri = self.ed_uri.text().strip()
+        old = CLOUD.unprotect(st.get("cloud_uri", ""))
+        if uri != old:
+            st["cloud_uri"] = CLOUD.protect(uri) if uri else ""
+        st["cloud_parts"] = {k: c.isChecked() for k, c in self.cloud_checks.items()}
+        settings_save(st)
+
+    def _cloud_now(self):
+        self._cloud_store()
+        st = settings_load()
+        for c, key in self._checks:
+            if key == "cloud_private_local":
+                st[key] = c.isChecked()
+        settings_save(st)
+        if not cloud_uri():
+            self.lbl_cloud.setText("⚠ Сначала вставьте строку подключения.")
+            return
+        self.lbl_cloud.setText("Синхронизирую…")
+        self.win.cloud_sync(manual=True, report=lambda text: self.lbl_cloud.setText(text))
+
     def _counter_edit(self, fn):
         it = self.lst_num.currentItem()
         if it is None:
@@ -5685,6 +5860,7 @@ class SettingsDialog(QDialog):
             if not ok:
                 return False
             c["last"] = text.strip()
+            c["ts"] = c["forced_ts"] = time.time()
         self._counter_edit(fn)
 
     def _toggle_counter(self):
@@ -5703,6 +5879,7 @@ class SettingsDialog(QDialog):
         self._fill()
 
     def _save(self):
+        self._cloud_store()
         st = settings_load()
         for c, key in self._checks:
             st[key] = c.isChecked()
@@ -5715,6 +5892,8 @@ class SettingsDialog(QDialog):
             self.win.ai_toggle_auto(self.chk_ai.isChecked())
         self.win._ai_center_refresh()
         self.win._sign_all_state()
+        self.win._cloud_label()
+        self.win.cloud_soon(1500)
         self.accept()
 
 
@@ -7506,10 +7685,13 @@ class ClientCardDialog(QDialog):
         b_scan.setToolTip("Паспорт, техпаспорт, инвойс: программа распознает их и предложит данные на проверку")
         b_scan.clicked.connect(self.from_scans)
         row_b.addWidget(b_scan)
-        old = sorted((settings_load().get("word_clients") or {}).keys(), key=str.lower)
+        self._others = dict(settings_load().get("word_clients") or {})
+        for key, vals in (_json_read(CLOUD_CLIENTS, {}) or {}).items():
+            self._others.setdefault("облако: " + (vals.get("fio") or key), vals)
+        old = sorted(self._others.keys(), key=str.lower)
         if old:
             self.cmb_old = QComboBox()
-            self.cmb_old.addItem("Взять из сохранённых ранее…", None)
+            self.cmb_old.addItem("Взять данные другого клиента…", None)
             for name in old:
                 self.cmb_old.addItem(name, name)
             self.cmb_old.activated.connect(self._take_old)
@@ -7529,7 +7711,7 @@ class ClientCardDialog(QDialog):
 
     def _take_old(self, *_):
         name = self.cmb_old.currentData()
-        data = (settings_load().get("word_clients") or {}).get(name) or {}
+        data = self._others.get(name) or {}
         for k, v in data.items():
             if k in self.edits and not self.edits[k].text().strip():
                 self.edits[k].setText(str(v))
@@ -7878,6 +8060,7 @@ class WordFillPage(QDialog):
         st = settings_load()
         c = st.setdefault("doc_counters", {}).setdefault(self._tpl_id(), {})
         c.update(kw)
+        c["ts"] = time.time()
         settings_save(st)
 
     def _num_key(self):
@@ -8169,6 +8352,7 @@ class WordFillPage(QDialog):
         m = {"key": key or "", "label": label, "text": text}
         marks.append(m)
         settings_save(st)
+        self.win.cloud_soon()
         taken = [(x.selectionStart(), x.selectionEnd()) for r in self.rows for x in r["cursors"]]
         spans = [s for s in self._find_all(text) if not any(a < s[1] and s[0] < b for a, b in taken)]
         if not spans:
@@ -8242,6 +8426,27 @@ class WordFillPage(QDialog):
             QMessageBox.warning(self, "Редактор Word", "Это имя исходного файла. Выберите другое имя — шаблон должен "
                                                        "остаться чистым для следующих документов.")
             return
+        own0 = next((r for r in self.rows if r.get("docnum") and r["edit"] is not None), None)
+        uri = cloud_uri()
+        if own0 is not None and own0["edit"].text().strip() and uri and (settings_load().get("cloud_parts") or {}).get("counters", True) \
+                and not self.card.get(self._num_key()):
+            wanted = own0["edit"].text().strip()
+            cnt = self._counter()
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+            try:
+                got = CLOUD.claim_number(uri, self._tpl_id(), wanted, auto=bool(own0["auto"]), year=AI.today().year,
+                                         reset=cnt.get("reset", True))
+            except Exception:
+                got = wanted                              # облако недоступно — номер по счётчику этого компьютера
+            finally:
+                QApplication.restoreOverrideCursor()
+            if got and got != wanted:
+                own0["edit"].setText(got)
+                self._typed(own0, got)
+                own0["auto"] = True
+                edits = self.view.changed_paragraphs()
+                vals = self.client_values()
+                self._say(f"Номер {wanted} уже занят на другом компьютере — поставлен {got}")
         try:
             fresh = SW.WordDoc(self.path)
             n = fresh.save(out, edits=edits)
@@ -8269,6 +8474,7 @@ class WordFillPage(QDialog):
         card.pop("fio_short", None)
         saved = SW.card_save(out_dir, card) if card else True
         self.wd = None                              # следующий документ открывается с чистого шаблона
+        self.win.cloud_soon()
         self.win.reload_files()
         self.win.ai_mode(False)
         self.win.open_word(out, quiet=True)
@@ -8699,6 +8905,14 @@ class MainWindow(QMainWindow):
             settings_save(s)
         except Exception:
             pass
+        th = getattr(self, "_cloud_thread", None)       # дать синхронизации закончиться
+        try:
+            if th is not None and th.isRunning():
+                th.done.disconnect()
+                th.failed.disconnect()
+                th.wait(4000)
+        except Exception:
+            pass
         for th in getattr(self, "_ai_threads", []):     # не бросать запросы ИИ на полуслове
             try:
                 th.cancelled = True
@@ -9023,6 +9237,190 @@ class MainWindow(QMainWindow):
     def ai_center(self, *_):
         """Окно «ИИ-помощник»: сервис, счётчики, все функции и результат."""
         self.ai_mode(not self._ai_on())
+
+    # ---------------------------------------------------------- облако
+    def _cloud_label(self):
+        on = bool(settings_load().get("cloud_uri"))
+        self.btn_cloud.setVisible(on)
+        state, tip = self._cloud_state
+        self.btn_cloud.setText(" Облако" + (f": {state} " if state else " "))
+        self.btn_cloud.setToolTip((tip + "\n" if tip else "") + "Щелчок — синхронизировать сейчас.\n"
+                                  "Настройка: Файл → Настройки → Облако")
+
+    def cloud_soon(self, ms=4000):
+        """Что-то изменилось — отправить в облако чуть позже, одним разом."""
+        if getattr(self, "_cloud_applying", False) or not hasattr(self, "_cloud_timer"):
+            return
+        if settings_load().get("cloud_uri"):
+            self._cloud_timer.start(ms)
+
+    def _cloud_local(self):
+        """Собрать всё, что сверяется с облаком (в главном потоке)."""
+        st = settings_load()
+        parts = st.get("cloud_parts") or {}
+        local = {"stamps": {}, "clients": {}, "settings": {}, "counters": {}}
+        if parts.get("stamps", True):
+            for e in lib_load():
+                try:
+                    with open(e["file"], "rb") as f:
+                        data = f.read()
+                    local["stamps"][os.path.basename(e["file"])] = {
+                        "meta": {k: v for k, v in e.items() if k != "file"}, "data": data,
+                        "mtime": max(os.path.getmtime(e["file"]), os.path.getmtime(LIB_JSON))}
+                except OSError:
+                    pass
+        if parts.get("clients", True):
+            for key, vals in (_json_read(CLOUD_CLIENTS, {}) or {}).items():
+                if vals:
+                    local["clients"][key] = {"values": vals, "mtime": 0}
+            for key, folder in list((st.get("client_dirs") or {}).items()):
+                vals = SW.card_load(folder, fallback=False) if os.path.isdir(folder) else {}
+                if vals:
+                    try:
+                        mt = os.path.getmtime(SW.card_path(folder))
+                    except OSError:
+                        mt = 0
+                    local["clients"][key] = {"values": vals, "mtime": mt}
+        if parts.get("settings", True):
+            try:
+                mt = os.path.getmtime(SETTINGS_JSON)
+            except OSError:
+                mt = 0
+            for name in ("word_marks", "pen_presets", "name_templates"):
+                if st.get(name):
+                    local["settings"][name] = {"value": st[name], "mtime": mt}
+        if parts.get("counters", True):
+            local["counters"] = {k: dict(v) for k, v in (st.get("doc_counters") or {}).items() if v.get("last")}
+        return local
+
+    def cloud_sync(self, manual=False, report=None):
+        uri = cloud_uri()
+        if not uri:
+            if manual:
+                self.show_toast("Облако не настроено: Файл → Настройки → Облако")
+            return
+        th = getattr(self, "_cloud_thread", None)
+        if th is not None and th.isRunning():
+            self._cloud_again = True
+            return
+        state = _json_read(CLOUD_STATE, {})
+        uid = CLOUD.digest(uri)[:12]
+        snap = state.get("snap") if state.get("uri") == uid else {}       # другая база — сверяем с нуля
+        local = self._cloud_local()
+        self._cloud_local_hashes = {
+            "stamps": {i: CLOUD.digest([e["meta"], CLOUD.digest(e["data"])]) for i, e in local["stamps"].items()}}
+        private = bool(settings_load().get("cloud_private_local", False))
+        self._cloud_state = ("…", "Идёт синхронизация")
+        self._cloud_label()
+        th = CloudThread(uri, local, snap or {}, private, self)
+        self._cloud_thread = th
+
+        def done(res):
+            text = self._cloud_apply(res, uid)
+            if report:
+                report("✔ " + text)
+            elif manual:
+                self.show_toast("✔  Облако: " + text, 3600)
+            if getattr(self, "_cloud_again", False):
+                self._cloud_again = False
+                self.cloud_soon(2000)
+
+        def failed(msg):
+            self._cloud_state = ("нет связи", msg)
+            self._cloud_label()
+            if report:
+                report("⚠ " + msg)
+            elif manual:
+                QMessageBox.warning(self, "Облако", msg)
+
+        th.done.connect(done)
+        th.failed.connect(failed)
+        th.start()
+
+    def _cloud_apply(self, res, uid):
+        """Применить на этом компьютере то, что пришло из облака."""
+        self._cloud_applying = True
+        try:
+            snap = res["snap"]
+            st = settings_load()
+            private = bool(st.get("cloud_private_local", False))
+            # печати
+            if res["stamps_put"] or res["stamps_del"]:
+                items = lib_load()
+                by_id = {os.path.basename(e["file"]): e for e in items}
+                now = {}
+                for i, e in by_id.items():
+                    try:
+                        with open(e["file"], "rb") as f:
+                            now[i] = CLOUD.digest([{k: v for k, v in e.items() if k != "file"}, CLOUD.digest(f.read())])
+                    except OSError:
+                        pass
+                for i, d in res["stamps_put"].items():
+                    if now.get(i) != d["was"]:
+                        snap["stamps"].pop(i, None)          # здесь её успели изменить — разберёмся в следующий раз
+                        continue
+                    path = os.path.join(LIB_DIR, os.path.basename(i))
+                    try:
+                        with open(path, "wb") as f:
+                            f.write(d["data"])
+                    except OSError:
+                        snap["stamps"].pop(i, None)
+                        continue
+                    entry = dict(d["meta"], file=path)
+                    if i in by_id:
+                        items[items.index(by_id[i])] = entry
+                    else:
+                        items.append(entry)
+                for i, was in res["stamps_del"]:
+                    if i in by_id and now.get(i) == was:
+                        items = [e for e in items if os.path.basename(e["file"]) != i]
+                        try:
+                            os.remove(by_id[i]["file"])
+                        except OSError:
+                            pass
+                lib_save(items)
+                self.reload_library()
+            # клиенты
+            if res["clients_put"] or res["clients_del"]:
+                reg = st.get("client_dirs") or {}
+                cache = _json_read(CLOUD_CLIENTS, {}) or {}
+                for key, d in res["clients_put"].items():
+                    folder = reg.get(key, "")
+                    vals = dict(d["values"])
+                    if folder and os.path.isdir(folder):
+                        mine = SW.card_load(folder, fallback=False)
+                        for k in CLOUD.PRIVATE_KEYS:              # паспортные данные с этого компьютера не теряем
+                            if k not in vals and k in mine:
+                                vals[k] = mine[k]
+                        SW.card_save(folder, vals)
+                        cache.pop(key, None)
+                    else:
+                        cache[key] = vals
+                for key, _was in res["clients_del"]:
+                    cache.pop(key, None)
+                    folder = reg.get(key, "")
+                    if folder and os.path.isdir(folder):
+                        SW.card_save(folder, {})
+                _json_write(CLOUD_CLIENTS, cache)
+                self._client_line()
+            # настройки и счётчики
+            st = settings_load()
+            for name, d in res["settings_put"].items():
+                if (CLOUD.digest(st[name]) if st.get(name) else None) == d["was"]:
+                    st[name] = d["value"]
+                else:
+                    snap["settings"].pop(name, None)
+            if res["counters"]:
+                st.setdefault("doc_counters", {}).update(res["counters"])
+            settings_save(st)
+            _json_write(CLOUD_STATE, {"uri": uid, "snap": snap, "time": time.time()})
+        finally:
+            self._cloud_applying = False
+        when = datetime.datetime.now().strftime("%H:%M")
+        text = f"отправлено {res['up']}, получено {res['down']}" + (f", удалено {res['removed']}" if res["removed"] else "")
+        self._cloud_state = ("✓ " + when, f"Синхронизировано в {when}: {text}")
+        self._cloud_label()
+        return "синхронизировано — " + text
 
     def _sign_all_state(self):
         """Пункт «Подписать все места» виден, только если пользователь сам включил это в настройках."""
@@ -9864,6 +10262,23 @@ class MainWindow(QMainWindow):
         self.btn_version.setCursor(Qt.PointingHandCursor)
         self.btn_version.setToolTip("Проверить обновления")
         self.btn_version.clicked.connect(lambda: self.check_updates(silent=False))
+        self.btn_cloud = QPushButton("")
+        self.btn_cloud.setFlat(True)
+        self.btn_cloud.setObjectName("verbtn")
+        self.btn_cloud.setCursor(Qt.PointingHandCursor)
+        self.btn_cloud.clicked.connect(lambda: self.cloud_sync(manual=True))
+        self.statusBar().addPermanentWidget(self.btn_cloud)
+        self._cloud_state = ("", "")
+        self._cloud_timer = QTimer(self)
+        self._cloud_timer.setSingleShot(True)
+        self._cloud_timer.timeout.connect(self.cloud_sync)
+        self._cloud_every = QTimer(self)
+        self._cloud_every.setInterval(10 * 60 * 1000)
+        self._cloud_every.timeout.connect(self.cloud_sync)
+        self._cloud_every.start()
+        LIB_CHANGED.append(lambda: self.cloud_soon())
+        self._cloud_label()
+        self.cloud_soon(5000)
         self.btn_date = QPushButton("")
         self.btn_date.setFlat(True)
         self.btn_date.setObjectName("verbtn")
@@ -12526,7 +12941,7 @@ def main():
             except Exception:
                 guide_n = 0
             f.write(f"OK {APP_VERSION} {EDITION} scanner={scanner_backend()} guide={guide_n} "
-                    f"ai={len(AI.PROVIDERS)} keys={len(AI.builtin_keys())} ocr={AI.selftest_ocr()} word={SW.selftest()}")
+                    f"ai={len(AI.PROVIDERS)} keys={len(AI.builtin_keys())} ocr={AI.selftest_ocr()} word={SW.selftest()} cloud={CLOUD.selftest()}")
         sys.exit(0)
     win = MainWindow()
     win.show()

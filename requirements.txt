@@ -2,6 +2,8 @@ PySide6
 PyMuPDF
 Pillow
 python-docx
+pymongo
+dnspython
 pywin32; sys_platform == "win32"
 pyinstaller
 winrt-runtime; sys_platform == "win32"

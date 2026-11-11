@@ -549,6 +549,8 @@ def number_value(text):
 
 # ----------------------------------------------------------------------------- карточка клиента в папке
 CARD_FILE = "Карточка клиента.ssclient"
+ON_CARD_SAVED = None            # программа подставляет сюда свою функцию: fn(папка)
+CARD_FALLBACK = None            # fn(папка) → данные клиента из облака, если в папке карточки ещё нет
 
 
 def card_path(folder):
@@ -556,8 +558,9 @@ def card_path(folder):
     return os.path.join(folder, CARD_FILE)
 
 
-def card_load(folder):
-    """Карточка клиента из папки: {ключ: значение}. Пусто, если карточки нет."""
+def card_load(folder, fallback=True):
+    """Карточка клиента из папки: {ключ: значение}. Пусто, если карточки нет.
+    Если в папке карточки ещё нет, а в облаке есть клиент с таким же названием папки — берётся он."""
     import json
     import os
     try:
@@ -566,7 +569,13 @@ def card_load(folder):
         vals = data.get("values") if isinstance(data, dict) else None
         return {k: str(v) for k, v in (vals or {}).items() if str(v).strip()}
     except (OSError, ValueError):
-        return {}
+        pass
+    if fallback and CARD_FALLBACK is not None:
+        try:
+            return {k: str(v) for k, v in (CARD_FALLBACK(folder) or {}).items() if str(v).strip()}
+        except Exception:
+            pass
+    return {}
 
 
 def card_save(folder, values):
@@ -582,6 +591,8 @@ def card_save(folder, values):
             if os.path.exists(path):
                 _unhide(path)
                 os.remove(path)
+            if ON_CARD_SAVED is not None:
+                ON_CARD_SAVED(folder)
             return True
         _unhide(path)
         tmp = path + ".tmp"
@@ -593,6 +604,11 @@ def card_save(folder, values):
             try:
                 import ctypes
                 ctypes.windll.kernel32.SetFileAttributesW(path, 0x02)      # скрытый
+            except Exception:
+                pass
+        if ON_CARD_SAVED is not None:
+            try:
+                ON_CARD_SAVED(folder)
             except Exception:
                 pass
         return True

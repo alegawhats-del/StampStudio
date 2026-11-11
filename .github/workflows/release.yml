@@ -68,6 +68,7 @@ jobs:
             "--icon", "icon.ico", "--add-data", "icon.png;.", "--add-data", "docs;docs",
             "--hidden-import", "win32com.client", "--hidden-import", "pythoncom", "--hidden-import", "pywintypes",
             "--collect-data", "docx", "--hidden-import", "lxml._elementpath",
+            "--collect-submodules", "pymongo", "--collect-submodules", "dns", "--hidden-import", "win32crypt",
             "--exclude-module", "torch", "--exclude-module", "torchvision", "--exclude-module", "tensorflow",
             "--exclude-module", "matplotlib", "--exclude-module", "scipy", "--exclude-module", "pandas",
             "--exclude-module", "IPython", "--exclude-module", "notebook", "--exclude-module", "PyQt5",
@@ -96,6 +97,7 @@ jobs:
             if ($txt -notmatch " ai=15 ") { Write-Error "AI module is broken in ${exe} - $txt"; exit 1 }
             if ($txt -match "ocr=(fail|bad)") { Write-Error "Windows OCR is broken in ${exe} - $txt"; exit 1 }
             if ($txt -notmatch "word=ok") { Write-Error "Word filling is broken in ${exe} - $txt"; exit 1 }
+            if ($txt -notmatch "cloud=ok") { Write-Error "Cloud module is broken in ${exe} - $txt"; exit 1 }
           }
 
       - name: Inno Setup - both installers
