@@ -526,7 +526,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.8.0"
+APP_VERSION = "6.8.1"
 EDITION = "canon"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -560,10 +560,26 @@ def settings_load() -> dict:
         return {}
 
 
+SETTINGS_CHANGED = []            # кому сообщить, что изменились настройки, которые уходят в облако
+_SYNCED_KEYS = ("word_marks", "pen_presets", "name_templates", "doc_counters")
+_synced_seen = [None]
+
+
 def settings_save(d: dict):
     os.makedirs(LIB_DIR, exist_ok=True)
     with open(SETTINGS_JSON, "w", encoding="utf-8") as f:
         json.dump(d, f, ensure_ascii=False, indent=2)
+    try:
+        now = json.dumps([d.get(k) for k in _SYNCED_KEYS], ensure_ascii=False, sort_keys=True, default=str)
+    except Exception:
+        return
+    if _synced_seen[0] is not None and now != _synced_seen[0]:
+        for fn in list(SETTINGS_CHANGED):
+            try:
+                fn()
+            except Exception:
+                pass
+    _synced_seen[0] = now
 
 
 MM_TO_PT = 72.0 / 25.4
@@ -1554,6 +1570,36 @@ def _card_saved(folder):
             fn()
         except Exception:
             pass
+
+
+def register_client_dirs(folders):
+    """Запомнить папки, в которых лежат карточки клиентов, — чтобы они уходили в облако. True, если нашлись новые."""
+    st = settings_load()
+    reg = st.setdefault("client_dirs", {})
+    new = False
+    for folder in folders:
+        key = client_key(folder)
+        if key and reg.get(key) != folder and os.path.isfile(SW.card_path(folder)):
+            reg[key] = folder
+            new = True
+    if new:
+        settings_save(st)
+    return new
+
+
+def find_client_dirs(folder):
+    """Папка клиента и её соседи: обычно все клиенты лежат рядом, в одной общей папке."""
+    out = [folder]
+    try:
+        parent = os.path.dirname(os.path.normpath(folder))
+        if parent and parent != folder:
+            for name in sorted(os.listdir(parent))[:600]:
+                d = os.path.join(parent, name)
+                if d != folder and os.path.isdir(d):
+                    out.append(d)
+    except OSError:
+        pass
+    return out
 
 
 SW.ON_CARD_SAVED = _card_saved
@@ -8904,12 +8950,23 @@ class MainWindow(QMainWindow):
             settings_save(s)
         except Exception:
             pass
+        try:                                            # есть неотправленные изменения — отправить перед выходом
+            if getattr(self, "_cloud_timer", None) is not None and self._cloud_timer.isActive():
+                self._cloud_timer.stop()
+                self.cloud_sync()
+        except Exception:
+            pass
         th = getattr(self, "_cloud_thread", None)       # дать синхронизации закончиться
         try:
             if th is not None and th.isRunning():
-                th.done.disconnect()
                 th.failed.disconnect()
-                th.wait(4000)
+                loop = QEventLoop(self)                 # результат применяем, но дольше 6 секунд выход не держим
+                th.finished.connect(loop.quit)
+                QTimer.singleShot(6000, loop.quit)
+                loop.exec()
+                if th.isRunning():
+                    th.done.disconnect()
+                    th.wait(2000)
         except Exception:
             pass
         for th in getattr(self, "_ai_threads", []):     # не бросать запросы ИИ на полуслове
@@ -9246,6 +9303,16 @@ class MainWindow(QMainWindow):
         self.btn_cloud.setToolTip((tip + "\n" if tip else "") + "Щелчок — синхронизировать сейчас.\n"
                                   "Настройка: Файл → Настройки → Облако")
 
+    def changeEvent(self, e):
+        """Вернулись в окно программы — сразу забрать то, что изменили на других компьютерах."""
+        super().changeEvent(e)
+        try:
+            if e.type() == QEvent.ActivationChange and self.isActiveWindow() and hasattr(self, "_cloud_timer") \
+                    and time.time() - getattr(self, "_cloud_last", 0) > 45:
+                self.cloud_soon(800)
+        except Exception:
+            pass
+
     def cloud_soon(self, ms=4000):
         """Что-то изменилось — отправить в облако чуть позже, одним разом."""
         if getattr(self, "_cloud_applying", False) or not hasattr(self, "_cloud_timer"):
@@ -9313,6 +9380,7 @@ class MainWindow(QMainWindow):
         self._cloud_label()
         th = CloudThread(uri, local, snap or {}, private, self)
         self._cloud_thread = th
+        self._cloud_last = time.time()
 
         def done(res):
             text = self._cloud_apply(res, uid)
@@ -9543,6 +9611,11 @@ class MainWindow(QMainWindow):
     def _client_line(self):
         if not hasattr(self, "lbl_client"):
             return
+        try:                                            # карточки этой папки и соседних — в список для облака
+            if register_client_dirs(find_client_dirs(self.current_dir())):
+                self.cloud_soon()
+        except Exception:
+            pass
         data = SW.derive(SW.card_load(self.current_dir()))
         who = data.get("fio_short") or data.get("fio") or ""
         car = data.get("car", "")
@@ -10272,10 +10345,12 @@ class MainWindow(QMainWindow):
         self._cloud_timer.setSingleShot(True)
         self._cloud_timer.timeout.connect(self.cloud_sync)
         self._cloud_every = QTimer(self)
-        self._cloud_every.setInterval(10 * 60 * 1000)
+        self._cloud_every.setInterval(3 * 60 * 1000)      # забирать изменения с других компьютеров
         self._cloud_every.timeout.connect(self.cloud_sync)
         self._cloud_every.start()
         LIB_CHANGED.append(lambda: self.cloud_soon())
+        SETTINGS_CHANGED.append(lambda: self.cloud_soon())
+        self._cloud_last = 0.0
         self._cloud_label()
         self.cloud_soon(5000)
         self.btn_date = QPushButton("")
