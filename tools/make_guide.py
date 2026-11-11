@@ -343,7 +343,7 @@ def with_dialog(cls, action, setup=None, accept=False):
 before = Image.frombytes("RGB", *(lambda p: ((p.width, p.height), p.samples))(
     S.fitz.open("pdf", w._stamped_pdf_bytes())[0].get_pixmap(dpi=110, clip=S.fitz.Rect(40, 600, 560, 800))))
 shots["mk"] = lambda d: [(1, d.preview.x() + 60, d.preview.y() + 60), (2, *corner(d.cmb_preset, d)),
-                         (3, *corner(d.cmb_pages, d)), (4, *center(d._ok_btn, d, dy=-30))]
+                         (3, *corner(d.rb_all, d)), (4, *center(d._ok_btn, d, dy=-30))]
 with_dialog(S.ScanLookDialog, w.scan_look, accept=True)
 dlg_im = callouts(shots["dlg"], shots["marks"])
 after_pix = w.doc[0].get_pixmap(dpi=110, clip=S.fitz.Rect(40, 600, 560, 800))

@@ -507,7 +507,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.4.4"
+APP_VERSION = "6.4.5"
 EDITION = "canon"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -4799,26 +4799,35 @@ class ScanLookDialog(QDialog):
         pl = QVBoxLayout(pbox)
         pl.setSpacing(6)
         n = self.src_doc.page_count
-        self.cmb_pages = QComboBox()
-        self.cmb_pages.addItem(f"все страницы ({n})", "all")
-        self.cmb_pages.addItem(f"только текущая (стр. {self.page_index + 1})", "current")
-        self.cmb_pages.addItem("выбранные…", "custom")
-        pl.addWidget(self.cmb_pages)
+        # как в окне печати Word: все / текущая / поле с номерами
+        self.rb_all = QRadioButton(f"Все страницы ({n})")
+        self.rb_cur = QRadioButton(f"Текущая страница (стр. {self.page_index + 1})")
+        self.rb_custom = QRadioButton("Страницы:")
+        self.rb_all.setChecked(True)
+        pl.addWidget(self.rb_all)
+        pl.addWidget(self.rb_cur)
+        prow = QHBoxLayout()
+        prow.setSpacing(8)
+        prow.addWidget(self.rb_custom)
         self.ed_pages = QLineEdit()
-        self.ed_pages.setPlaceholderText("например: 1-3, 5, 7")
+        self.ed_pages.setPlaceholderText("1-3, 5, 7")
         self.ed_pages.setMinimumHeight(28)
-        self.ed_pages.setToolTip("Номера страниц через запятую, диапазоны через дефис")
-        pl.addWidget(self.ed_pages)
+        self.ed_pages.setToolTip("Номера страниц через запятую, диапазоны через дефис.\nНапример: 1-3, 5, 7")
+        prow.addWidget(self.ed_pages, 1)
+        pl.addLayout(prow)
         self.lbl_pages = QLabel("")
         self.lbl_pages.setObjectName("hint")
         pl.addWidget(self.lbl_pages)
         side.addWidget(pbox)
         if preselect and len(preselect) > 1:
-            self.cmb_pages.setCurrentIndex(2)
+            self.rb_custom.setChecked(True)
             self.ed_pages.setText(pages_to_text(preselect))
         elif n > 1 and st.get("pages_mode") == "current":
-            self.cmb_pages.setCurrentIndex(1)
-        self.cmb_pages.currentIndexChanged.connect(self._pages_changed)
+            self.rb_cur.setChecked(True)
+        for rb in (self.rb_all, self.rb_cur, self.rb_custom):
+            rb.toggled.connect(self._pages_changed)
+        self.rb_custom.clicked.connect(lambda: self.ed_pages.setFocus())
+        self.ed_pages.textEdited.connect(lambda _t: self.rb_custom.setChecked(True))
         self.ed_pages.textChanged.connect(self._pages_changed)
         self._pages_changed()
         side.addStretch(1)
@@ -4852,7 +4861,7 @@ class ScanLookDialog(QDialog):
 
     def selected_pages(self):
         """Список индексов страниц (с нуля) или None, если ввод неверный."""
-        mode = self.cmb_pages.currentData()
+        mode = self.pages_mode()
         n = self.src_doc.page_count
         if mode == "all":
             return list(range(n))
@@ -4860,15 +4869,16 @@ class ScanLookDialog(QDialog):
             return [self.page_index]
         return parse_pages(self.ed_pages.text(), n)
 
+    def pages_mode(self):
+        return "all" if self.rb_all.isChecked() else "current" if self.rb_cur.isChecked() else "custom"
+
     def _pages_changed(self, *_):
-        custom = self.cmb_pages.currentData() == "custom"
-        self.ed_pages.setVisible(custom)
         pages = self.selected_pages()
         ok_btn = getattr(self, "_ok_btn", None)
         if pages:
             self.lbl_pages.setText(f"будет обработано страниц: {len(pages)}")
         else:
-            self.lbl_pages.setText("введите номера страниц, например 1-3, 5")
+            self.lbl_pages.setText("введите номера страниц, например 1-3, 5, 7")
         if ok_btn is not None:
             ok_btn.setEnabled(bool(pages))
 
@@ -4917,7 +4927,7 @@ class ScanLookDialog(QDialog):
                 "color": bool(self.cmb_color.currentData()),
                 "dpi": int(self.cmb_dpi.currentData()),
                 "pages": self.selected_pages(),
-                "pages_mode": self.cmb_pages.currentData(),
+                "pages_mode": self.pages_mode(),
                 "bed": self.chk_bed.isChecked(),
                 "seed": self.seed}
 
