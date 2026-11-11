@@ -517,7 +517,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.4.13"
+APP_VERSION = "6.4.14"
 EDITION = "main"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -1411,6 +1411,14 @@ AI.SETTINGS_SAVE = settings_save
 AI.FIND_RESOURCE = find_resource
 
 
+def open_pdf_free(path):
+    """Открыть PDF, не занимая файл: документ читается в память, и файл на диске сразу свободен —
+    его можно удалить, переименовать или перезаписать, пока он открыт в программе."""
+    with open(path, "rb") as f:
+        data = f.read()
+    return fitz.open("pdf", data)
+
+
 def write_file_safely(path: str, data: bytes, owner=None) -> str:
     """Записать файл, даже если он сейчас открыт в самой программе.
 
@@ -1453,7 +1461,7 @@ def write_file_safely(path: str, data: bytes, owner=None) -> str:
         raise
     finally:
         if reopen_after:
-            owner.doc = fitz.open(path)
+            owner.doc = open_pdf_free(path)
             owner.doc_path = path
     return path
 
@@ -3064,7 +3072,7 @@ class PageOrganizer(QDialog):
         added = 0
         for p in paths:
             try:
-                d = fitz.open(p)
+                d = open_pdf_free(p)
             except Exception as e:
                 QMessageBox.critical(self, "Ошибка", f"Не удалось открыть:\n{p}\n{e}")
                 continue
@@ -3844,7 +3852,7 @@ def load_scanner_bg(path):
         return None
     try:
         if path.lower().endswith(".pdf"):
-            d = fitz.open(path)
+            d = open_pdf_free(path)
             pix = d[0].get_pixmap(dpi=150, alpha=False)
             im = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
             d.close()
@@ -7120,9 +7128,9 @@ class MainWindow(QMainWindow):
             try:
                 write_file_safely(new, data)
             except Exception:
-                self.doc = fitz.open(old)
+                self.doc = open_pdf_free(old)
                 raise
-            self.doc = fitz.open(new)
+            self.doc = open_pdf_free(new)
             self.doc_path = new
             try:
                 os.remove(old)
@@ -8009,7 +8017,7 @@ class MainWindow(QMainWindow):
             return
         if path.lower().endswith(".pdf"):
             try:
-                doc = fitz.open(path)
+                doc = open_pdf_free(path)
             except Exception as e:
                 QMessageBox.critical(self, "Ошибка", f"Не удалось открыть PDF:\n{e}")
                 return
@@ -8086,7 +8094,7 @@ class MainWindow(QMainWindow):
 
     def _meta_for_file(self, path):
         try:
-            d = fitz.open(path)
+            d = open_pdf_free(path)
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", str(e))
             return
@@ -9217,7 +9225,7 @@ class MainWindow(QMainWindow):
             self.open_word(path)
             return
         try:
-            doc = fitz.open(path)
+            doc = open_pdf_free(path)
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Не удалось открыть PDF:\n{e}")
             return
@@ -9904,7 +9912,7 @@ class MainWindow(QMainWindow):
             if not path:
                 return
             try:
-                doc = fitz.open(path)
+                doc = open_pdf_free(path)
             except Exception as e:
                 QMessageBox.critical(self, "Ошибка", f"Не удалось открыть PDF:\n{e}")
                 return
@@ -10040,7 +10048,7 @@ class MainWindow(QMainWindow):
             if not path:
                 return
             try:
-                src_doc = fitz.open(path)
+                src_doc = open_pdf_free(path)
                 src_size = os.path.getsize(path)
                 source_path = os.path.abspath(path)
             except Exception as e:
@@ -10128,7 +10136,7 @@ class MainWindow(QMainWindow):
                 self.scene.removeItem(s)
             self.stamps.clear()
             self.doc.close()
-            self.doc = fitz.open(out_path)
+            self.doc = open_pdf_free(out_path)
             self.refresh_page_list(page_now)
             self.show_page(min(page_now, self.doc.page_count - 1))
 
