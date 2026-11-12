@@ -24,6 +24,7 @@ from PySide6.QtCore import Qt, QRect, QRectF, QSize, QThread, Signal, QEvent, QO
 from PySide6.QtCore import QTimer, QPropertyAnimation
 from PySide6.QtWidgets import (QGraphicsOpacityEffect, QGraphicsObject,
                                QGraphicsDropShadowEffect, QTextBrowser, QGridLayout)
+from PySide6.QtGui import QRegion
 from PySide6.QtGui import (QAction, QIcon, QImage, QPixmap, QTransform, QPainter,
                            QKeySequence, QPen, QColor)
 from PySide6.QtWidgets import (
@@ -526,7 +527,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.8.1"
+APP_VERSION = "6.8.2"
 EDITION = "main"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -1531,6 +1532,17 @@ def tab_close_icon_path(color: str) -> str:
     return path
 
 
+def qss_icon_path(kind: str, color: str) -> str:
+    """PNG-значок для QSS (стрелки прокрутки вкладок)."""
+    path = os.path.join(tempfile.gettempdir(), f"stampstudio_{kind}_{color.strip('#')}.png")
+    if not os.path.exists(path):
+        try:
+            draw_icon(kind, color, 32).pixmap(32, 32).save(path, "PNG")
+        except Exception:
+            return ""
+    return path.replace("\\", "/")
+
+
 def find_resource(name: str):
     """Найти файл: сначала рядом с программой, потом внутри сборки.
 
@@ -1786,6 +1798,8 @@ def draw_icon(kind: str, color: str, size: int = 64) -> QIcon:
         fl(8, 3.2, 8, 12.8); fl(3.2, 8, 12.8, 8)
     elif kind == "chev_down":
         fl(4.4, 6.2, 8, 9.8, 11.6, 6.2)
+    elif kind == "chev_left":
+        fl(9.8, 4.4, 6.2, 8, 9.8, 11.6)
     elif kind == "chev_right":
         fl(6.2, 4.4, 9.8, 8, 6.2, 11.6)
     elif kind == "folder":
@@ -1984,6 +1998,8 @@ def draw_icon(kind: str, color: str, size: int = 64) -> QIcon:
         p.setBrush(Qt.NoBrush)
     elif kind == "chev_down":
         line(4.5, 6.5, 8.0, 10.0); line(8.0, 10.0, 11.5, 6.5)
+    elif kind == "chev_left":
+        fl(9.8, 4.4, 6.2, 8, 9.8, 11.6)
     elif kind == "chev_right":
         line(6.5, 4.5, 10.0, 8.0); line(10.0, 8.0, 6.5, 11.5)
     elif kind == "pages":
@@ -8669,6 +8685,19 @@ class MetadataDialog(QDialog):
 
 # ---------------------------------------------------------------- главное окно
 
+class TabScrollWatch(QObject):
+    """Следит за полосой вкладок и показывает свои стрелки, когда вкладки не помещаются."""
+
+    def __init__(self, win):
+        super().__init__(win)
+        self.win = win
+
+    def eventFilter(self, obj, ev):
+        if ev.type() in (QEvent.Paint, QEvent.Resize, QEvent.LayoutRequest):
+            QTimer.singleShot(0, self.win._tab_arrows_sync)
+        return False
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -8720,6 +8749,8 @@ class MainWindow(QMainWindow):
                       f"subcontrol-position: right; margin-right: 6px; }}"
                       f"\nQTabBar::close-button:hover {{ background: rgba(200,130,20,0.25); "
                       f"border-radius: 7px; }}")
+        style += ("\nQTabBar::scroller { width: 0px; }"
+                  "\nQTabBar QToolButton { width: 0px; max-width: 0px; border: none; margin: 0; padding: 0; background: transparent; }")
         style += EXTRA_QSS_DARK if self.theme == "dark" else EXTRA_QSS_LIGHT
         QApplication.instance().setStyleSheet(style)
         self.view.set_theme(self.theme)
@@ -10300,6 +10331,22 @@ class MainWindow(QMainWindow):
         self.dir_tabs.tabCloseRequested.connect(self.close_dir_tab)
         row.addWidget(self.dir_tabs, 0)
 
+        # свои стрелки прокрутки вкладок: родные у Qt рисуются обрезанными
+        self._tab_arrows = []
+        for kind, tip in (("chev_left", "Предыдущие вкладки"), ("chev_right", "Следующие вкладки")):
+            b = QPushButton()
+            b.setFixedSize(22, 30)
+            b.setToolTip(tip)
+            b.setIconSize(QSize(12, 12))
+            b.setAutoRepeat(True)
+            b.setVisible(False)
+            b.clicked.connect(lambda _=False, k=kind: self._tab_scroll(k))
+            self._themed_buttons.append((b, kind, False))
+            self._tab_arrows.append(b)
+            row.addWidget(b, 0)
+        self._tab_watch = TabScrollWatch(self)
+        self.dir_tabs.installEventFilter(self._tab_watch)
+
         b_newtab = QPushButton()
         b_newtab.setFixedSize(30, 30)
         b_newtab.setToolTip("Открыть ещё одну папку во вкладке")
@@ -10320,6 +10367,8 @@ class MainWindow(QMainWindow):
         self.lbl_path = QLabel("")
         self.lbl_path.setObjectName("path")
         self.lbl_path.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.lbl_path.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.lbl_path.setMinimumWidth(0)
         row.addWidget(self.lbl_path, 1)
 
         bar.addWidget(holder)
@@ -10567,6 +10616,30 @@ class MainWindow(QMainWindow):
             return self._dirs[i]
         return os.path.expanduser("~")
 
+    def _tab_native(self):
+        """Родные (спрятанные) кнопки прокрутки вкладок: левая, правая."""
+        bs = [b for b in self.dir_tabs.findChildren(QToolButton)]
+        bs.sort(key=lambda b: 0 if b.arrowType() == Qt.LeftArrow else 1)
+        return bs if len(bs) == 2 else []
+
+    def _tab_scroll(self, kind):
+        bs = self._tab_native()
+        if bs:
+            bs[0 if kind == "chev_left" else 1].click()
+            self._tab_arrows_sync()
+
+    def _tab_arrows_sync(self):
+        bs = self._tab_native()
+        show = bool(bs) and bs[0].isVisible()
+        for nat in bs:                       # родные кнопки остаются рабочими, но не рисуются
+            if nat.mask().isEmpty():
+                nat.setMask(QRegion(-2, -2, 1, 1))
+        for own, nat in zip(self._tab_arrows, bs or (None, None)):
+            if own.isVisible() != show:
+                own.setVisible(show)
+            if show and own.isEnabled() != nat.isEnabled():
+                own.setEnabled(nat.isEnabled())
+
     @staticmethod
     def _tab_title(path: str) -> str:
         name = os.path.basename(path.rstrip(os.sep)) or path
@@ -10701,6 +10774,7 @@ class MainWindow(QMainWindow):
         folder = self.current_dir()
         self._watch_folder(folder)
         self.lbl_path.setText(folder)
+        self.lbl_path.setToolTip(folder)
         self._client_line()
         self.file_list.clear()
         col = self._icon_color() if hasattr(self, "_icon_color") else "#888888"
