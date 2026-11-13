@@ -527,7 +527,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.8.3"
+APP_VERSION = "6.9.0"
 EDITION = "main"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -562,7 +562,7 @@ def settings_load() -> dict:
 
 
 SETTINGS_CHANGED = []            # кому сообщить, что изменились настройки, которые уходят в облако
-_SYNCED_KEYS = ("word_marks", "pen_presets", "name_templates", "doc_counters")
+_SYNCED_KEYS = ("word_marks", "pen_presets", "name_templates", "doc_counters", "sheet_templates")
 _synced_seen = [None]
 
 
@@ -1936,6 +1936,10 @@ def draw_icon(kind: str, color: str, size: int = 64) -> QIcon:
         p.setPen(pen2)
         line(8.0, 1.6, 8.0, 14.4)
         p.setPen(pen)
+    elif kind == "sheet":
+        rect(3.0, 1.5, 10.0, 13.0)
+        rect(3.0, 1.5, 5.2, 6.4)
+        line(4.4, 3.6, 6.8, 3.6); line(4.4, 5.6, 6.8, 5.6)
     elif kind == "scanlook":
         rect(2.0, 6.0, 12.0, 6.0)
         line(2.0, 9.0, 14.0, 9.0)
@@ -5164,6 +5168,547 @@ def build_scan_look_doc(src_doc, pages=None, dpi=190, preset="normal", color=Tru
         np_ = out.new_page(width=page.rect.width, height=page.rect.height)
         np_.insert_image(np_.rect, stream=buf.getvalue())
     return out
+
+
+# ======================================================================
+#  Разместить документ нестандартного размера на листе («скан на стекле»)
+# ======================================================================
+
+SHEET_FORMATS = [("A4", 210.0, 297.0), ("A5", 148.0, 210.0), ("A3", 297.0, 420.0), ("Letter", 215.9, 279.4)]
+SHEET_ANCHORS = [("— поставить —", None), ("левый верхний угол", (0, 0)), ("сверху по центру", (1, 0)),
+                 ("правый верхний угол", (2, 0)), ("по центру листа", (1, 1)), ("левый нижний угол", (0, 2)),
+                 ("снизу по центру", (1, 2)), ("правый нижний угол", (2, 2))]
+
+
+def sheet_templates_load() -> list:
+    """Шаблоны размещения на листе: [{name, sheet:[w,h], w, h, x, y, rot, bg, trim}] (мм)."""
+    out = []
+    for t in settings_load().get("sheet_templates", []) or []:
+        try:
+            if t.get("name") and float(t.get("w", 0)) > 0 and float(t.get("h", 0)) > 0:
+                out.append(t)
+        except Exception:
+            continue
+    return out
+
+
+def sheet_template_add(t: dict):
+    s = settings_load()
+    items = [x for x in (s.get("sheet_templates", []) or []) if x.get("name") != t.get("name")]
+    items.append(t)
+    s["sheet_templates"] = items
+    settings_save(s)
+
+
+def sheet_template_remove(name: str):
+    s = settings_load()
+    s["sheet_templates"] = [x for x in (s.get("sheet_templates", []) or []) if x.get("name") != name]
+    settings_save(s)
+
+
+def trim_object_box(im):
+    """Рамка самого документа на снимке (без однотонных полей). None — обрезать нечего."""
+    try:
+        W, H = im.size
+        small = im.convert("RGB").resize((max(8, W // 6), max(8, H // 6)), Image.BILINEAR)
+        w, h = small.size
+        c = max(2, min(w, h) // 40)
+        corners = Image.new("RGB", (c * 2, c * 2))
+        for n, box in enumerate(((0, 0, c, c), (w - c, 0, w, c), (0, h - c, c, h), (w - c, h - c, w, h))):
+            corners.paste(small.crop(box), ((n % 2) * c, (n // 2) * c))
+        bg = tuple(int(v) for v in ImageStat.Stat(corners).median)
+        diff = ImageChops.difference(small, Image.new("RGB", (w, h), bg)).convert("L")
+        diff = diff.point(lambda v: 255 if v > 22 else 0).filter(ImageFilter.MedianFilter(5))
+        bb = diff.getbbox()
+        if not bb:
+            return None
+        x0, y0, x1, y1 = bb
+        if (x1 - x0) * (y1 - y0) > 0.97 * w * h or (x1 - x0) < w * 0.08 or (y1 - y0) < h * 0.08:
+            return None
+        kx, ky = W / w, H / h
+        return (max(0, int(x0 * kx)), max(0, int(y0 * ky)), min(W, int(x1 * kx) + 1), min(H, int(y1 * ky) + 1))
+    except Exception:
+        return None
+
+
+def place_on_sheet(obj, t: dict, dpi: int = 200):
+    """Положить документ obj (PIL) на лист по настройкам t → PIL RGB всего листа.
+
+    t: sheet [ш, в] мм; w, h — размер документа на листе, мм; x, y — отступ от левого
+    и верхнего края, мм; rot — 0/90/180/270; bg — builtin (стекло сканера) или white."""
+    mm = dpi / 25.4
+    sw, sh = (float(v) for v in (t.get("sheet") or (210.0, 297.0)))
+    W, H = max(8, int(round(sw * mm))), max(8, int(round(sh * mm)))
+    base = builtin_scanner_bg() if t.get("bg", "builtin") == "builtin" else None
+    if base is not None:
+        if (W > H) != (base.width > base.height):
+            base = base.transpose(Image.ROTATE_90)
+        sheet = base.resize((W, H), Image.LANCZOS)
+    else:
+        sheet = Image.new("RGB", (W, H), (255, 255, 255))
+    rot = int(t.get("rot", 0)) % 360
+    frag = obj.convert("RGB")
+    if rot == 90:
+        frag = frag.transpose(Image.ROTATE_270)          # по часовой стрелке
+    elif rot == 180:
+        frag = frag.transpose(Image.ROTATE_180)
+    elif rot == 270:
+        frag = frag.transpose(Image.ROTATE_90)
+    fw, fh = max(2, int(round(float(t["w"]) * mm))), max(2, int(round(float(t["h"]) * mm)))
+    frag = frag.resize((fw, fh), Image.LANCZOS)
+    x, y = int(round(float(t.get("x", 0)) * mm)), int(round(float(t.get("y", 0)) * mm))
+    if base is not None:
+        bgc = tuple(int(v) for v in ImageStat.Stat(sheet.resize((32, 32))).median)
+        paste_sheet(sheet, frag, (x, y), bgc)
+    else:
+        sheet.paste(frag, (x, y))
+    return sheet
+
+
+class SheetPreview(QWidget):
+    """Лист с документом: документ можно таскать мышью."""
+    moved = Signal(float, float)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setMinimumSize(380, 520)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.setMouseTracking(True)
+        self._pm = None
+        self._sheet = (210.0, 297.0)
+        self._obj = (0.0, 0.0, 10.0, 10.0)
+        self._grab = None
+
+    def set_state(self, pixmap, sheet_mm, obj_mm):
+        self._pm, self._sheet, self._obj = pixmap, sheet_mm, obj_mm
+        self.update()
+
+    def _geom(self):
+        sw, sh = self._sheet
+        k = min((self.width() - 16) / sw, (self.height() - 16) / sh)
+        return k, (self.width() - sw * k) / 2, (self.height() - sh * k) / 2
+
+    def _obj_rect(self):
+        k, ox, oy = self._geom()
+        x, y, w, h = self._obj
+        return QRectF(ox + x * k, oy + y * k, w * k, h * k)
+
+    def paintEvent(self, _):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.SmoothPixmapTransform, True)
+        k, ox, oy = self._geom()
+        sw, sh = self._sheet
+        area = QRectF(ox, oy, sw * k, sh * k)
+        p.fillRect(area.adjusted(3, 3, 3, 3), QColor(0, 0, 0, 40))
+        if self._pm is not None:
+            p.drawPixmap(area, self._pm, QRectF(self._pm.rect()))
+        else:
+            p.fillRect(area, QColor("#ffffff"))
+        p.setPen(QPen(QColor("#9a9482"), 1))
+        p.drawRect(area)
+        pen = QPen(QColor("#d99a1c"), 1.6, Qt.DashLine)
+        p.setPen(pen)
+        p.setClipRect(area.adjusted(-2, -2, 2, 2))
+        p.drawRect(self._obj_rect())
+        p.end()
+
+    def mousePressEvent(self, e):
+        r = self._obj_rect()
+        if e.button() == Qt.LeftButton and r.contains(e.position()):
+            self._grab = (e.position().x() - r.x(), e.position().y() - r.y())
+
+    def mouseMoveEvent(self, e):
+        if self._grab is None:
+            self.setCursor(Qt.OpenHandCursor if self._obj_rect().contains(e.position()) else Qt.ArrowCursor)
+            return
+        self.setCursor(Qt.ClosedHandCursor)
+        k, ox, oy = self._geom()
+        self.moved.emit((e.position().x() - self._grab[0] - ox) / k, (e.position().y() - self._grab[1] - oy) / k)
+
+    def mouseReleaseEvent(self, _):
+        self._grab = None
+        self.setCursor(Qt.ArrowCursor)
+
+
+class SheetPlaceDialog(QDialog):
+    """Окно «Разместить на листе»: документ любого размера кладётся на лист, как на стекло сканера."""
+
+    def __init__(self, obj_img, natural_mm, parent=None, n_pages=1):
+        super().__init__(parent)
+        self.setWindowTitle("Разместить на листе")
+        self.resize(1040, 800)
+        self.setMinimumSize(920, 640)
+        self._src = obj_img
+        self._src_mm = natural_mm
+        self._busy = False
+        self._rot = 0
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.setInterval(60)
+        self._timer.timeout.connect(self._render)
+
+        root = QHBoxLayout(self)
+        root.setSpacing(14)
+        self.preview = SheetPreview()
+        self.preview.moved.connect(self._dragged)
+        root.addWidget(self.preview, 1)
+
+        side_w = QWidget()
+        side = QVBoxLayout(side_w)
+        side.setContentsMargins(0, 0, 6, 0)
+        side.setSpacing(8)
+        hint = QLabel("Задайте настоящий размер документа и место на листе — документ можно "
+                      "двигать мышью. Настройки сохраняются шаблоном.")
+        hint.setObjectName("hint")
+        hint.setWordWrap(True)
+        side.addWidget(hint)
+
+        box_t = QGroupBox("Шаблон")
+        lt = QVBoxLayout(box_t)
+        lt.setSpacing(6)
+        self.cmb_tpl = QComboBox()
+        lt.addWidget(self.cmb_tpl)
+        row = QHBoxLayout()
+        self.btn_tpl_save = QPushButton("Сохранить шаблон…")
+        self.btn_tpl_del = QPushButton("Удалить")
+        row.addWidget(self.btn_tpl_save, 1)
+        row.addWidget(self.btn_tpl_del)
+        lt.addLayout(row)
+        side.addWidget(box_t)
+
+        box_s = QGroupBox("Лист")
+        fs = QFormLayout(box_s)
+        fs.setSpacing(6)
+        self.cmb_sheet = QComboBox()
+        for name, w, h in SHEET_FORMATS:
+            self.cmb_sheet.addItem(f"{name} · {w:g}×{h:g}", (w, h))
+        self.cmb_sheet.addItem("Свой размер", None)
+        self.cmb_orient = QComboBox()
+        self.cmb_orient.addItem("книжный", "p")
+        self.cmb_orient.addItem("альбомный", "l")
+        row = QHBoxLayout()
+        row.addWidget(self.cmb_sheet, 1)
+        row.addWidget(self.cmb_orient)
+        fs.addRow("Формат:", row)
+        self.sp_sw, self.sp_sh = self._mm_spin(30, 1200, 210), self._mm_spin(30, 1200, 297)
+        row = QHBoxLayout()
+        row.addWidget(self.sp_sw)
+        row.addWidget(QLabel("×"))
+        row.addWidget(self.sp_sh)
+        self.row_custom = QWidget()
+        self.row_custom.setLayout(row)
+        row.setContentsMargins(0, 0, 0, 0)
+        self.lbl_custom = QLabel("Размер:")
+        fs.addRow(self.lbl_custom, self.row_custom)
+        self.cmb_bg = QComboBox()
+        self.cmb_bg.addItem("стекло сканера, как скан", "builtin")
+        self.cmb_bg.addItem("чистый белый лист", "white")
+        fs.addRow("Фон:", self.cmb_bg)
+        side.addWidget(box_s)
+
+        box_o = QGroupBox("Документ на листе")
+        fo = QFormLayout(box_o)
+        fo.setSpacing(6)
+        self.sp_w, self.sp_h = self._mm_spin(5, 1200, 100), self._mm_spin(5, 1200, 100)
+        row = QHBoxLayout()
+        row.addWidget(self.sp_w, 1)
+        row.addWidget(QLabel("×"))
+        row.addWidget(self.sp_h, 1)
+        fo.addRow("Размер:", row)
+        self.chk_lock = QCheckBox("Сохранять пропорции")
+        self.chk_lock.setChecked(True)
+        fo.addRow("", self.chk_lock)
+        row = QHBoxLayout()
+        self.btn_rl, self.btn_rr = QPushButton(" Влево"), QPushButton(" Вправо")
+        for b, kind in ((self.btn_rl, "rot_left"), (self.btn_rr, "rot_right")):
+            b.setIcon(draw_icon(kind, ui_icon_color(), 18))
+            b.setToolTip("Повернуть документ на 90°")
+            row.addWidget(b)
+        fo.addRow("Поворот:", row)
+        self.sp_x, self.sp_y = self._mm_spin(-600, 1200, 0), self._mm_spin(-600, 1200, 0)
+        self.sp_x.setToolTip("Отступ от левого края листа")
+        self.sp_y.setToolTip("Отступ от верхнего края листа")
+        row = QHBoxLayout()
+        row.addWidget(QLabel("слева"))
+        row.addWidget(self.sp_x, 1)
+        row.addWidget(QLabel("сверху"))
+        row.addWidget(self.sp_y, 1)
+        fo.addRow("Отступ:", row)
+        self.cmb_anchor = QComboBox()
+        for name, a in SHEET_ANCHORS:
+            self.cmb_anchor.addItem(name, a)
+        fo.addRow("Место:", self.cmb_anchor)
+        self.chk_trim = QCheckBox("Обрезать пустые поля вокруг документа")
+        self.chk_trim.setToolTip("Если документ снят на однотонном фоне — оставить только сам документ")
+        fo.addRow("", self.chk_trim)
+        side.addWidget(box_o)
+
+        box_r = QGroupBox("Куда положить результат")
+        if n_pages > 1:
+            box_r.setTitle(f"Куда положить результат (страниц: {n_pages})")
+        lr = QHBoxLayout(box_r)
+        lr.setSpacing(10)
+        self.rb_doc = QRadioButton("Заменить страницу")
+        self.rb_doc.setToolTip("Лист встанет на место страницы в открытом документе")
+        self.rb_new = QRadioButton("Новым PDF рядом")
+        self.rb_new.setToolTip("Лист сохранится отдельным файлом, открытый документ не изменится")
+        self.rb_doc.setChecked(True)
+        lr.addWidget(self.rb_doc)
+        lr.addWidget(self.rb_new)
+        lr.addStretch(1)
+        side.addWidget(box_r)
+        side.addStretch(1)
+
+        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        bb.button(QDialogButtonBox.Ok).setText("Разместить")
+        bb.button(QDialogButtonBox.Cancel).setText("Отмена")
+        bb.accepted.connect(self.accept)
+        bb.rejected.connect(self.reject)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setWidget(side_w)
+        col = QVBoxLayout()
+        col.setSpacing(8)
+        col.addWidget(scroll, 1)
+        col.addWidget(bb)
+        holder = QWidget()
+        holder.setFixedWidth(430)
+        holder.setLayout(col)
+        col.setContentsMargins(0, 0, 0, 0)
+        root.addWidget(holder)
+
+        self._obj = self._src
+        self._small = None
+        self._prepare_obj()
+        self._fill_templates()
+        self._natural_size()
+
+        for sp in (self.sp_sw, self.sp_sh, self.sp_x, self.sp_y):
+            sp.valueChanged.connect(self._changed)
+        self.sp_w.valueChanged.connect(lambda v: self._size_changed("w"))
+        self.sp_h.valueChanged.connect(lambda v: self._size_changed("h"))
+        self.cmb_sheet.currentIndexChanged.connect(self._sheet_changed)
+        self.cmb_orient.currentIndexChanged.connect(self._sheet_changed)
+        self.cmb_bg.currentIndexChanged.connect(self._changed)
+        self.cmb_anchor.activated.connect(self._anchor)
+        self.chk_trim.toggled.connect(self._trim_toggled)
+        self.btn_rl.clicked.connect(lambda: self._rotate(-90))
+        self.btn_rr.clicked.connect(lambda: self._rotate(90))
+        self.cmb_tpl.activated.connect(self._tpl_picked)
+        self.btn_tpl_save.clicked.connect(self._tpl_save)
+        self.btn_tpl_del.clicked.connect(self._tpl_delete)
+        self._sheet_changed()
+        last = settings_load().get("sheet_last_template")
+        i = self.cmb_tpl.findText(last) if last else -1
+        if i > 0:
+            self.cmb_tpl.setCurrentIndex(i)
+            self._tpl_picked(i)
+        self._render()
+
+    # ---------------------------------------------------------- мелочи
+    @staticmethod
+    def _mm_spin(lo, hi, val):
+        sp = QDoubleSpinBox()
+        sp.setRange(lo, hi)
+        sp.setDecimals(1)
+        sp.setSingleStep(1.0)
+        sp.setSuffix(" мм")
+        sp.setValue(val)
+        sp.setMinimumWidth(92)
+        return sp
+
+    def _prepare_obj(self):
+        """Документ для укладки: целиком или без пустых полей; уменьшенная копия — для превью."""
+        self._obj, self._obj_mm = self._src, self._src_mm
+        if self.chk_trim.isChecked():
+            box = trim_object_box(self._src)
+            if box:
+                self._obj = self._src.crop(box)
+                kx, ky = self._src_mm[0] / self._src.width, self._src_mm[1] / self._src.height
+                self._obj_mm = ((box[2] - box[0]) * kx, (box[3] - box[1]) * ky)
+        small = self._obj.copy()
+        small.thumbnail((640, 640), Image.BILINEAR)
+        self._small = small
+
+    def _aspect(self):
+        """Ширина / высота документа так, как он лежит на листе."""
+        a = self._obj.width / max(1, self._obj.height)
+        return 1.0 / a if self._rot in (90, 270) else a
+
+    def sheet_mm(self):
+        d = self.cmb_sheet.currentData()
+        w, h = d if d else (self.sp_sw.value(), self.sp_sh.value())
+        if d and self.cmb_orient.currentData() == "l":
+            w, h = h, w
+        return float(w), float(h)
+
+    def _natural_size(self):
+        """Настоящий размер документа; если он больше листа — вписать."""
+        w, h = self._obj_mm
+        if self._rot in (90, 270):
+            w, h = h, w
+        sw, sh = self.sheet_mm()
+        k = min(1.0, sw / w, sh / h)
+        self._set(self.sp_w, w * k)
+        self._set(self.sp_h, h * k)
+
+    def _set(self, sp, v):
+        sp.blockSignals(True)
+        sp.setValue(round(float(v), 1))
+        sp.blockSignals(False)
+
+    # ---------------------------------------------------------- события
+    def _changed(self, *_):
+        if not self._busy:
+            self._timer.start()
+
+    def _size_changed(self, which):
+        if self.chk_lock.isChecked():
+            a = self._aspect()
+            if which == "w":
+                self._set(self.sp_h, self.sp_w.value() / a)
+            else:
+                self._set(self.sp_w, self.sp_h.value() * a)
+        self._changed()
+
+    def _sheet_changed(self, *_):
+        custom = self.cmb_sheet.currentData() is None
+        self.row_custom.setVisible(custom)
+        self.lbl_custom.setVisible(custom)
+        self.cmb_orient.setEnabled(not custom)
+        self._changed()
+
+    def _rotate(self, step):
+        self._rot = (self._rot + step) % 360
+        w, h = self.sp_w.value(), self.sp_h.value()
+        self._set(self.sp_w, h)
+        self._set(self.sp_h, w)
+        self._changed()
+
+    def _anchor(self, i):
+        a = self.cmb_anchor.itemData(i)
+        self.cmb_anchor.setCurrentIndex(0)
+        if not a:
+            return
+        sw, sh = self.sheet_mm()
+        self._set(self.sp_x, (sw - self.sp_w.value()) * a[0] / 2)
+        self._set(self.sp_y, (sh - self.sp_h.value()) * a[1] / 2)
+        self._changed()
+
+    def _trim_toggled(self, _):
+        self._prepare_obj()
+        if self.chk_lock.isChecked():
+            self._set(self.sp_h, self.sp_w.value() / self._aspect())
+        self._changed()
+
+    def _dragged(self, x, y):
+        self._set(self.sp_x, x)
+        self._set(self.sp_y, y)
+        self._changed()
+
+    # ---------------------------------------------------------- шаблоны
+    def _fill_templates(self, pick=None):
+        self.cmb_tpl.blockSignals(True)
+        self.cmb_tpl.clear()
+        self.cmb_tpl.addItem("— без шаблона —", None)
+        for t in sheet_templates_load():
+            self.cmb_tpl.addItem(t["name"], t)
+        i = self.cmb_tpl.findText(pick) if pick else 0
+        self.cmb_tpl.setCurrentIndex(max(0, i))
+        self.cmb_tpl.blockSignals(False)
+        self.btn_tpl_del.setEnabled(self.cmb_tpl.currentIndex() > 0)
+
+    def template(self) -> dict:
+        """Текущие настройки (они же — содержимое шаблона)."""
+        sw, sh = self.sheet_mm()
+        return {"sheet": [round(sw, 1), round(sh, 1)], "w": round(self.sp_w.value(), 1),
+                "h": round(self.sp_h.value(), 1), "x": round(self.sp_x.value(), 1),
+                "y": round(self.sp_y.value(), 1), "rot": self._rot, "bg": self.cmb_bg.currentData(),
+                "trim": self.chk_trim.isChecked()}
+
+    def apply_template(self, t: dict):
+        self._busy = True
+        try:
+            sw, sh = (float(v) for v in (t.get("sheet") or (210, 297)))
+            found = False
+            for i, (_, w, h) in enumerate(SHEET_FORMATS):
+                for orient, (a, b) in (("p", (w, h)), ("l", (h, w))):
+                    if abs(a - sw) < 0.6 and abs(b - sh) < 0.6 and not found:
+                        self.cmb_sheet.setCurrentIndex(i)
+                        self.cmb_orient.setCurrentIndex(0 if orient == "p" else 1)
+                        found = True
+            if not found:
+                self.cmb_sheet.setCurrentIndex(self.cmb_sheet.count() - 1)
+                self._set(self.sp_sw, sw)
+                self._set(self.sp_sh, sh)
+            self.chk_trim.blockSignals(True)
+            self.chk_trim.setChecked(bool(t.get("trim")))
+            self.chk_trim.blockSignals(False)
+            self._prepare_obj()
+            self._rot = int(t.get("rot", 0)) % 360
+            self.chk_lock.setChecked(False)          # размер из шаблона ставится точно, как сохранён
+            self._set(self.sp_w, t["w"])
+            self._set(self.sp_h, t["h"])
+            self._set(self.sp_x, t.get("x", 0))
+            self._set(self.sp_y, t.get("y", 0))
+            i = self.cmb_bg.findData(t.get("bg", "builtin"))
+            self.cmb_bg.setCurrentIndex(max(0, i))
+        finally:
+            self._busy = False
+        self._sheet_changed()
+
+    def _tpl_picked(self, i):
+        t = self.cmb_tpl.itemData(i)
+        self.btn_tpl_del.setEnabled(bool(t))
+        if t:
+            self.apply_template(t)
+
+    def _tpl_save(self):
+        cur = self.cmb_tpl.currentText() if self.cmb_tpl.currentIndex() > 0 else ""
+        name, ok = QInputDialog.getText(self, "Шаблон", "Название шаблона (например, «СТС Германия»):", text=cur)
+        name = (name or "").strip()
+        if not ok or not name:
+            return
+        t = self.template()
+        t["name"] = name
+        sheet_template_add(t)
+        self._fill_templates(name)
+
+    def _tpl_delete(self):
+        name = self.cmb_tpl.currentText()
+        if self.cmb_tpl.currentIndex() <= 0:
+            return
+        if QMessageBox.question(self, "Шаблон", f"Удалить шаблон «{name}»?") != QMessageBox.Yes:
+            return
+        sheet_template_remove(name)
+        self._fill_templates()
+
+    # ---------------------------------------------------------- картинка
+    def _render(self):
+        t = self.template()
+        try:
+            im = place_on_sheet(self._small, t, dpi=44)
+            qi = QImage(im.tobytes(), im.width, im.height, im.width * 3, QImage.Format_RGB888).copy()
+            pm = QPixmap.fromImage(qi)
+        except Exception:
+            pm = None
+        self.preview.set_state(pm, tuple(t["sheet"]), (t["x"], t["y"], t["w"], t["h"]))
+
+    def result_object(self, src_img):
+        """Документ для укладки из страницы src_img (с учётом «обрезать поля»)."""
+        if self.chk_trim.isChecked():
+            box = trim_object_box(src_img)
+            if box:
+                return src_img.crop(box)
+        return src_img
+
+    def accept(self):
+        s = settings_load()
+        s["sheet_last_template"] = self.cmb_tpl.currentText() if self.cmb_tpl.currentIndex() > 0 else ""
+        settings_save(s)
+        super().accept()
 
 
 class ScanLookDialog(QDialog):
@@ -8803,6 +9348,9 @@ class MainWindow(QMainWindow):
                            checkable=True)
         self.act_scanlook = add("scanlook", "Как скан", self.scan_look, None,
                                 "Сделать документ таким, будто его распечатали и отсканировали")
+        self.act_sheet = add("sheet", "Разместить на листе…", self.place_on_sheet, None,
+                             "Положить документ нестандартного размера на лист, как на стекло сканера; "
+                             "размер и место сохраняются шаблоном")
         tb.addSeparator()
         # страницы и размер файла
         self.act_org = add("pages", "Страницы", self.organize_pages, "Ctrl+P",
@@ -9078,6 +9626,7 @@ class MainWindow(QMainWindow):
                              "Разложить два документа со страницы как два листа на стекле сканера", doc=True)
         m.addAction(self.act_split)
         m.addAction(self.act_scanlook)
+        m.addAction(self.act_sheet)
         m.addSeparator()
         m.addAction(self.act_org)
         m.addAction(self.act_compress)
@@ -9384,7 +9933,7 @@ class MainWindow(QMainWindow):
                 mt = os.path.getmtime(SETTINGS_JSON)
             except OSError:
                 mt = 0
-            for name in ("word_marks", "pen_presets", "name_templates"):
+            for name in ("word_marks", "pen_presets", "name_templates", "sheet_templates", "crop_templates"):
                 if st.get(name):
                     local["settings"][name] = {"value": st[name], "mtime": mt}
         if parts.get("counters", True):
@@ -10575,14 +11124,19 @@ class MainWindow(QMainWindow):
                 ("split", " Разрезать на 2", "Разрезать страницу на две бумаги и разложить их "
                  "на одном скане с фоном сканера", self.split_page_two),
                 ("scanlook", " Как скан", "Сделать документ таким, будто его распечатали "
-                 "и отсканировали", self.scan_look)]):
+                 "и отсканировали", self.scan_look),
+                ("sheet", " Разместить на листе", "Положить документ нестандартного размера на лист, как на "
+                 "стекло сканера; размер и место сохраняются шаблоном", self.place_on_sheet)]):
             b = QPushButton(text)
             b.setIconSize(QSize(15, 15))
             b.setMinimumHeight(32)
             b.setToolTip(tip)
             b.clicked.connect(slot)
             self._themed_buttons.append((b, kind, False))
-            tools.addWidget(b, n // 2, n % 2)
+            if n == 4:
+                tools.addWidget(b, 2, 0, 1, 2)       # пятая кнопка — на всю ширину
+            else:
+                tools.addWidget(b, n // 2, n % 2)
         lay.addLayout(tools)
         splitter.addWidget(bot)
 
@@ -11141,6 +11695,89 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Страница разрезана на две бумаги на одном скане", 4000)
 
 
+    def place_on_sheet(self):
+        """Положить документ нестандартного размера на лист, как на стекло сканера."""
+        if self.doc is None:
+            QMessageBox.information(self, "Нет документа",
+                                    "Сначала откройте PDF, снимок или отсканируйте документ.")
+            return
+        idx = max(0, self.page_list.currentRow())
+        pages = sorted({self.page_list.row(it) for it in self.page_list.selectedItems()}) or [idx]
+        if idx not in pages:
+            pages = [idx]
+        try:
+            src = fitz.open("pdf", self._stamped_pdf_bytes(compress={"mode": "none"}))   # печати — вместе с документом
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Не удалось подготовить документ:\n{e}")
+            return
+
+        def page_image(i, dpi=200):
+            pg = src[i]
+            long_mm = max(pg.rect.width, pg.rect.height) / MM_TO_PT
+            dpi = max(60, min(dpi, int(4200 / max(1.0, long_mm / 25.4))))    # очень большие листы — без гигантских картинок
+            pix = pg.get_pixmap(dpi=dpi, alpha=False)
+            return Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+
+        try:
+            first = page_image(idx)
+            r = src[idx].rect
+            dlg = SheetPlaceDialog(first, (r.width / MM_TO_PT, r.height / MM_TO_PT), self, n_pages=len(pages))
+        except Exception as e:
+            src.close()
+            QMessageBox.critical(self, "Ошибка", f"Не получилось открыть страницу:\n{e}")
+            return
+        if dlg.exec() != QDialog.Accepted:
+            src.close()
+            return
+        t = dlg.template()
+        to_new = dlg.rb_new.isChecked()
+        sw, sh = t["sheet"]
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            made = {}
+            for i in pages:
+                im = place_on_sheet(dlg.result_object(first if i == idx else page_image(i)), t, dpi=200)
+                buf = io.BytesIO()
+                im.save(buf, "JPEG", quality=88, optimize=True)
+                made[i] = buf.getvalue()
+            new = fitz.open()
+            if to_new:
+                for i in pages:
+                    pg = new.new_page(width=sw * MM_TO_PT, height=sh * MM_TO_PT)
+                    pg.insert_image(pg.rect, stream=made[i])
+            else:
+                for i in range(src.page_count):
+                    if i in made:
+                        pg = new.new_page(width=sw * MM_TO_PT, height=sh * MM_TO_PT)
+                        pg.insert_image(pg.rect, stream=made[i])
+                    else:
+                        new.insert_pdf(self.doc, from_page=i, to_page=i)
+        except Exception as e:
+            QApplication.restoreOverrideCursor()
+            src.close()
+            QMessageBox.critical(self, "Ошибка", f"Не получилось разместить:\n{e}")
+            return
+        QApplication.restoreOverrideCursor()
+        src.close()
+        if to_new:
+            self._scan_look_save_new(new, len(pages), suffix="на листе")
+            return
+        n = self.doc.page_count
+        self.doc.insert_pdf(new)
+        self.doc.delete_pages(0, n - 1)
+        new.close()
+        for s in list(self.stamps):               # печати с этих страниц уже внутри картинки
+            if s.page_index in made:
+                try:
+                    self.scene.removeItem(s)
+                except Exception:
+                    pass
+                self.stamps.remove(s)
+        self.refresh_page_list(idx)
+        self.show_page(idx)
+        self._update_ui_state()
+        self.show_toast(f"✔  Размещено на листе — страниц: {len(pages)}. Сохраните (Ctrl+S)")
+
     def scan_look(self):
         """Сделать документ «как напечатали и отсканировали»."""
         if self.doc is None:
@@ -11208,23 +11845,24 @@ class MainWindow(QMainWindow):
         self.show_toast(f"✔  Готово — страниц «как скан»: {len(pages)}. Сохраните (Ctrl+S)")
 
 
-    def _scan_look_save_new(self, new, n_pages):
+    def _scan_look_save_new(self, new, n_pages, suffix="скан"):
         """Сохранить «скан» отдельным файлом; открытый документ и печати не трогаем."""
         base = os.path.splitext(os.path.basename(str(self.doc_path or "документ")))[0]
         base = base.replace(" (из изображений)", "").replace(" (из Word)", "")
         folder = self.current_dir()
         if self.doc_path and os.path.isfile(str(self.doc_path)):
             folder = os.path.dirname(str(self.doc_path))
-        name = f"{base} скан.pdf"
+        name = f"{base} {suffix}.pdf"
         k = 2
         while os.path.exists(os.path.join(folder, name)):
-            name = f"{base} скан {k}.pdf"
+            name = f"{base} {suffix} {k}.pdf"
             k += 1
-        path, _ = QFileDialog.getSaveFileName(self, "Сохранить «скан» новым файлом",
+        what = "«Скан»" if suffix == "скан" else "Лист"
+        path, _ = QFileDialog.getSaveFileName(self, "Сохранить новым файлом",
                                               os.path.join(folder, name), "PDF (*.pdf)")
         if not path:
             new.close()
-            self.statusBar().showMessage("«Скан» не сохранён — открытый документ не изменён", 6000)
+            self.statusBar().showMessage(f"{what} не сохранён — открытый документ не изменён", 6000)
             return
         if not path.lower().endswith(".pdf"):
             path += ".pdf"
@@ -11239,7 +11877,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Ошибка", f"Не удалось сохранить:\n{e}")
             return
         self.reload_files()
-        self.show_toast(f"✔  «Скан» сохранён новым файлом: {os.path.basename(path)} "
+        self.show_toast(f"✔  {what} сохранён новым файлом: {os.path.basename(path)} "
                         f"(страниц: {n_pages}). Открытый документ не изменён", 5200)
 
     # ---------------------------------------------------------- ручка
@@ -11903,7 +12541,7 @@ class MainWindow(QMainWindow):
         for act in (getattr(self, "act_save", None), getattr(self, "act_png", None),
                     getattr(self, "act_org", None), getattr(self, "act_close", None),
                     getattr(self, "act_save_as", None), getattr(self, "act_pen", None),
-                    getattr(self, "act_scanlook", None)):
+                    getattr(self, "act_scanlook", None), getattr(self, "act_sheet", None)):
             if act is not None:
                 act.setEnabled(has_doc)
         for act in getattr(self, "_doc_actions", []):
