@@ -527,7 +527,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.8.2"
+APP_VERSION = "6.8.3"
 EDITION = "canon"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -11148,7 +11148,8 @@ class MainWindow(QMainWindow):
             return
         idx = max(0, self.page_list.currentRow())
         try:
-            src = fitz.open("pdf", self._stamped_pdf_bytes())   # печати впечатываются
+            # сначала готовый PDF — ровно как при «Сохранить», без сжатия, — и уже с него «скан»
+            src = fitz.open("pdf", self._stamped_pdf_bytes(compress={"mode": "none"}))
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Не удалось подготовить документ:\n{e}")
             return
@@ -12872,6 +12873,14 @@ class MainWindow(QMainWindow):
         for page in src_doc:
             for img in page.get_images(full=True):
                 xref = img[0]
+                if img[1]:
+                    continue      # картинка с прозрачностью (печать, подпись): JPEG дал бы чёрный фон
+                try:
+                    if src_doc.xref_get_key(xref, "Mask")[0] != "null" \
+                            or src_doc.xref_get_key(xref, "ImageMask")[1] == "true":
+                        continue
+                except Exception:
+                    pass
                 if xref not in seen:
                     seen[xref] = page
         for n, (xref, page) in enumerate(seen.items()):
