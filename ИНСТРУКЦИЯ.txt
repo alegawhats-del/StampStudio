@@ -3,6 +3,8 @@ STAMP STUDIO 6.10 - ЧТО НОВОГО
 Полное руководство с картинками — внутри программы: кнопка «Справка»
 справа вверху или клавиша F1.
 
+• Боковая полоса значков: добавлены «Разместить на листе» и «Акт осмотра» —
+  всё новое теперь есть и там
 • Акт осмотра: в словаре несколько вариантов перевода — привод (Frontantrieb /
   Vorderradantrieb, Heckantrieb / Hinterradantrieb, Allradantrieb / Allrad /
   4x4), коробка (Automatik / Automatikgetriebe, Schaltgetriebe / Manuell),

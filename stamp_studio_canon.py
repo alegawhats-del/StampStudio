@@ -410,12 +410,12 @@ QToolButton#ghost:pressed { background: rgba(214, 154, 51, 0.40); }
 QPushButton#aiact { text-align: left; padding: 6px 12px; }
 QDialog#embedded { background: transparent; }
 QToolBar#tools { background: #171a22; border: none; border-right: 1px solid #262b39; padding: 4px 5px; spacing: 2px; }
-QToolBar#tools QToolButton { min-width: 30px; max-width: 30px; min-height: 28px; max-height: 28px; padding: 0;
+QToolBar#tools QToolButton { min-width: 30px; max-width: 30px; min-height: 25px; max-height: 25px; padding: 0;
     background: transparent; border: 1px solid transparent; border-radius: 8px; }
 QToolBar#tools QToolButton:hover { background: #232735; border-color: #e8b04b; }
 QToolBar#tools QToolButton:checked { background: #3a321c; border-color: #e8b04b; }
 QToolBar#tools QToolButton:disabled { background: transparent; border-color: transparent; }
-QToolBar#tools::separator { background: #2a2f3d; height: 1px; margin: 3px 5px; }
+QToolBar#tools::separator { background: #2a2f3d; height: 1px; margin: 2px 5px; }
 QMenuBar { background: #171a22; border-bottom: 1px solid #262b39; padding: 1px 6px; }
 QMenuBar::item { background: transparent; padding: 4px 12px; border-radius: 6px; color: #c9cddb; }
 QMenuBar::item:selected, QMenuBar::item:pressed { background: #2c3145; color: #e8b04b; }
@@ -485,12 +485,12 @@ QToolButton#ghost:pressed { background: rgba(214, 154, 51, 0.40); }
 QPushButton#aiact { text-align: left; padding: 6px 12px; }
 QDialog#embedded { background: transparent; }
 QToolBar#tools { background: #fbf9f4; border: none; border-right: 1px solid #e6e1d6; padding: 4px 5px; spacing: 2px; }
-QToolBar#tools QToolButton { min-width: 30px; max-width: 30px; min-height: 28px; max-height: 28px; padding: 0;
+QToolBar#tools QToolButton { min-width: 30px; max-width: 30px; min-height: 25px; max-height: 25px; padding: 0;
     background: transparent; border: 1px solid transparent; border-radius: 8px; }
 QToolBar#tools QToolButton:hover { background: #ffffff; border-color: #d69a33; }
 QToolBar#tools QToolButton:checked { background: #fbefd3; border-color: #d69a33; }
 QToolBar#tools QToolButton:disabled { background: transparent; border-color: transparent; }
-QToolBar#tools::separator { background: #e6e1d6; height: 1px; margin: 3px 5px; }
+QToolBar#tools::separator { background: #e6e1d6; height: 1px; margin: 2px 5px; }
 QMenuBar { background: #fbf9f4; border-bottom: 1px solid #e6e1d6; padding: 1px 6px; }
 QMenuBar::item { background: transparent; padding: 4px 12px; border-radius: 6px; color: #4a4636; }
 QMenuBar::item:selected, QMenuBar::item:pressed { background: #f4e3c2; color: #6b4a00; }
@@ -528,7 +528,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.10.2"
+APP_VERSION = "6.10.3"
 EDITION = "canon"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -10718,7 +10718,8 @@ class MainWindow(QMainWindow):
             [(self.act_place, "stamp"), (self.act_pen, "pen"), (self.act_ai_place, "aim"), (self.act_delete, "trash")],
             [(self.act_rot_l, "rot_left"), (self.act_rot_r, "rot_right"), (self.act_crop, "crop"),
              (self.act_frame, "frame"), (self.act_split, "split")],
-            [(self.act_scanlook, "scanlook"), (self.act_ai_ocr, "ocr"), (self.act_word, "word_edit")],
+            [(self.act_scanlook, "scanlook"), (self.act_sheet, "sheet"), (self.act_ai_ocr, "ocr")],
+            [(self.act_word, "word_edit"), (self.act_act, "act")],
             [(self.act_zoom_in, "zoom_in"), (self.act_zoom_out, "zoom_out"), (self.act_fit, "fit")],
         ]
         for n, group in enumerate(groups):
