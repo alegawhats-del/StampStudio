@@ -28,12 +28,17 @@ DICT = {
               ("Braun", "Коричневый"), ("Beige", "Бежевый"), ("Gelb", "Жёлтый"), ("Orange", "Оранжевый"),
               ("Gold", "Золотистый"), ("Violett", "Фиолетовый"), ("Dunkelgrau", "Тёмно-серый"),
               ("Hellgrau", "Светло-серый"), ("Anthrazit", "Антрацит"), ("Bronze", "Бронзовый")],
-    "drive": [("Allradantrieb", "Полный"), ("Frontantrieb", "Передний"), ("Heckantrieb", "Задний")],
+    # первым стоит вариант, который подставляется сам; остальные — в списке на выбор
+    "drive": [("Allradantrieb", "Полный"), ("Frontantrieb", "Передний"), ("Heckantrieb", "Задний"),
+              ("Vorderradantrieb", "Передний"), ("Hinterradantrieb", "Задний"), ("Allrad", "Полный"),
+              ("4x4", "Полный")],
     "gear": [("Automatik", "АКПП"), ("Schaltgetriebe", "МКПП"), ("Doppelkupplungsgetriebe", "Робот"),
-             ("CVT", "Вариатор")],
+             ("CVT", "Вариатор"), ("Automatikgetriebe", "АКПП"), ("Manuell", "МКПП"),
+             ("Handschaltung", "МКПП"), ("DSG", "Робот")],
     "body": [("Crossover", "Кроссовер"), ("SUV", "Внедорожник"), ("Limousine", "Седан"), ("Kombi", "Универсал"),
              ("Schrägheck", "Хэтчбек"), ("Coupé", "Купе"), ("Cabrio", "Кабриолет"), ("Van", "Минивэн"),
-             ("Kleinbus", "Микроавтобус"), ("Pickup", "Пикап"), ("Transporter", "Фургон")],
+             ("Kleinbus", "Микроавтобус"), ("Pickup", "Пикап"), ("Transporter", "Фургон"),
+             ("SUV", "Кроссовер"), ("Geländewagen", "Внедорожник")],
     "fuel": [("Benzin", "Бензин"), ("Diesel", "Дизель"), ("Benzin/Hybrid", "Бензин/Гибрид"),
              ("Diesel/Hybrid", "Дизель/Гибрид"), ("Plug-in-Hybrid", "Подключаемый гибрид"),
              ("Elektro", "Электро"), ("Gas (LPG)", "Газ")],
@@ -561,10 +566,13 @@ def selftest():
     """Проверка без бланков: словарь, форматы, почерк, схемы."""
     assert translate("color", "grau", "ru") == "Серый" and translate("gear", "акпп", "de") == "Automatik"
     assert translate("color", "небесный", "de") is None and translate("fuel", "", "ru") == ""
+    assert translate("drive", "Vorderradantrieb", "ru") == "Передний" and translate("drive", "передний", "de") == "Frontantrieb"
+    assert translate("gear", "Automatikgetriebe", "ru") == "АКПП" and translate("gear", "АКПП", "de") == "Automatik"
+    assert variants("drive", 1) == ["Полный", "Передний", "Задний"] and "Vorderradantrieb" in variants("drive", 0)
     keep = dict(EXTRA)
     try:
-        assert learn("body", "SUV", "Кроссовер") and not learn("body", "suv", "кроссовер") and not learn("body", "Crossover", "Кроссовер")
-        assert translate("body", "Кроссовер", "de") == "Crossover" and variants("body", 0).count("SUV") == 1
+        assert learn("body", "Fließheck", "Лифтбек") and not learn("body", "suv", "кроссовер") and not learn("body", "Crossover", "Кроссовер")
+        assert translate("body", "Кроссовер", "de") == "Crossover" and variants("body", 0).count("SUV") == 1 and translate("body", "SUV", "ru") == "Внедорожник"
         assert learn("color", "Himmelblau", "Небесный") and translate("color", "небесный", "de") == "Himmelblau"
     finally:
         EXTRA.clear()
