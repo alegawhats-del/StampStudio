@@ -93,11 +93,12 @@ jobs:
             $txt = Get-Content $out -Raw
             "$exe -> $txt"
             if ($txt -notmatch "^OK ${{ steps.ver.outputs.ver }} ") { Write-Error "$exe selftest wrong: $txt"; exit 1 }
-            if ($txt -notmatch "guide=13") { Write-Error "guide is not bundled in ${exe} - $txt"; exit 1 }
+            if ($txt -notmatch "guide=14") { Write-Error "guide is not bundled in ${exe} - $txt"; exit 1 }
             if ($txt -notmatch " ai=15 ") { Write-Error "AI module is broken in ${exe} - $txt"; exit 1 }
             if ($txt -match "ocr=(fail|bad)") { Write-Error "Windows OCR is broken in ${exe} - $txt"; exit 1 }
             if ($txt -notmatch "word=ok") { Write-Error "Word filling is broken in ${exe} - $txt"; exit 1 }
             if ($txt -notmatch "cloud=ok") { Write-Error "Cloud module is broken in ${exe} - $txt"; exit 1 }
+            if ($txt -notmatch "act=ok") { Write-Error "Inspection act module is broken in ${exe} - $txt"; exit 1 }
           }
 
       - name: Inno Setup - both installers

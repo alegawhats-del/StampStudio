@@ -51,6 +51,7 @@ import re
 import stamp_ai as AI
 import stamp_word as SW
 import stamp_cloud as CLOUD
+import stamp_act as ACT
 
 PREVIEW_DPI = 150          # DPI отрисовки страницы в редакторе
 EXPORT_STAMP_DPI = 300     # DPI растеризации печати при экспорте
@@ -527,7 +528,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.9.0"
+APP_VERSION = "6.10.0"
 EDITION = "main"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -562,7 +563,7 @@ def settings_load() -> dict:
 
 
 SETTINGS_CHANGED = []            # кому сообщить, что изменились настройки, которые уходят в облако
-_SYNCED_KEYS = ("word_marks", "pen_presets", "name_templates", "doc_counters", "sheet_templates")
+_SYNCED_KEYS = ("word_marks", "pen_presets", "name_templates", "doc_counters", "sheet_templates", "act_masters")
 _synced_seen = [None]
 
 
@@ -1936,6 +1937,10 @@ def draw_icon(kind: str, color: str, size: int = 64) -> QIcon:
         p.setPen(pen2)
         line(8.0, 1.6, 8.0, 14.4)
         p.setPen(pen)
+    elif kind == "act":
+        rect(3.0, 2.2, 10.0, 12.0)
+        line(5.2, 5.4, 10.8, 5.4); line(5.2, 8.0, 8.4, 8.0)
+        fl(6.4, 11.0, 7.8, 12.4, 10.8, 9.2)
     elif kind == "sheet":
         rect(3.0, 1.5, 10.0, 13.0)
         rect(3.0, 1.5, 5.2, 6.4)
@@ -9230,6 +9235,989 @@ class MetadataDialog(QDialog):
 
 # ---------------------------------------------------------------- главное окно
 
+# ======================================================================
+#  Акт осмотра автомобиля: оригинал на немецком + перевод, почерк мастера
+# ======================================================================
+
+ACT_DIR = os.path.join(LIB_DIR, "act")
+
+
+def act_kit_path(which: str) -> str:
+    return os.path.join(ACT_DIR, ACT.KIT_FILES[which])
+
+
+def act_kit_ready() -> bool:
+    return all(os.path.isfile(act_kit_path(k)) for k in ACT.KIT_FILES)
+
+
+def act_kit_value():
+    """Бланки для облака: {de, ru} в base64 и время изменения. None — бланков нет."""
+    if not act_kit_ready():
+        return None, 0
+    import base64
+    val, mt = {}, 0
+    for k in ACT.KIT_FILES:
+        with open(act_kit_path(k), "rb") as f:
+            val[k] = base64.b64encode(f.read()).decode("ascii")
+        mt = max(mt, os.path.getmtime(act_kit_path(k)))
+    return val, mt
+
+
+def act_kit_store(val: dict):
+    import base64
+    os.makedirs(ACT_DIR, exist_ok=True)
+    for k in ACT.KIT_FILES:
+        if val.get(k):
+            with open(act_kit_path(k), "wb") as f:
+                f.write(base64.b64decode(val[k]))
+
+
+def act_masters_load() -> list:
+    return [m for m in (settings_load().get("act_masters") or []) if m.get("name")]
+
+
+def act_masters_save(items: list):
+    s = settings_load()
+    s["act_masters"] = items
+    settings_save(s)
+
+
+def act_next_number() -> int:
+    last = str(((settings_load().get("doc_counters") or {}).get("act") or {}).get("last") or "")
+    d = re.sub(r"\D", "", last)
+    return int(d) + 1 if d else ACT.FIRST_NUMBER
+
+
+def act_set_last(n):
+    s = settings_load()
+    s.setdefault("doc_counters", {}).setdefault("act", {}).update({"last": str(n), "ts": time.time()})
+    settings_save(s)
+
+
+def _strokes_image(strokes, w, h, color, scale=1.0):
+    """Штрихи [[(x, y, толщина)…]…] → прозрачная картинка PIL (как шариковая ручка)."""
+    W, H = max(4, int(w * scale)), max(4, int(h * scale))
+    img = QImage(W, H, QImage.Format_ARGB32_Premultiplied)
+    img.fill(Qt.transparent)
+    items = []
+    for pts in strokes:
+        if not pts:
+            continue
+        dense = pen_dense_points(pts)
+        dense, alpha = pen_natural_ends(dense, pts)
+        items.append({"pts": pts, "dense": dense, "alpha": alpha})
+    p = QPainter(img)
+    p.scale(scale, scale)
+    pen_paint_strokes(p, items, color)
+    p.end()
+    img = img.convertToFormat(QImage.Format_RGBA8888)
+    return Image.frombuffer("RGBA", (img.width(), img.height()), bytes(img.constBits()), "raw", "RGBA",
+                            img.bytesPerLine(), 1).copy()
+
+
+def hand_pil(text, glyphs, height_px, seed=0, color=None):
+    """Строка почерком мастера → прозрачная картинка (или None, если писать нечего)."""
+    strokes, w, h = ACT.hand_layout(text, glyphs, height_px, seed)
+    if not strokes:
+        return None
+    return _strokes_image(strokes, w, h, color or PEN_INKS[0][1])
+
+
+def sign_pil(strokes_norm, height_px, color=None):
+    """Подпись мастера (как он её нарисовал) → прозрачная картинка, обрезанная по штрихам."""
+    pts_all = [(p[0], p[1]) for st in strokes_norm or [] for p in st]
+    if len(pts_all) < 2:
+        return None
+    x0, y0 = min(p[0] for p in pts_all), min(p[1] for p in pts_all)
+    x1, y1 = max(p[0] for p in pts_all), max(p[1] for p in pts_all)
+    k = height_px / max(0.05, (y1 - y0))
+    pen = max(1.6, height_px * 0.030)
+    pad = pen * 3
+    strokes = [[((p[0] - x0) * k + pad, (p[1] - y0) * k + pad, pen) for p in st] for st in strokes_norm if st]
+    return _strokes_image(strokes, (x1 - x0) * k + 2 * pad, height_px + 2 * pad, color or PEN_INKS[0][1])
+
+
+class GlyphPad(QWidget):
+    """Клетка, в которой мастер пишет знак (или подпись) своей рукой. Правая кнопка — стереть."""
+    changed = Signal()
+
+    def __init__(self, hint="", w=58, h=72, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(w, h)
+        self.hint = hint
+        self.strokes = []            # [[(x, y)…]…] в долях высоты клетки
+        self._cur = None
+        self.setCursor(Qt.CrossCursor)
+        self.setToolTip((f"Напишите «{hint}» так, как пишете от руки. " if len(hint) == 1 else "")
+                        + "Правая кнопка мыши — стереть")
+
+    def set_strokes(self, strokes):
+        self.strokes = [[(float(p[0]), float(p[1])) for p in st] for st in (strokes or []) if st]
+        self.update()
+
+    def data(self):
+        return [[[round(x, 3), round(y, 3)] for x, y in st] for st in self.strokes if len(st) >= 1]
+
+    def clear(self):
+        self.strokes, self._cur = [], None
+        self.update()
+        self.changed.emit()
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.RightButton:
+            self.clear()
+            return
+        if e.button() == Qt.LeftButton:
+            H = self.height()
+            self._cur = [(e.position().x() / H, e.position().y() / H)]
+            self.strokes.append(self._cur)
+            self.update()
+
+    def mouseMoveEvent(self, e):
+        if self._cur is None:
+            return
+        H = self.height()
+        x, y = e.position().x() / H, e.position().y() / H
+        lx, ly = self._cur[-1]
+        if abs(x - lx) * H + abs(y - ly) * H >= 1.5:
+            self._cur.append((x, y))
+            self.update()
+
+    def mouseReleaseEvent(self, e):
+        if self._cur is not None:
+            self._cur = None
+            self.changed.emit()
+
+    def paintEvent(self, _):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        W, H = self.width(), self.height()
+        p.fillRect(self.rect(), QColor("#ffffff"))
+        p.setPen(QPen(QColor("#e4dfd0"), 1, Qt.DashLine))
+        p.drawLine(0, int(H * 0.2), W, int(H * 0.2))
+        p.drawLine(0, int(H * 0.82), W, int(H * 0.82))
+        if not self.strokes and self.hint:
+            f = p.font()
+            f.setPixelSize(int(H * 0.5) if len(self.hint) == 1 else 13)
+            p.setFont(f)
+            p.setPen(QColor("#d9d4c6"))
+            p.drawText(self.rect(), Qt.AlignCenter, self.hint)
+        pen = max(1.8, H * 0.036)
+        items = [{"pts": [(x * H, y * H, pen) for x, y in st]} for st in self.strokes if st]
+        pen_paint_strokes(p, items, PEN_INKS[0][1])
+        p.setPen(QPen(QColor("#cfc8b4"), 1))
+        p.setBrush(Qt.NoBrush)
+        p.drawRect(0, 0, W - 1, H - 1)
+        p.end()
+
+
+class ActMasterDialog(QDialog):
+    """Профиль мастера: имя, его почерк (цифры и знаки пишет сам), подпись и печать."""
+
+    def __init__(self, master=None, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Мастер")
+        self.resize(820, 690)
+        self.setMinimumSize(800, 670)
+        m = dict(master or {})
+        root = QVBoxLayout(self)
+        root.setSpacing(10)
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Имя и фамилия:"))
+        self.ed_name = QLineEdit(m.get("name", ""))
+        self.ed_name.setPlaceholderText("как в акте, например Paul Weber")
+        row.addWidget(self.ed_name, 1)
+        root.addLayout(row)
+        hint = QLabel("Мастер пишет знаки <b>сам, своей рукой</b> — мышью или пером. Этими знаками программа будет "
+                      "вписывать его замеры в схему. Ошиблись — правая кнопка мыши по клетке.")
+        hint.setObjectName("hint")
+        hint.setWordWrap(True)
+        root.addWidget(hint)
+
+        self.pads = {}
+        for title, chars in (("Цифры и знаки для замеров (обязательно)", ACT.GLYPHS_NEED),
+                             ("Буквы повреждений, запятая, точка (по желанию)", ACT.GLYPHS_MORE)):
+            box = QGroupBox(title)
+            g = QGridLayout(box)
+            g.setSpacing(6)
+            for i, ch in enumerate(chars):
+                pad = GlyphPad(ch, 48, 60)
+                pad.set_strokes((m.get("glyphs") or {}).get(ch))
+                pad.changed.connect(self._preview)
+                self.pads[ch] = pad
+                g.addWidget(pad, 0, i)
+            g.setColumnStretch(len(chars), 1)
+            root.addWidget(box)
+
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Как это выглядит:"))
+        self.lbl_prev = QLabel()
+        self.lbl_prev.setMinimumHeight(46)
+        self.lbl_prev.setStyleSheet("background:#ffffff; border:1px solid #ddd5c0; border-radius:6px;")
+        row.addWidget(self.lbl_prev, 1)
+        root.addLayout(row)
+
+        box = QGroupBox("Подпись и печать мастера")
+        hl = QHBoxLayout(box)
+        hl.setSpacing(12)
+        self.pad_sign = GlyphPad("подпись", 330, 96)
+        self.pad_sign.set_strokes(m.get("sign"))
+        hl.addWidget(self.pad_sign)
+        col = QVBoxLayout()
+        b = QPushButton("Стереть подпись")
+        b.clicked.connect(self.pad_sign.clear)
+        col.addWidget(b)
+        col.addWidget(QLabel("Печать (из «Мои печати»):"))
+        self.cmb_stamp = QComboBox()
+        self.cmb_stamp.addItem("— без печати —", "")
+        for s in lib_load():
+            self.cmb_stamp.addItem(s.get("name") or os.path.basename(s["file"]), os.path.basename(s["file"]))
+        i = self.cmb_stamp.findData(m.get("stamp", ""))
+        self.cmb_stamp.setCurrentIndex(max(0, i))
+        col.addWidget(self.cmb_stamp)
+        col.addStretch(1)
+        hl.addLayout(col, 1)
+        root.addWidget(box)
+
+        bb = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
+        bb.button(QDialogButtonBox.Save).setText("Сохранить")
+        bb.button(QDialogButtonBox.Cancel).setText("Отмена")
+        bb.accepted.connect(self._save)
+        bb.rejected.connect(self.reject)
+        root.addWidget(bb)
+        self._preview()
+
+    def glyphs(self):
+        return {ch: pad.data() for ch, pad in self.pads.items() if pad.data()}
+
+    def _preview(self):
+        g = self.glyphs()
+        text = "118 97 20% -/-"
+        text = "".join(ch for ch in text if ch == " " or ch in g)
+        im = hand_pil(text, g, 34, seed=7) if text.strip() else None
+        if im is None:
+            self.lbl_prev.setPixmap(QPixmap())
+            self.lbl_prev.setText("  напишите цифры — здесь появится пример")
+            return
+        buf = io.BytesIO()
+        im.save(buf, "PNG")
+        pm = QPixmap()
+        pm.loadFromData(buf.getvalue(), "PNG")
+        self.lbl_prev.setPixmap(pm)
+
+    def master(self):
+        return {"name": self.ed_name.text().strip(), "glyphs": self.glyphs(), "sign": self.pad_sign.data(),
+                "stamp": self.cmb_stamp.currentData() or ""}
+
+    def _save(self):
+        m = self.master()
+        if not m["name"]:
+            QMessageBox.information(self, "Мастер", "Впишите имя и фамилию мастера.")
+            return
+        miss = [ch for ch in ACT.GLYPHS_NEED if ch not in m["glyphs"]]
+        if miss:
+            QMessageBox.information(self, "Мастер", "Не написаны знаки: " + "  ".join(miss) +
+                                    "\nБез них замеры в схему не вписать.")
+            return
+        self.accept()
+
+
+class LkpBoard(QWidget):
+    """Схема автомобиля с окошками: замеры вписываются прямо в них."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setMinimumSize(480, 250)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.kind = "car"
+        self._pm = None
+        self.edits = {}
+        self.set_kind("car")
+
+    def set_kind(self, kind):
+        old = self.values()
+        self.kind = kind if kind in ACT.LKP else "car"
+        pm = QPixmap()
+        pm.loadFromData(ACT.diagram_png(self.kind), "PNG")
+        self._pm = pm
+        for e in self.edits.values():
+            e.deleteLater()
+        self.edits = {}
+        for name, *_ in ACT.lkp_places((0, 0, 1, 1), self.kind):
+            e = QLineEdit(self)
+            e.setAlignment(Qt.AlignCenter)
+            e.setFrame(False)
+            e.setMaxLength(9 if name.startswith("b") else 3)
+            e.setStyleSheet("QLineEdit { background: rgba(255,255,255,0); color: #1b36a8; border: none; "
+                            "padding: 0; font-weight: 600; } QLineEdit:focus { background: #fff6dc; }")
+            e.setToolTip("Толщина ЛКП в микронах, код повреждения или «-/-»" if name.startswith("b")
+                         else "Износ, %  (только число)")
+            if old.get(name):
+                e.setText(old[name])
+            e.show()
+            self.edits[name] = e
+        self._place()
+        self.update()
+
+    def _area(self):
+        if self._pm is None or self._pm.isNull():
+            return QRectF(self.rect())
+        a = self._pm.width() / self._pm.height()
+        w = min(self.width(), self.height() * a)
+        h = w / a
+        return QRectF((self.width() - w) / 2, (self.height() - h) / 2, w, h)
+
+    def _place(self):
+        r = self._area()
+        order = []
+        for name, x0, y0, x1, y1 in ACT.lkp_places((r.x(), r.y(), r.x() + r.width(), r.y() + r.height()), self.kind):
+            e = self.edits.get(name)
+            if e is None:
+                continue
+            if name.startswith("w"):                     # в круге уже напечатан «%» — число встаёт слева от него
+                w, h = x1 - x0, y1 - y0
+                e.setGeometry(int(x0 + w * 0.08), int(y0 + h * 0.30), max(14, int(w * 0.46)), max(12, int(h * 0.40)))
+            else:
+                e.setGeometry(int(x0 + 2), int(y0 + 2), max(20, int(x1 - x0 - 4)), max(12, int(y1 - y0 - 4)))
+            f = e.font()
+            f.setPixelSize(max(8, int((y1 - y0) * (0.27 if name.startswith("w") else 0.55))))
+            e.setFont(f)
+            order.append((round(y0 / 30), x0, e))
+        order.sort(key=lambda t: (t[0], t[1]))
+        for a, b in zip(order, order[1:]):
+            QWidget.setTabOrder(a[2], b[2])
+
+    def resizeEvent(self, _):
+        self._place()
+
+    def paintEvent(self, _):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.SmoothPixmapTransform, True)
+        p.fillRect(self.rect(), QColor("#ffffff"))
+        if self._pm is not None and not self._pm.isNull():
+            p.drawPixmap(self._area(), self._pm, QRectF(self._pm.rect()))
+        p.end()
+
+    def values(self):
+        return {k: e.text().strip() for k, e in self.edits.items() if e.text().strip()}
+
+    def set_values(self, vals):
+        for k, e in self.edits.items():
+            e.setText(str((vals or {}).get(k, "")))
+
+    def fill_empty(self, text="-/-"):
+        for k, e in self.edits.items():
+            if k.startswith("b") and not e.text().strip():
+                e.setText(text)
+
+
+class ActPage(QDialog):
+    """Акт осмотра внутри главного окна: слева данные автомобиля, справа схема ЛКП и текст перевода."""
+
+    PAIRS = [("color", "Цвет · Farbe"), ("drive", "Привод · Antrieb"), ("gear", "Коробка · Getriebe"),
+             ("body", "Кузов · Karosserietyp"), ("fuel", "Топливо · Kraftstoff")]
+
+    def __init__(self, win):
+        super().__init__(win)
+        self.win = win
+        self.setWindowFlags(Qt.Widget)
+        self.setObjectName("aipage")
+        self._auto = {}                 # какие переводы подставила программа (их можно заменять)
+        self._sections = []
+        root = QVBoxLayout(self)
+        root.setContentsMargins(16, 10, 16, 10)
+        root.setSpacing(8)
+
+        head = QHBoxLayout()
+        head.setSpacing(10)
+        b_back = QPushButton(" К документу")
+        b_back.setIcon(draw_icon("back", win._icon_color()))
+        b_back.setIconSize(QSize(16, 16))
+        b_back.setCursor(Qt.PointingHandCursor)
+        b_back.setToolTip("Вернуться к странице документа (Esc). Введённое здесь останется.")
+        b_back.clicked.connect(lambda: win.ai_mode(False))
+        win._themed_buttons.append((b_back, "back", False))
+        head.addWidget(b_back)
+        ttl = QLabel("АКТ ОСМОТРА")
+        ttl.setObjectName("paneltitle")
+        head.addWidget(ttl)
+        self.lbl_kit = QLabel("")
+        self.lbl_kit.setObjectName("hint")
+        head.addWidget(self.lbl_kit, 1)
+        self.btn_kit = QPushButton("Бланки…")
+        self.btn_kit.setToolTip("Загрузить или заменить бланки акта: оригинал на немецком и перевод на русском (.docx)")
+        self.btn_kit.clicked.connect(self.load_kit)
+        head.addWidget(self.btn_kit)
+        self.btn_ai = QPushButton(" Перевести ИИ")
+        self.btn_ai.setToolTip("Перевести через ИИ то, чего нет в словаре программы: значения полей и комментарий")
+        self.btn_ai.clicked.connect(self.translate_ai)
+        head.addWidget(self.btn_ai)
+        self.btn_make = QPushButton(" Создать акт")
+        self.btn_make.setObjectName("primary")
+        self.btn_make.setMinimumHeight(34)
+        self.btn_make.setToolTip("Заполнить оригинал и перевод, вписать замеры почерком мастера и открыть оригинал — "
+                                 "дальше подпись, печать и сохранение как обычно")
+        self.btn_make.clicked.connect(self.make)
+        head.addWidget(self.btn_make)
+        root.addLayout(head)
+
+        split = QSplitter(Qt.Horizontal)
+        split.setChildrenCollapsible(False)
+
+        # ---------------- слева: данные
+        form_w = QWidget()
+        fl = QVBoxLayout(form_w)
+        fl.setContentsMargins(0, 0, 16, 0)
+        fl.setSpacing(8)
+
+        box = QGroupBox("Акт")
+        f = QFormLayout(box)
+        f.setSpacing(6)
+        row = QHBoxLayout()
+        self.ed_number = QLineEdit(str(act_next_number()))
+        self.ed_number.setToolTip("Номер акта. Подставляется следующий по общему счётчику; можно исправить")
+        self.ed_number.setMaximumWidth(110)
+        row.addWidget(self.ed_number)
+        row.addWidget(QLabel("Дата:"))
+        self.ed_date = QLineEdit(AI.today().strftime("%d.%m.%Y"))
+        self.ed_date.setMaximumWidth(120)
+        row.addWidget(self.ed_date)
+        row.addStretch(1)
+        f.addRow("Номер:", row)
+        row = QHBoxLayout()
+        self.cmb_master = QComboBox()
+        row.addWidget(self.cmb_master, 1)
+        for text, tip, slot in (("Добавить", "Новый мастер: имя, почерк, подпись, печать", self._master_add),
+                                ("Изменить", "Изменить выбранного мастера", self._master_edit),
+                                ("Удалить", "Убрать мастера из списка", self._master_del)):
+            b = QPushButton(text)
+            b.setToolTip(tip)
+            b.clicked.connect(slot)
+            row.addWidget(b)
+        f.addRow("Мастер:", row)
+        fl.addWidget(box)
+
+        box = QGroupBox("Автомобиль")
+        f = QFormLayout(box)
+        f.setSpacing(6)
+        self.ed = {}
+
+        def line(key, ph="", w=None):
+            e = QLineEdit()
+            e.setPlaceholderText(ph)
+            if w:
+                e.setMaximumWidth(w)
+            self.ed[key] = e
+            return e
+
+        row = QHBoxLayout()
+        row.addWidget(line("brand", "Marke — Kia"), 1)
+        row.addWidget(line("model", "Model — Sportage"), 1)
+        row.addWidget(line("year", "год", 70))
+        f.addRow("Марка, модель, год:", row)
+        row = QHBoxLayout()
+        for key, cap, val in (("seats", "мест", "5"), ("doors", "дверей", "5"), ("owners", "владельцев", "1")):
+            row.addWidget(QLabel(cap))
+            e = line(key, "", 48)
+            e.setText(val)
+            row.addWidget(e)
+        row.addStretch(1)
+        f.addRow("Количество:", row)
+        row = QHBoxLayout()
+        row.addWidget(line("mileage", "53997", 110))
+        row.addWidget(QLabel("км"))
+        row.addStretch(1)
+        f.addRow("Пробег:", row)
+        row = QHBoxLayout()
+        e = line("vin", "17 знаков")
+        fnt = QFont("Consolas")
+        fnt.setStyleHint(QFont.Monospace)
+        e.setFont(fnt)
+        e.setMaxLength(24)
+        e.textEdited.connect(self._vin_edited)
+        row.addWidget(e, 1)
+        self.lbl_vin = QLabel("0 / 17")
+        self.lbl_vin.setObjectName("hint")
+        row.addWidget(self.lbl_vin)
+        f.addRow("VIN:", row)
+        row = QHBoxLayout()
+        row.addWidget(line("liters", "1.6", 60))
+        row.addWidget(QLabel("л"))
+        row.addWidget(line("ccm", "1598", 80))
+        row.addWidget(QLabel("см³"))
+        row.addSpacing(12)
+        row.addWidget(QLabel("мощность"))
+        row.addWidget(line("hp", "265", 70))
+        row.addWidget(QLabel("л. с."))
+        row.addStretch(1)
+        f.addRow("Двигатель:", row)
+        fl.addWidget(box)
+
+        box = QGroupBox("Значения с переводом")
+        g = QGridLayout(box)
+        g.setHorizontalSpacing(8)
+        g.setVerticalSpacing(6)
+        row = QHBoxLayout()
+        self.rb_de = QRadioButton("Ввожу по-немецки")
+        self.rb_ru = QRadioButton("Ввожу по-русски")
+        self.rb_ru.setChecked(settings_load().get("act_input", "ru") == "ru")
+        self.rb_de.setChecked(not self.rb_ru.isChecked())
+        row.addWidget(self.rb_de)
+        row.addWidget(self.rb_ru)
+        row.addStretch(1)
+        g.addLayout(row, 0, 0, 1, 3)
+        g.addWidget(QLabel("в оригинал (нем.)"), 1, 1)
+        g.addWidget(QLabel("в перевод (рус.)"), 1, 2)
+        self.pair = {}
+        for n, (key, cap) in enumerate(self.PAIRS):
+            g.addWidget(QLabel(cap + ":"), n + 2, 0)
+            cd, cr = QComboBox(), QComboBox()
+            for c, col in ((cd, 0), (cr, 1)):
+                c.setEditable(True)
+                c.setInsertPolicy(QComboBox.NoInsert)
+                c.addItem("")
+                c.addItems([p[col] for p in ACT.DICT[key]])
+                c.setCurrentIndex(0)
+            cd.editTextChanged.connect(lambda t, k=key: self._pair_changed(k, "de"))
+            cr.editTextChanged.connect(lambda t, k=key: self._pair_changed(k, "ru"))
+            g.addWidget(cd, n + 2, 1)
+            g.addWidget(cr, n + 2, 2)
+            self.pair[key] = (cd, cr)
+        g.setColumnStretch(1, 1)
+        g.setColumnStretch(2, 1)
+        fl.addWidget(box)
+
+        box = QGroupBox("Резина на момент осмотра")
+        g = QGridLayout(box)
+        g.setHorizontalSpacing(8)
+        g.setVerticalSpacing(4)
+        self.tire = {}
+        for n, (key, cap) in enumerate((("summer", "Лето · Sommer"), ("winter", "Зима · Winter"),
+                                        ("all", "Всесезонная · Ganzjahresreifen"))):
+            chk = QCheckBox(cap)
+            ed = QLineEdit()
+            ed.setPlaceholderText("марка — если нужно указать")
+            g.addWidget(chk, n, 0)
+            g.addWidget(ed, n, 1)
+            self.tire[key] = (chk, ed)
+        g.setColumnStretch(1, 1)
+        fl.addWidget(box)
+
+        box = QGroupBox("Комментарий (недостатки пишутся сюда)")
+        v = QVBoxLayout(box)
+        v.setSpacing(4)
+        self.lbl_cru = QLabel("по-русски — для перевода ИИ:")
+        self.lbl_cru.setObjectName("hint")
+        v.addWidget(self.lbl_cru)
+        self.txt_cru = QTextEdit()
+        self.txt_cru.setAcceptRichText(False)
+        self.txt_cru.setFixedHeight(54)
+        v.addWidget(self.txt_cru)
+        lb = QLabel("в оригинал, по-немецки (Kommentare):")
+        lb.setObjectName("hint")
+        v.addWidget(lb)
+        self.txt_cde = QTextEdit()
+        self.txt_cde.setAcceptRichText(False)
+        self.txt_cde.setFixedHeight(54)
+        self.txt_cde.setPlainText(ACT.DEFAULT_COMMENT_DE)
+        v.addWidget(self.txt_cde)
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Besonderheiten beim Start:"))
+        self.ed_start = QLineEdit("-")
+        row.addWidget(self.ed_start, 1)
+        v.addLayout(row)
+        fl.addWidget(box)
+        fl.addStretch(1)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setWidget(form_w)
+        scroll.setMinimumWidth(560)
+        split.addWidget(scroll)
+
+        # ---------------- справа: схема и перевод
+        self.tabs = QTabWidget()
+        lk = QWidget()
+        ll = QVBoxLayout(lk)
+        ll.setContentsMargins(8, 8, 8, 8)
+        ll.setSpacing(8)
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Кузов на схеме:"))
+        self.cmb_kind = QComboBox()
+        for k, t in ACT.KIND_TITLES:
+            self.cmb_kind.addItem(t, k)
+        row.addWidget(self.cmb_kind)
+        b = QPushButton("Прочерк в пустые окошки")
+        b.setToolTip("Вписать «-/-» во все окошки, где замера нет")
+        b.clicked.connect(lambda: self.board.fill_empty())
+        row.addWidget(b)
+        b = QPushButton("Очистить")
+        b.clicked.connect(lambda: self.board.set_values({}))
+        row.addWidget(b)
+        row.addStretch(1)
+        ll.addLayout(row)
+        self.board = LkpBoard()
+        ll.addWidget(self.board, 1)
+        note = QLabel("Впишите замеры в окошки (Tab — следующее). В акт они лягут почерком выбранного мастера; "
+                      "в колёсах пишется только число — знак «%» уже напечатан.")
+        note.setObjectName("hint")
+        note.setWordWrap(True)
+        ll.addWidget(note)
+        self.tabs.addTab(lk, "Схема ЛКП")
+
+        self.tr_host = QWidget()
+        self.tr_lay = QVBoxLayout(self.tr_host)
+        self.tr_lay.setContentsMargins(8, 8, 8, 8)
+        self.tr_lay.setSpacing(6)
+        sc2 = QScrollArea()
+        sc2.setWidgetResizable(True)
+        sc2.setFrameShape(QFrame.NoFrame)
+        sc2.setWidget(self.tr_host)
+        self.tabs.addTab(sc2, "Текст перевода")
+        split.addWidget(self.tabs)
+        split.setStretchFactor(0, 0)
+        split.setStretchFactor(1, 1)
+        split.setSizes([580, 700])
+        root.addWidget(split, 1)
+
+        self.cmb_kind.currentIndexChanged.connect(lambda _: self.board.set_kind(self.cmb_kind.currentData()))
+        self.rb_ru.toggled.connect(self._mode_changed)
+        self._fill_masters(settings_load().get("act_last_master"))
+        self._mode_changed()
+        self.refresh()
+
+    # ---------------------------------------------------------- состояние
+    def refresh(self):
+        """Вызывается при каждом показе страницы: бланки, счётчик, список мастеров."""
+        ready = act_kit_ready()
+        self.lbl_kit.setText("" if ready else "Бланки не загружены — нажмите «Бланки…»")
+        self.btn_make.setEnabled(True)
+        cur = self.cmb_master.currentText()
+        self._fill_masters(cur)
+        try:
+            if int(re.sub(r"\D", "", self.ed_number.text()) or 0) < act_next_number():
+                self.ed_number.setText(str(act_next_number()))
+        except Exception:
+            pass
+        if ready and not self._sections:
+            self._load_sections()
+
+    def _load_sections(self):
+        while self.tr_lay.count():
+            it = self.tr_lay.takeAt(0)
+            if it.widget():
+                it.widget().deleteLater()
+        self._sections = []
+        try:
+            secs = ACT.ru_sections(act_kit_path("ru"))
+        except Exception:
+            secs = []
+        hint = QLabel("Текст русского акта по разделам. Меняйте, если автомобиль не в идеальном состоянии; "
+                      "то, что не тронуто, останется как в бланке.")
+        hint.setObjectName("hint")
+        hint.setWordWrap(True)
+        self.tr_lay.addWidget(hint)
+        last = None
+        for s in secs:
+            if s["title"] != last:
+                lb = QLabel(s["title"])
+                lb.setObjectName("paneltitle")
+                self.tr_lay.addWidget(lb)
+                last = s["title"]
+            te = QTextEdit()
+            te.setAcceptRichText(False)
+            te.setPlainText(s["text"])
+            te.setFixedHeight(max(52, min(150, 24 + 19 * (len(s["text"]) // 78 + 1))))
+            self.tr_lay.addWidget(te)
+            self._sections.append((s["idx"], s["text"], te))
+        b = QPushButton("Вернуть текст как в бланке")
+        b.clicked.connect(lambda: [te.setPlainText(orig) for _i, orig, te in self._sections])
+        self.tr_lay.addWidget(b, 0, Qt.AlignLeft)
+        self.tr_lay.addStretch(1)
+
+    def _mode_changed(self, *_):
+        ru = self.rb_ru.isChecked()
+        self.txt_cru.setVisible(ru)
+        self.lbl_cru.setVisible(ru)
+        s = settings_load()
+        if s.get("act_input") != ("ru" if ru else "de"):
+            s["act_input"] = "ru" if ru else "de"
+            settings_save(s)
+
+    def _vin_edited(self, text):
+        v = ACT.clean_vin(text)
+        e = self.ed["vin"]
+        if v != text:
+            pos = e.cursorPosition()
+            e.setText(v)
+            e.setCursorPosition(min(pos, len(v)))
+        self.lbl_vin.setText(f"{len(v)} / 17")
+        self.lbl_vin.setToolTip(ACT.vin_problem(v))
+
+    def _pair_changed(self, key, side):
+        """Ввели значение на одном языке — второе подставляется по словарю."""
+        if getattr(self, "_pair_busy", False):
+            return
+        cd, cr = self.pair[key]
+        src, dst = (cd, cr) if side == "de" else (cr, cd)
+        other = "ru" if side == "de" else "de"
+        self._auto.pop((key, side), None)                       # это значение ввёл человек
+        tr = ACT.translate(key, src.currentText(), other)
+        if tr is None:
+            if self._auto.get((key, other)):                    # старый автоперевод больше не подходит
+                self._set_pair(dst, "")
+                self._auto.pop((key, other), None)
+            return
+        if not dst.currentText().strip() or self._auto.get((key, other)) or not src.currentText().strip():
+            self._set_pair(dst, tr)
+            self._auto[(key, other)] = True
+
+    def _set_pair(self, combo, text):
+        self._pair_busy = True
+        try:
+            combo.setEditText(text)
+        finally:
+            self._pair_busy = False
+
+    # ---------------------------------------------------------- мастера
+    def _fill_masters(self, pick=None):
+        self.cmb_master.blockSignals(True)
+        self.cmb_master.clear()
+        for m in act_masters_load():
+            self.cmb_master.addItem(m["name"])
+        i = self.cmb_master.findText(pick) if pick else -1
+        if self.cmb_master.count():
+            self.cmb_master.setCurrentIndex(max(0, i))
+        self.cmb_master.blockSignals(False)
+
+    def master(self):
+        name = self.cmb_master.currentText()
+        return next((m for m in act_masters_load() if m["name"] == name), None)
+
+    def _master_add(self):
+        dlg = ActMasterDialog(None, self)
+        if dlg.exec() == QDialog.Accepted:
+            m = dlg.master()
+            items = [x for x in act_masters_load() if x["name"] != m["name"]] + [m]
+            act_masters_save(items)
+            self._fill_masters(m["name"])
+
+    def _master_edit(self):
+        cur = self.master()
+        if cur is None:
+            self._master_add()
+            return
+        dlg = ActMasterDialog(cur, self)
+        if dlg.exec() == QDialog.Accepted:
+            m = dlg.master()
+            items = [m if x["name"] == cur["name"] else x for x in act_masters_load() if x["name"] != m["name"] or x["name"] == cur["name"]]
+            act_masters_save(items)
+            self._fill_masters(m["name"])
+
+    def _master_del(self):
+        cur = self.master()
+        if cur is None:
+            return
+        if QMessageBox.question(self, "Мастер", f"Убрать мастера «{cur['name']}» из списка?\n"
+                                "Его почерк и подпись удалятся из программы.") != QMessageBox.Yes:
+            return
+        act_masters_save([x for x in act_masters_load() if x["name"] != cur["name"]])
+        self._fill_masters()
+
+    # ---------------------------------------------------------- бланки
+    def load_kit(self):
+        QMessageBox.information(self, "Бланки акта",
+                                "Сейчас нужно выбрать два файла Word:\n"
+                                "1) оригинал акта на немецком (INSPEKTIONSBERICHT),\n"
+                                "2) перевод акта на русском.\n\n"
+                                "Подойдёт любой уже заполненный акт — программа заменит в нём данные.")
+        de, _ = QFileDialog.getOpenFileName(self, "1 из 2 — оригинал акта на немецком", self.win.current_dir(),
+                                            "Документ Word (*.docx)")
+        if not de:
+            return
+        ru, _ = QFileDialog.getOpenFileName(self, "2 из 2 — перевод акта на русском", os.path.dirname(de),
+                                            "Документ Word (*.docx)")
+        if not ru:
+            return
+        miss = ACT.check_templates(de, ru)
+        if miss:
+            QMessageBox.warning(self, "Бланки акта", "Эти файлы не похожи на бланки акта. Не найдено:\n• " +
+                                "\n• ".join(miss))
+            return
+        try:
+            os.makedirs(ACT_DIR, exist_ok=True)
+            import shutil
+            shutil.copyfile(de, act_kit_path("de"))
+            shutil.copyfile(ru, act_kit_path("ru"))
+        except Exception as e:
+            QMessageBox.critical(self, "Бланки акта", f"Не удалось сохранить бланки:\n{e}")
+            return
+        self._sections = []
+        self.refresh()
+        self.win._act_btn_state()
+        self.win.cloud_soon()
+        self.win.show_toast("✔  Бланки акта загружены")
+
+    # ---------------------------------------------------------- данные формы
+    def form_data(self):
+        d = {k: e.text().strip() for k, e in self.ed.items()}
+        d["number"] = self.ed_number.text().strip()
+        d["date"] = self.ed_date.text().strip()
+        d["master"] = self.cmb_master.currentText().strip()
+        d["kind"] = self.cmb_kind.currentData()
+        for key, _cap in self.PAIRS:
+            cd, cr = self.pair[key]
+            d[key + "_de"], d[key + "_ru"] = cd.currentText().strip(), cr.currentText().strip()
+        d["tires"] = {k: {"on": chk.isChecked(), "brand": ed.text().strip()} for k, (chk, ed) in self.tire.items()}
+        d["comment_de"] = self.txt_cde.toPlainText().strip()
+        d["comment_ru"] = self.txt_cru.toPlainText().strip()
+        d["start_de"] = self.ed_start.text().strip() or "-"
+        d["lkp"] = self.board.values()
+        return d
+
+    def problems(self, d):
+        """Что мешает создать акт: (ошибки, предупреждения)."""
+        err, warn = [], []
+        if not act_kit_ready():
+            err.append("не загружены бланки — кнопка «Бланки…»")
+        m = self.master()
+        if m is None:
+            err.append("не выбран мастер — добавьте его кнопкой «Добавить»")
+        if not re.sub(r"\D", "", d["number"]):
+            err.append("не указан номер акта")
+        if not re.match(r"^\d{2}\.\d{2}\.\d{4}$", d["date"]):
+            err.append("дата нужна в виде ДД.ММ.ГГГГ")
+        for key, cap in (("brand", "марка"), ("model", "модель"), ("year", "год выпуска")):
+            if not d.get(key):
+                err.append("не заполнено: " + cap)
+        v = ACT.vin_problem(d.get("vin"))
+        if v:
+            warn.append(v)
+        for key, cap in self.PAIRS:
+            if d[key + "_de"] and not d[key + "_ru"]:
+                warn.append(f"нет русского значения: {cap.split(' · ')[0]}")
+            if d[key + "_ru"] and not d[key + "_de"]:
+                err.append(f"нет немецкого значения: {cap.split(' · ')[0]} — впишите или нажмите «Перевести ИИ»")
+            if not d[key + "_de"] and not d[key + "_ru"]:
+                warn.append(f"не заполнено: {cap.split(' · ')[0]}")
+        if d["comment_ru"] and not d["comment_de"]:
+            err.append("комментарий не переведён на немецкий — нажмите «Перевести ИИ»")
+        if m is not None:
+            miss = ACT.glyphs_missing("".join(d["lkp"].values()), m.get("glyphs") or {})
+            if miss:
+                err.append("в почерке мастера нет знаков: " + "  ".join(miss) +
+                           " — допишите их («Изменить») или уберите из замеров")
+        if not d["lkp"]:
+            warn.append("схема ЛКП пустая")
+        return err, warn
+
+    # ---------------------------------------------------------- перевод ИИ
+    def translate_ai(self):
+        d = self.form_data()
+        jobs = []                                    # (язык, текст, куда положить)
+        for key, _cap in self.PAIRS:
+            cd, cr = self.pair[key]
+            if d[key + "_ru"] and not d[key + "_de"]:
+                jobs.append(("de", d[key + "_ru"], lambda t, c=cd: self._set_pair(c, t)))
+            elif d[key + "_de"] and not d[key + "_ru"]:
+                jobs.append(("ru", d[key + "_de"], lambda t, c=cr: self._set_pair(c, t)))
+        if self.rb_ru.isChecked() and d["comment_ru"]:
+            jobs.append(("de", d["comment_ru"], lambda t: self.txt_cde.setPlainText(t)))
+        if not jobs:
+            self.win.show_toast("Переводить нечего: всё уже заполнено на обоих языках")
+            return
+        if not self.win._ai_ready():
+            return
+
+        def work(status, cancelled):
+            out = {}
+            for lang in ("de", "ru"):
+                texts = [j[1] for j in jobs if j[0] == lang]
+                if texts:
+                    out[lang] = ACT.ai_translate(texts, lang, AI.chat, status, cancelled)
+            return out
+
+        def done(res):
+            it = {"de": iter(res.get("de") or []), "ru": iter(res.get("ru") or [])}
+            n = 0
+            for lang, _text, put in jobs:
+                t = next(it[lang], None)
+                if t:
+                    put(t)
+                    n += 1
+            self.win.show_toast(f"✔  Переведено: {n}. Проверьте перевод перед созданием акта", 4200)
+
+        self.win._ai_run("ИИ переводит значения акта", work, done)
+
+    # ---------------------------------------------------------- создание акта
+    def make(self):
+        d = self.form_data()
+        err, warn = self.problems(d)
+        if err:
+            QMessageBox.information(self, "Акт осмотра", "Сначала поправьте:\n• " + "\n• ".join(err))
+            return
+        if warn:
+            if QMessageBox.question(self, "Акт осмотра", "Обратите внимание:\n• " + "\n• ".join(warn) +
+                                    "\n\nСоздать акт всё равно?") != QMessageBox.Yes:
+                return
+        m = self.master()
+        folder = self.win.current_dir()
+        if not folder or not os.path.isdir(folder):
+            folder = QFileDialog.getExistingDirectory(self, "Куда сохранить акт")
+            if not folder:
+                return
+        # номер: общий счётчик в облаке, чтобы у мастеров разных смен номера не совпали
+        wanted = re.sub(r"\D", "", d["number"])
+        got = wanted
+        uri = cloud_uri()
+        if uri:
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+            try:
+                got = re.sub(r"\D", "", str(CLOUD.claim_number(uri, "act", wanted, auto=True, year=None, reset=False))) or wanted
+            except Exception:
+                got = wanted
+            finally:
+                QApplication.restoreOverrideCursor()
+        if got != wanted:
+            QMessageBox.information(self, "Акт осмотра", f"Номер {wanted} уже занят другим мастером.\n"
+                                    f"Акту присвоен следующий свободный номер: {got}.")
+        d["number"] = got
+        tail = f"{d['date'][:5]} {d['brand']} {d['model']}".strip()
+        tail = re.sub(r'[\\/:*?"<>|]+', " ", tail)
+        de_path = os.path.join(folder, f"(Kreuzberg) {tail}.docx")
+        ru_path = os.path.join(folder, f"Перевод инспекции {tail}.docx")
+        for pth in (de_path, ru_path):
+            if os.path.exists(pth):
+                if QMessageBox.question(self, "Акт осмотра", f"Файл уже есть:\n{os.path.basename(pth)}\n\nЗаменить?") != QMessageBox.Yes:
+                    return
+                break
+        try:
+            ACT.fill_de(act_kit_path("de"), d, de_path)
+            texts = {idx: te.toPlainText() for idx, orig, te in self._sections if te.toPlainText().strip() != orig.strip()}
+            ACT.fill_ru(act_kit_path("ru"), d, ru_path, texts)
+        except PermissionError:
+            QMessageBox.critical(self, "Акт осмотра", "Файл акта открыт в другой программе (например, в Word). "
+                                 "Закройте его и нажмите «Создать акт» ещё раз.")
+            return
+        except Exception as e:
+            QMessageBox.critical(self, "Акт осмотра", f"Не удалось заполнить бланки:\n{e}")
+            return
+        act_set_last(got)
+        s = settings_load()
+        s["act_last_master"] = m["name"]
+        settings_save(s)
+        self.ed_number.setText(str(int(got) + 1))
+        self.win.reload_files()
+        self.win.open_word(de_path, quiet=True)                  # оригинал → PDF (через Word) и на страницу
+        note = self.win.act_finish(d, m)
+        self.win.ai_mode(False)
+        self.win.show_toast(f"✔  Акт № {got} создан. {note}", 6500)
+        self.win.statusBar().showMessage(f"Перевод сохранён: {os.path.basename(ru_path)} — откройте его в списке файлов, "
+                                         "чтобы сохранить в PDF", 15000)
+
+
 class TabScrollWatch(QObject):
     """Следит за полосой вкладок и показывает свои стрелки, когда вкладки не помещаются."""
 
@@ -9595,6 +10583,9 @@ class MainWindow(QMainWindow):
         self.act_word = act("Редактор Word…", self.act_word_fill_run, "Ctrl+Shift+W",
                             "Заполнить шаблон Word: ФИО, паспорт, даты, суммы прописью — оформление не меняется")
         m.addAction(self.act_word)
+        self.act_act = act("Акт осмотра…", self.open_act_page, "Ctrl+Shift+K",
+                           "Акт осмотра автомобиля: оригинал на немецком и перевод, замеры ЛКП почерком мастера")
+        m.addAction(self.act_act)
         m.addAction(self.act_meta)
         m.addAction(self.act_close)
         m.addSeparator()
@@ -9933,9 +10924,15 @@ class MainWindow(QMainWindow):
                 mt = os.path.getmtime(SETTINGS_JSON)
             except OSError:
                 mt = 0
-            for name in ("word_marks", "pen_presets", "name_templates", "sheet_templates", "crop_templates"):
+            for name in ("word_marks", "pen_presets", "name_templates", "sheet_templates", "crop_templates", "act_masters"):
                 if st.get(name):
                     local["settings"][name] = {"value": st[name], "mtime": mt}
+            try:
+                kit, kmt = act_kit_value()                   # бланки акта осмотра — общие на всю мастерскую
+                if kit:
+                    local["settings"]["act_kit"] = {"value": kit, "mtime": kmt}
+            except Exception:
+                pass
         if parts.get("counters", True):
             local["counters"] = {k: dict(v) for k, v in (st.get("doc_counters") or {}).items() if v.get("last")}
         return local
@@ -10054,6 +11051,20 @@ class MainWindow(QMainWindow):
             # настройки и счётчики
             st = settings_load()
             for name, d in res["settings_put"].items():
+                if name == "act_kit":
+                    try:
+                        cur, _mt = act_kit_value()
+                        if (CLOUD.digest(cur) if cur else None) == d["was"]:
+                            act_kit_store(d["value"])
+                            pg = getattr(self, "_act_page", None)
+                            if pg is not None:
+                                pg._sections = []
+                            self._act_btn_state()
+                        else:
+                            snap["settings"].pop(name, None)
+                    except Exception:
+                        snap["settings"].pop(name, None)
+                    continue
                 if (CLOUD.digest(st[name]) if st.get(name) else None) == d["was"]:
                     st[name] = d["value"]
                 else:
@@ -10271,6 +11282,109 @@ class MainWindow(QMainWindow):
         self.right_dock.hide()
         self.left_dock.hide()
         self.center_stack.setCurrentWidget(pg)
+
+    # ---------------------------------------------------------- акт осмотра
+    def open_act_page(self):
+        """Акт осмотра занимает середину окна, как ИИ и редактор Word."""
+        pg = getattr(self, "_act_page", None)
+        if pg is None:
+            pg = ActPage(self)
+            self._act_page = pg
+            self.center_stack.addWidget(pg)
+        else:
+            pg.refresh()
+        if self.view.pen_active():
+            self.pen_finish(commit=True)
+        self.right_dock.hide()
+        self.left_dock.hide()
+        self.center_stack.setCurrentWidget(pg)
+        if not act_kit_ready():
+            QTimer.singleShot(150, pg.load_kit)
+
+    def _act_btn_state(self):
+        b = getattr(self, "btn_act", None)
+        if b is not None:
+            b.setVisible(act_kit_ready())
+
+    def act_finish(self, d, master):
+        """Оригинал акта уже открыт: вписать замеры почерком мастера, положить его подпись и печать.
+        Возвращает короткую подсказку, что делать дальше."""
+        doc = self.doc
+        if doc is None or "(из Word)" not in str(self.doc_path or ""):
+            return "Оригинал не открылся — откройте его в списке файлов."
+        notes = []
+        glyphs = master.get("glyphs") or {}
+        vals = d.get("lkp") or {}
+        seed = int(time.time() * 1000) % 1000003
+        rnd = __import__("random").Random(seed)
+        where = ACT.find_diagram(doc)
+        if vals and where is None:
+            notes.append("Схема в PDF не найдена — замеры не вписаны (нужен Microsoft Word).")
+        elif vals:
+            pno, rect = where
+            page = doc[pno]
+            for name, x0, y0, x1, y1 in ACT.lkp_places(rect, d.get("kind", "car")):
+                text = vals.get(name)
+                if not text:
+                    continue
+                bw, bh = x1 - x0, y1 - y0
+                wheel = name.startswith("w")
+                h_pt = bh * (0.40 if wheel else 0.98)
+                im = hand_pil(text.replace("%", "") if wheel else text, glyphs, int(h_pt * 300 / 72), rnd.randrange(10 ** 6))
+                if im is None:
+                    continue
+                ang = rnd.uniform(-3.0, 3.0)
+                im = im.rotate(ang, expand=True, resample=Image.BICUBIC)
+                k = h_pt / (int(h_pt * 300 / 72) * 1.1)
+                w_pt, hh_pt = im.width * k, im.height * k
+                max_w = bw * (0.50 if wheel else 0.92)
+                if w_pt > max_w:
+                    hh_pt *= max_w / w_pt
+                    w_pt = max_w
+                cx = x0 + bw * (0.36 if wheel else 0.5) + rnd.uniform(-0.04, 0.04) * bw
+                cy = y0 + bh * 0.5 + rnd.uniform(-0.05, 0.05) * bh
+                buf = io.BytesIO()
+                im.save(buf, "PNG")
+                page.insert_image(fitz.Rect(cx - w_pt / 2, cy - hh_pt / 2, cx + w_pt / 2, cy + hh_pt / 2),
+                                  stream=buf.getvalue(), keep_proportion=False, overlay=True)
+        last = doc.page_count - 1
+        pr = doc[last].rect
+        to_px = PREVIEW_DPI / 72.0
+
+        def put(pil, mm_w, fx, fy, opacity):
+            mm_h = mm_w * pil.height / max(1, pil.width)
+            pm = self._pixmap_from_pil(pil)
+            item = StampItem(pm, pil, mm_w, mm_h, last)
+            item.opacity_value = opacity
+            item.setOpacity(opacity)
+            self.scene.addItem(item)
+            item.setPos(pr.width * fx * to_px, pr.height * fy * to_px)
+            self.stamps.append(item)
+            return item
+
+        placed = []
+        sg = sign_pil(master.get("sign"), 220)
+        if sg is not None:
+            put(sg, 46.0, 0.60, 0.80, 1.0)
+            placed.append("подпись")
+        if master.get("stamp"):
+            ent = next((s for s in lib_load() if os.path.basename(s["file"]) == master["stamp"]), None)
+            try:
+                if ent is not None:
+                    st = Image.open(ent["file"]).convert("RGBA")
+                    put(st, float(ent.get("mm_w") or 40.0), 0.28, 0.76, 0.9)
+                    placed.append("печать")
+            except Exception:
+                pass
+        self.refresh_page_list(last if placed else 0)
+        self.show_page(last if placed else 0)
+        self._update_ui_state()
+        if placed:
+            notes.append(f"На последней странице лежат {' и '.join(placed)} мастера — подвиньте на место.")
+        else:
+            notes.append("У мастера нет подписи и печати в профиле — поставьте их вручную.")
+        notes.append("Дальше сохраните как PDF или «Как скан».")
+        return " ".join(notes)
 
     def ai_mode(self, on=True):
         """ИИ-помощник занимает середину главного окна вместо страницы; список файлов слева остаётся."""
@@ -11064,6 +12178,14 @@ class MainWindow(QMainWindow):
         orow.setSpacing(6)
         orow.addWidget(b_open, 1)
         orow.addWidget(self.btn_fill, 0)
+        self.btn_act = QPushButton(" Акт")
+        self.btn_act.setIconSize(QSize(14, 14))
+        self.btn_act.setMinimumHeight(30)
+        self.btn_act.setToolTip("Акт осмотра автомобиля: оригинал на немецком и перевод  (Ctrl+Shift+K)")
+        self.btn_act.clicked.connect(self.open_act_page)
+        self.btn_act.setVisible(act_kit_ready())
+        self._themed_buttons.append((self.btn_act, "act", False))
+        orow.addWidget(self.btn_act, 0)
         tl.addLayout(orow)
         b_open.setText(" Открыть")
         b_open.setToolTip("Открыть выбранный в списке файл (или двойной щелчок по нему)")
@@ -13737,7 +14859,7 @@ def main():
             except Exception:
                 guide_n = 0
             f.write(f"OK {APP_VERSION} {EDITION} scanner={scanner_backend()} guide={guide_n} "
-                    f"ai={len(AI.PROVIDERS)} keys={len(AI.builtin_keys())} ocr={AI.selftest_ocr()} word={SW.selftest()} cloud={CLOUD.selftest()}")
+                    f"ai={len(AI.PROVIDERS)} keys={len(AI.builtin_keys())} ocr={AI.selftest_ocr()} word={SW.selftest()} cloud={CLOUD.selftest()} act={'ok' if ACT.selftest() else 'fail'}")
         sys.exit(0)
     win = MainWindow()
     win.show()
