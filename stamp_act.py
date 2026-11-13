@@ -46,12 +46,49 @@ def _norm(s):
     return re.sub(r"\s+", " ", str(s or "")).strip().lower().replace("ё", "е")
 
 
+EXTRA = {}          # пары, которые мастерская добавила сама: {поле: [[нем., рус.], …]}
+
+
+def pairs(field):
+    """Все пары поля: сначала словарь программы, потом добавленные мастерской."""
+    out = list(DICT.get(field, []))
+    for p in EXTRA.get(field) or []:
+        try:
+            pair = (str(p[0]).strip(), str(p[1]).strip())
+        except Exception:
+            continue
+        if pair[0] and pair[1] and pair not in out:
+            out.append(pair)
+    return out
+
+
+def variants(field, side):
+    """Список значений для выбора: side = 0 (нем.) или 1 (рус.), без повторов."""
+    seen, out = set(), []
+    for p in pairs(field):
+        if _norm(p[side]) not in seen:
+            seen.add(_norm(p[side]))
+            out.append(p[side])
+    return out
+
+
+def learn(field, de, ru):
+    """Запомнить пару, которой ещё нет. True — добавлена."""
+    de, ru = str(de or "").strip(), str(ru or "").strip()
+    if not de or not ru:
+        return False
+    if any(_norm(a) == _norm(de) and _norm(b) == _norm(ru) for a, b in pairs(field)):
+        return False
+    EXTRA.setdefault(field, []).append([de, ru])
+    return True
+
+
 def translate(field, value, to):
     """Перевод значения по словарю: to = 'ru' или 'de'. None — в словаре нет."""
     v = _norm(value)
     if not v:
         return ""
-    for de, ru in DICT.get(field, []):
+    for de, ru in pairs(field):
         if to == "ru" and _norm(de) == v:
             return ru
         if to == "de" and _norm(ru) == v:
@@ -524,6 +561,14 @@ def selftest():
     """Проверка без бланков: словарь, форматы, почерк, схемы."""
     assert translate("color", "grau", "ru") == "Серый" and translate("gear", "акпп", "de") == "Automatik"
     assert translate("color", "небесный", "de") is None and translate("fuel", "", "ru") == ""
+    keep = dict(EXTRA)
+    try:
+        assert learn("body", "SUV", "Кроссовер") and not learn("body", "suv", "кроссовер") and not learn("body", "Crossover", "Кроссовер")
+        assert translate("body", "Кроссовер", "de") == "Crossover" and variants("body", 0).count("SUV") == 1
+        assert learn("color", "Himmelblau", "Небесный") and translate("color", "небесный", "de") == "Himmelblau"
+    finally:
+        EXTRA.clear()
+        EXTRA.update(keep)
     assert group_digits("53997") == "53 997" and group_digits("1598") == "1 598" and group_digits("997") == "997"
     assert volume_de("1,6", "1598") == "1.6 (1 598 cm³)" and volume_ru("1.6", "1598") == "1.6 л"
     assert clean_vin("u5yp-v81g bpl097231") == "U5YPV81GBPL097231" and not vin_problem("U5YPV81GBPL097231")

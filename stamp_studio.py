@@ -528,7 +528,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.10.0"
+APP_VERSION = "6.10.1"
 EDITION = "main"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -563,7 +563,7 @@ def settings_load() -> dict:
 
 
 SETTINGS_CHANGED = []            # кому сообщить, что изменились настройки, которые уходят в облако
-_SYNCED_KEYS = ("word_marks", "pen_presets", "name_templates", "doc_counters", "sheet_templates", "act_masters")
+_SYNCED_KEYS = ("word_marks", "pen_presets", "name_templates", "doc_counters", "sheet_templates", "act_masters", "act_dict")
 _synced_seen = [None]
 
 
@@ -9250,6 +9250,18 @@ def act_kit_ready() -> bool:
     return all(os.path.isfile(act_kit_path(k)) for k in ACT.KIT_FILES)
 
 
+def act_kit_ensure() -> bool:
+    """Если своих бланков нет — положить те, что идут с программой. True — бланки на месте."""
+    if act_kit_ready():
+        return True
+    try:
+        import stamp_act_kit
+        act_kit_store(stamp_act_kit.BLANKS)
+    except Exception:
+        pass
+    return act_kit_ready()
+
+
 def act_kit_value():
     """Бланки для облака: {de, ru} в base64 и время изменения. None — бланков нет."""
     if not act_kit_ready():
@@ -9623,6 +9635,8 @@ class ActPage(QDialog):
         self.setWindowFlags(Qt.Widget)
         self.setObjectName("aipage")
         self._auto = {}                 # какие переводы подставила программа (их можно заменять)
+        ACT.EXTRA.clear()
+        ACT.EXTRA.update({k: list(v) for k, v in (settings_load().get("act_dict") or {}).items()})
         self._sections = []
         root = QVBoxLayout(self)
         root.setContentsMargins(16, 10, 16, 10)
@@ -9645,7 +9659,8 @@ class ActPage(QDialog):
         self.lbl_kit.setObjectName("hint")
         head.addWidget(self.lbl_kit, 1)
         self.btn_kit = QPushButton("Бланки…")
-        self.btn_kit.setToolTip("Загрузить или заменить бланки акта: оригинал на немецком и перевод на русском (.docx)")
+        self.btn_kit.setToolTip("Бланки акта уже в программе. Здесь их можно заменить своими: "
+                                "оригинал на немецком и перевод на русском (.docx)")
         self.btn_kit.clicked.connect(self.load_kit)
         head.addWidget(self.btn_kit)
         self.btn_ai = QPushButton(" Перевести ИИ")
@@ -9776,7 +9791,7 @@ class ActPage(QDialog):
                 c.setEditable(True)
                 c.setInsertPolicy(QComboBox.NoInsert)
                 c.addItem("")
-                c.addItems([p[col] for p in ACT.DICT[key]])
+                c.addItems(ACT.variants(key, col))
                 c.setCurrentIndex(0)
             cd.editTextChanged.connect(lambda t, k=key: self._pair_changed(k, "de"))
             cr.editTextChanged.connect(lambda t, k=key: self._pair_changed(k, "ru"))
@@ -9896,6 +9911,7 @@ class ActPage(QDialog):
         self.btn_make.setEnabled(True)
         cur = self.cmb_master.currentText()
         self._fill_masters(cur)
+        self._dict_refresh()
         try:
             if int(re.sub(r"\D", "", self.ed_number.text()) or 0) < act_next_number():
                 self.ed_number.setText(str(act_next_number()))
@@ -9945,6 +9961,34 @@ class ActPage(QDialog):
         if s.get("act_input") != ("ru" if ru else "de"):
             s["act_input"] = "ru" if ru else "de"
             settings_save(s)
+
+    def _dict_refresh(self):
+        """Словарь мог пополниться (здесь или на другом компьютере) — обновить списки, не трогая введённое."""
+        ACT.EXTRA.clear()
+        ACT.EXTRA.update({k: list(v) for k, v in (settings_load().get("act_dict") or {}).items()})
+        self._pair_busy = True
+        try:
+            for key, (cd, cr) in self.pair.items():
+                for c, col in ((cd, 0), (cr, 1)):
+                    want = [""] + ACT.variants(key, col)
+                    if [c.itemText(i) for i in range(c.count())] != want:
+                        text = c.currentText()
+                        c.clear()
+                        c.addItems(want)
+                        c.setEditText(text)
+        finally:
+            self._pair_busy = False
+
+    def _dict_learn(self, d):
+        """Новые пары значений (вписали сами или перевёл ИИ) запоминаются для следующих актов."""
+        added = False
+        for key, _cap in self.PAIRS:
+            added = ACT.learn(key, d.get(key + "_de"), d.get(key + "_ru")) or added
+        if added:
+            s = settings_load()
+            s["act_dict"] = {k: list(v) for k, v in ACT.EXTRA.items()}
+            settings_save(s)
+            self._dict_refresh()
 
     def _vin_edited(self, text):
         v = ACT.clean_vin(text)
@@ -10029,7 +10073,7 @@ class ActPage(QDialog):
     # ---------------------------------------------------------- бланки
     def load_kit(self):
         QMessageBox.information(self, "Бланки акта",
-                                "Сейчас нужно выбрать два файла Word:\n"
+                                "Бланки акта уже есть в программе. Чтобы заменить их своими, выберите два файла Word:\n"
                                 "1) оригинал акта на немецком (INSPEKTIONSBERICHT),\n"
                                 "2) перевод акта на русском.\n\n"
                                 "Подойдёт любой уже заполненный акт — программа заменит в нём данные.")
@@ -10205,6 +10249,7 @@ class ActPage(QDialog):
             QMessageBox.critical(self, "Акт осмотра", f"Не удалось заполнить бланки:\n{e}")
             return
         act_set_last(got)
+        self._dict_learn(d)
         s = settings_load()
         s["act_last_master"] = m["name"]
         settings_save(s)
@@ -10924,7 +10969,7 @@ class MainWindow(QMainWindow):
                 mt = os.path.getmtime(SETTINGS_JSON)
             except OSError:
                 mt = 0
-            for name in ("word_marks", "pen_presets", "name_templates", "sheet_templates", "crop_templates", "act_masters"):
+            for name in ("word_marks", "pen_presets", "name_templates", "sheet_templates", "crop_templates", "act_masters", "act_dict"):
                 if st.get(name):
                     local["settings"][name] = {"value": st[name], "mtime": mt}
             try:
@@ -11286,6 +11331,7 @@ class MainWindow(QMainWindow):
     # ---------------------------------------------------------- акт осмотра
     def open_act_page(self):
         """Акт осмотра занимает середину окна, как ИИ и редактор Word."""
+        act_kit_ensure()                       # бланки идут с программой; свои можно загрузить кнопкой «Бланки…»
         pg = getattr(self, "_act_page", None)
         if pg is None:
             pg = ActPage(self)
@@ -11298,8 +11344,7 @@ class MainWindow(QMainWindow):
         self.right_dock.hide()
         self.left_dock.hide()
         self.center_stack.setCurrentWidget(pg)
-        if not act_kit_ready():
-            QTimer.singleShot(150, pg.load_kit)
+        self._act_btn_state()
 
     def _act_btn_state(self):
         b = getattr(self, "btn_act", None)
