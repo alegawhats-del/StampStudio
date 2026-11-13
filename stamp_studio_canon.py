@@ -528,7 +528,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.10.3"
+APP_VERSION = "6.10.4"
 EDITION = "canon"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -9283,6 +9283,12 @@ def act_kit_store(val: dict):
                 f.write(base64.b64decode(val[k]))
 
 
+def act_doc_name(name: str) -> bool:
+    """Имя документа акта осмотра («(Kreuzberg) 04.11 Kia Sportage», «Перевод инспекции 04.11 …»):
+    такие имена программа не меняет — ни ИИ, ни шаблонами, ни добавкой «скан»."""
+    return bool(re.match(r"^(\(Kreuzberg\)|Перевод инспекции) \d{2}\.\d{2} \S", str(name or "")))
+
+
 def act_masters_load() -> list:
     return [m for m in (settings_load().get("act_masters") or []) if m.get("name")]
 
@@ -13020,6 +13026,8 @@ class MainWindow(QMainWindow):
         if self.doc_path and os.path.isfile(str(self.doc_path)):
             folder = os.path.dirname(str(self.doc_path))
         name = f"{base} {suffix}.pdf"
+        if act_doc_name(base) and not os.path.exists(os.path.join(folder, f"{base}.pdf")):
+            name = f"{base}.pdf"                   # акт осмотра: имя то же, что у документа
         k = 2
         while os.path.exists(os.path.join(folder, name)):
             name = f"{base} {suffix} {k}.pdf"
@@ -14507,6 +14515,8 @@ class MainWindow(QMainWindow):
         src_name = src_name.replace(" (из изображений)", "").replace(" (из Word)", "") or "документ"
         dlg = SaveDialog(src_name, self, default_dir=self.current_dir(),
                          compress_profile=getattr(self, 'compress_profile', None))
+        if not suggest and act_doc_name(src_name):
+            suggest = src_name                     # у актов осмотра имя файла остаётся как есть
         if isinstance(suggest, str) and suggest:
             dlg.edit_name.setText(suggest)
         else:
