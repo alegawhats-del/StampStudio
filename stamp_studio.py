@@ -53,6 +53,7 @@ import stamp_word as SW
 import stamp_cloud as CLOUD
 import stamp_act as ACT
 import stamp_license as LIC
+import stamp_tools as TOOLS
 
 PREVIEW_DPI = 150          # DPI отрисовки страницы в редакторе
 EXPORT_STAMP_DPI = 300     # DPI растеризации печати при экспорте
@@ -410,13 +411,13 @@ QToolButton#ghost:hover { background: rgba(214, 154, 51, 0.22); }
 QToolButton#ghost:pressed { background: rgba(214, 154, 51, 0.40); }
 QPushButton#aiact { text-align: left; padding: 6px 12px; }
 QDialog#embedded { background: transparent; }
-QToolBar#tools { background: #171a22; border: none; border-right: 1px solid #262b39; padding: 4px 5px; spacing: 2px; }
-QToolBar#tools QToolButton { min-width: 30px; max-width: 30px; min-height: 25px; max-height: 25px; padding: 0;
+QToolBar#tools { background: #171a22; border: none; border-right: 1px solid #262b39; padding: 3px 5px; spacing: 1px; }
+QToolBar#tools QToolButton { min-width: 30px; max-width: 30px; min-height: 23px; max-height: 23px; padding: 0;
     background: transparent; border: 1px solid transparent; border-radius: 8px; }
 QToolBar#tools QToolButton:hover { background: #232735; border-color: #e8b04b; }
 QToolBar#tools QToolButton:checked { background: #3a321c; border-color: #e8b04b; }
 QToolBar#tools QToolButton:disabled { background: transparent; border-color: transparent; }
-QToolBar#tools::separator { background: #2a2f3d; height: 1px; margin: 2px 5px; }
+QToolBar#tools::separator { background: #2a2f3d; height: 1px; margin: 1px 5px; }
 QMenuBar { background: #171a22; border-bottom: 1px solid #262b39; padding: 1px 6px; }
 QMenuBar::item { background: transparent; padding: 4px 12px; border-radius: 6px; color: #c9cddb; }
 QMenuBar::item:selected, QMenuBar::item:pressed { background: #2c3145; color: #e8b04b; }
@@ -485,13 +486,13 @@ QToolButton#ghost:hover { background: rgba(214, 154, 51, 0.22); }
 QToolButton#ghost:pressed { background: rgba(214, 154, 51, 0.40); }
 QPushButton#aiact { text-align: left; padding: 6px 12px; }
 QDialog#embedded { background: transparent; }
-QToolBar#tools { background: #fbf9f4; border: none; border-right: 1px solid #e6e1d6; padding: 4px 5px; spacing: 2px; }
-QToolBar#tools QToolButton { min-width: 30px; max-width: 30px; min-height: 25px; max-height: 25px; padding: 0;
+QToolBar#tools { background: #fbf9f4; border: none; border-right: 1px solid #e6e1d6; padding: 3px 5px; spacing: 1px; }
+QToolBar#tools QToolButton { min-width: 30px; max-width: 30px; min-height: 23px; max-height: 23px; padding: 0;
     background: transparent; border: 1px solid transparent; border-radius: 8px; }
 QToolBar#tools QToolButton:hover { background: #ffffff; border-color: #d69a33; }
 QToolBar#tools QToolButton:checked { background: #fbefd3; border-color: #d69a33; }
 QToolBar#tools QToolButton:disabled { background: transparent; border-color: transparent; }
-QToolBar#tools::separator { background: #e6e1d6; height: 1px; margin: 2px 5px; }
+QToolBar#tools::separator { background: #e6e1d6; height: 1px; margin: 1px 5px; }
 QMenuBar { background: #fbf9f4; border-bottom: 1px solid #e6e1d6; padding: 1px 6px; }
 QMenuBar::item { background: transparent; padding: 4px 12px; border-radius: 6px; color: #4a4636; }
 QMenuBar::item:selected, QMenuBar::item:pressed { background: #f4e3c2; color: #6b4a00; }
@@ -529,7 +530,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.11.0"
+APP_VERSION = "6.12.0"
 EDITION = "main"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -1938,6 +1939,12 @@ def draw_icon(kind: str, color: str, size: int = 64) -> QIcon:
         p.setPen(pen2)
         line(8.0, 1.6, 8.0, 14.4)
         p.setPen(pen)
+    elif kind == "tools":
+        rect(3.2, 1.6, 9.6, 12.8)
+        line(5.0, 4.4, 10.8, 4.4)
+        for yy in (6.8, 9.0, 11.2):
+            for xx in (5.0, 6.8, 8.6):
+                p.drawPoint(QPointF(xx / 16 * size, yy / 16 * size))
     elif kind == "act":
         rect(3.0, 2.2, 10.0, 12.0)
         line(5.2, 5.4, 10.8, 5.4); line(5.2, 8.0, 8.4, 8.0)
@@ -10482,6 +10489,333 @@ def license_gate() -> bool:
     return dlg.exec() == QDialog.Accepted
 
 
+def _tools_qss(dark: bool) -> str:
+    res = "#2a2d1f" if dark else "#fff8e6"
+    hint = "#9a968c" if dark else "#8a8474"
+    flash = "#1b7a3d"
+    return (
+        f"QDialog#tools QLineEdit#toolresult {{ background: {res}; font-weight: 600; }}"
+        f"QDialog#tools QLabel#toolhint {{ color: {hint}; }}"
+        f"QDialog#tools QLabel#toolflash {{ color: {flash}; font-weight: 600; }}"
+        "QDialog#tools QGroupBox[conv=\"#e23b3b\"] { border-left: 3px solid #e23b3b; }"
+        "QDialog#tools QGroupBox[conv=\"#2f6fe2\"] { border-left: 3px solid #2f6fe2; }"
+        "QDialog#tools QGroupBox[conv=\"#d6a400\"] { border-left: 3px solid #d6a400; }"
+    )
+
+
+# ======================================================================
+#  Окно «Инструменты»: регистр текста, конвертеры валют, сумма прописью, л.с.⇄кВт
+# ======================================================================
+
+class RatesThread(QThread):
+    done = Signal(object, str)          # (rates|None, ошибка)
+
+    def __init__(self, on_date=None, parent=None):
+        super().__init__(parent)
+        self.on_date = on_date
+
+    def run(self):
+        try:
+            self.done.emit(TOOLS.fetch_rates(self.on_date), "")
+        except Exception as e:
+            self.done.emit(None, str(e))
+
+
+class CopyLine(QWidget):
+    """Поле результата с кнопкой «Копировать»."""
+
+    def __init__(self, parent=None, placeholder=""):
+        super().__init__(parent)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(6)
+        self.out = QLineEdit()
+        self.out.setReadOnly(True)
+        self.out.setPlaceholderText(placeholder)
+        self.out.setObjectName("toolresult")
+        lay.addWidget(self.out, 1)
+        self.btn = QPushButton("Копировать")
+        self.btn.setToolTip("Скопировать результат в буфер обмена")
+        self.btn.clicked.connect(self._copy)
+        lay.addWidget(self.btn)
+
+    def set_text(self, t):
+        self.out.setText(t)
+
+    def text(self):
+        return self.out.text()
+
+    def _copy(self):
+        t = self.out.text()
+        if t:
+            QApplication.clipboard().setText(t)
+            win = self.window()
+            if hasattr(win, "flash_copied"):
+                win.flash_copied()
+
+
+class ToolsDialog(QDialog):
+    """Инструменты для заполнения документов. Окно не перекрывает работу —
+    остаётся поверх и доступно, пока заполняешь ТПО/ПТД."""
+
+    def __init__(self, win):
+        super().__init__(win)
+        self.win = win
+        self.setObjectName("tools")
+        self.setWindowTitle(f"{APP_TITLE} — инструменты")
+        self.setWindowFlags(Qt.Tool | Qt.WindowCloseButtonHint | Qt.WindowStaysOnTopHint)
+        self.resize(560, 580)
+        self.setMinimumSize(520, 540)
+        self._rates_thread = None
+        root = QVBoxLayout(self)
+        root.setContentsMargins(14, 12, 14, 10)
+        root.setSpacing(8)
+        self.tabs = QTabWidget()
+        self.tabs.addTab(self._tab_currency(), "Валюты")
+        self.tabs.addTab(self._tab_case(), "Регистр")
+        self.tabs.addTab(self._tab_words(), "Сумма прописью")
+        self.tabs.addTab(self._tab_power(), "Л.с. ⇄ кВт")
+        root.addWidget(self.tabs, 1)
+        self.lbl_flash = QLabel("")
+        self.lbl_flash.setObjectName("toolflash")
+        self.lbl_flash.setAlignment(Qt.AlignCenter)
+        self.lbl_flash.setFixedHeight(18)
+        root.addWidget(self.lbl_flash)
+        self._flash_timer = QTimer(self)
+        self._flash_timer.setSingleShot(True)
+        self._flash_timer.timeout.connect(lambda: self.lbl_flash.setText(""))
+        self.setStyleSheet(_tools_qss(settings_load().get('theme') == 'dark'))
+
+    def flash_copied(self):
+        self.lbl_flash.setText("Скопировано в буфер обмена")
+        self._flash_timer.start(1600)
+
+    # ---------------------------------------------------------- Валюты
+    def _tab_currency(self):
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setSpacing(8)
+        box = QGroupBox("Курсы (как в п. 6 ТПО)")
+        g = QGridLayout(box)
+        g.setHorizontalSpacing(8)
+        g.setVerticalSpacing(6)
+        g.addWidget(QLabel("На дату:"), 0, 0)
+        self.date = QDateEdit()
+        self.date.setCalendarPopup(True)
+        self.date.setDisplayFormat("dd.MM.yyyy")
+        self.date.setDate(QDate.currentDate())
+        self.date.setMaximumWidth(130)
+        g.addWidget(self.date, 0, 1)
+        self.btn_rates = QPushButton("Обновить курс")
+        self.btn_rates.setToolTip("Взять официальный курс Нацбанка РБ на эту дату")
+        self.btn_rates.clicked.connect(self.load_rates)
+        g.addWidget(self.btn_rates, 0, 2)
+        self.lbl_rates = QLabel("курс не загружен")
+        self.lbl_rates.setObjectName("toolhint")
+        g.addWidget(self.lbl_rates, 0, 3)
+        g.addWidget(QLabel("Br за 1 €:"), 1, 0)
+        self.rate_eur = QLineEdit()
+        self.rate_eur.setPlaceholderText("3.4245")
+        self.rate_eur.setMaximumWidth(110)
+        g.addWidget(self.rate_eur, 1, 1)
+        g.addWidget(QLabel("Br за 100 ₽:"), 1, 2)
+        self.rate_rub = QLineEdit()
+        self.rate_rub.setPlaceholderText("3.6060")
+        self.rate_rub.setMaximumWidth(110)
+        g.addWidget(self.rate_rub, 1, 3)
+        g.setColumnStretch(3, 1)
+        v.addWidget(box)
+
+        self.conv = {}
+        for key, title, color, src_cap in (
+                ("rub_eur", "RUB → EUR", "#e23b3b", "сумма, ₽"),
+                ("eur_byn", "EUR → BYN", "#2f6fe2", "сумма, €"),
+                ("rub_byn", "RUB → BYN", "#d6a400", "сумма, ₽")):
+            box = QGroupBox(title)
+            box.setProperty("conv", color)
+            gv = QVBoxLayout(box)
+            gv.setSpacing(5)
+            row = QHBoxLayout()
+            row.addWidget(QLabel(src_cap + ":"))
+            ed = QLineEdit()
+            ed.setPlaceholderText("14587.54")
+            ed.textChanged.connect(self._recalc_currency)
+            row.addWidget(ed, 1)
+            gv.addLayout(row)
+            out = CopyLine(placeholder="результат")
+            gv.addWidget(out)
+            v.addWidget(box)
+            self.conv[key] = (ed, out)
+
+        box = QGroupBox("Процент (п. 18, розовое): жёлтое ÷ синее")
+        g = QGridLayout(box)
+        g.addWidget(QLabel("Жёлтое (RUB→BYN):"), 0, 0)
+        self.pct_part = QLineEdit()
+        self.pct_part.setPlaceholderText("21090.50")
+        self.pct_part.textChanged.connect(self._recalc_currency)
+        self.pct_part.textEdited.connect(self._pct_manual)
+        g.addWidget(self.pct_part, 0, 1)
+        g.addWidget(QLabel("Синее (EUR→BYN):"), 1, 0)
+        self.pct_whole = QLineEdit()
+        self.pct_whole.setPlaceholderText("49482.39")
+        self.pct_whole.textChanged.connect(self._recalc_currency)
+        self.pct_whole.textEdited.connect(self._pct_manual)
+        g.addWidget(self.pct_whole, 1, 1)
+        self.pct_out = CopyLine(placeholder="%")
+        g.addWidget(self.pct_out, 2, 0, 1, 2)
+        g.setColumnStretch(1, 1)
+        v.addWidget(box)
+
+        self.rate_eur.textChanged.connect(self._recalc_currency)
+        self.rate_rub.textChanged.connect(self._recalc_currency)
+        v.addStretch(1)
+        self._auto_pct()
+        sc = QScrollArea()
+        sc.setWidgetResizable(True)
+        sc.setFrameShape(QFrame.NoFrame)
+        sc.setWidget(w)
+        return sc
+
+    def _auto_pct(self):
+        """Жёлтое и синее берутся из конвертеров RUB→BYN и EUR→BYN, пока их не трогали руками."""
+        self._pct_auto = True
+
+    def load_rates(self):
+        if self._rates_thread is not None and self._rates_thread.isRunning():
+            return
+        self.btn_rates.setEnabled(False)
+        self.lbl_rates.setText("загружаю…")
+        d = self.date.date()
+        import datetime
+        self._rates_thread = RatesThread(datetime.date(d.year(), d.month(), d.day()), self)
+        self._rates_thread.done.connect(self._rates_done)
+        self._rates_thread.start()
+
+    def _rates_done(self, rates, err):
+        self.btn_rates.setEnabled(True)
+        if rates is None:
+            self.lbl_rates.setText("нет связи — впишите курс вручную")
+            self.lbl_rates.setToolTip(err)
+            return
+        self.rate_eur.setText(TOOLS.fmt_plain(rates["eur_byn"], 4))
+        self.rate_rub.setText(TOOLS.fmt_plain(rates["rub_byn"] * 100, 4))
+        self.lbl_rates.setText(f"Нацбанк РБ на {rates['date']}")
+        self.lbl_rates.setToolTip("")
+        self._recalc_currency()
+
+    def _recalc_currency(self, *_):
+        eur_byn = TOOLS._num(self.rate_eur.text())
+        rub100 = TOOLS._num(self.rate_rub.text())
+        rub_byn = (rub100 / 100.0) if rub100 else None
+        rub_eur = (rub_byn / eur_byn) if (rub_byn and eur_byn) else None
+        pairs = {"rub_eur": rub_eur, "eur_byn": eur_byn, "rub_byn": rub_byn}
+        for key, (ed, out) in self.conv.items():
+            rate = pairs[key]
+            out.set_text(TOOLS.convert(ed.text(), rate) if rate else "")
+        if getattr(self, "_pct_auto", True):
+            yellow = self.conv["rub_byn"][1].text()     # жёлтое = результат RUB→BYN
+            blue = self.conv["eur_byn"][1].text()       # синее = результат EUR→BYN
+            for field, val in ((self.pct_part, yellow), (self.pct_whole, blue)):
+                if val and not field.hasFocus():
+                    field.blockSignals(True)
+                    field.setText(val)
+                    field.blockSignals(False)
+        self.pct_out.set_text(TOOLS.percent(self.pct_part.text(), self.pct_whole.text()))
+
+    def _pct_manual(self):
+        self._pct_auto = False
+
+    # ---------------------------------------------------------- Регистр
+    def _tab_case(self):
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setSpacing(8)
+        v.addWidget(QLabel("Вставьте текст — ниже сразу все варианты регистра, рядом «Копировать»."))
+        self.case_in = QTextEdit()
+        self.case_in.setAcceptRichText(False)
+        self.case_in.setPlaceholderText("молчанов дмитрий анатольевич")
+        self.case_in.setFixedHeight(70)
+        self.case_in.textChanged.connect(self._recalc_case)
+        v.addWidget(self.case_in)
+        self.case_out = {}
+        for mode, title, _fn in TOOLS.CASE_MODES:
+            box = QGroupBox(title)
+            h = QVBoxLayout(box)
+            h.setContentsMargins(8, 4, 8, 6)
+            out = CopyLine()
+            h.addWidget(out)
+            v.addWidget(box)
+            self.case_out[mode] = out
+        v.addStretch(1)
+        return w
+
+    def _recalc_case(self):
+        text = self.case_in.toPlainText()
+        for mode, _title, fn in TOOLS.CASE_MODES:
+            self.case_out[mode].set_text(fn(text))
+
+    # ---------------------------------------------------------- Сумма прописью
+    def _tab_words(self):
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setSpacing(8)
+        v.addWidget(QLabel("Сумма цифрами — пропись для договоров, счетов и актов."))
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Сумма:"))
+        self.words_in = QLineEdit()
+        self.words_in.setPlaceholderText("49482,39")
+        self.words_in.textChanged.connect(self._recalc_words)
+        row.addWidget(self.words_in, 1)
+        self.words_cur = QComboBox()
+        for code, name in (("RUB", "рубли"), ("BYN", "бел. рубли"), ("EUR", "евро")):
+            self.words_cur.addItem(name, code)
+        self.words_cur.currentIndexChanged.connect(self._recalc_words)
+        row.addWidget(self.words_cur)
+        v.addLayout(row)
+        box = QGroupBox("Прописью")
+        h = QVBoxLayout(box)
+        self.words_out = CopyLine(placeholder="сумма прописью")
+        h.addWidget(self.words_out)
+        v.addWidget(box)
+        v.addStretch(1)
+        return w
+
+    def _recalc_words(self):
+        self.words_out.set_text(TOOLS.rub_in_words(self.words_in.text(), self.words_cur.currentData()))
+
+    # ---------------------------------------------------------- Л.с. ⇄ кВт
+    def _tab_power(self):
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setSpacing(8)
+        v.addWidget(QLabel("Мощность двигателя для документов (1 л.с. = 0,7355 кВт)."))
+        box = QGroupBox("Лошадиные силы → киловатты")
+        g = QGridLayout(box)
+        g.addWidget(QLabel("л.с.:"), 0, 0)
+        self.hp_in = QLineEdit()
+        self.hp_in.setPlaceholderText("249")
+        self.hp_in.textChanged.connect(lambda: self.hp_out.set_text(TOOLS.hp_to_kw(self.hp_in.text())))
+        g.addWidget(self.hp_in, 0, 1)
+        self.hp_out = CopyLine(placeholder="кВт")
+        g.addWidget(self.hp_out, 1, 0, 1, 2)
+        g.setColumnStretch(1, 1)
+        v.addWidget(box)
+        box = QGroupBox("Киловатты → лошадиные силы")
+        g = QGridLayout(box)
+        g.addWidget(QLabel("кВт:"), 0, 0)
+        self.kw_in = QLineEdit()
+        self.kw_in.setPlaceholderText("183.14")
+        self.kw_in.textChanged.connect(lambda: self.kw_out.set_text(TOOLS.kw_to_hp(self.kw_in.text())))
+        g.addWidget(self.kw_in, 0, 1)
+        self.kw_out = CopyLine(placeholder="л.с.")
+        g.addWidget(self.kw_out, 1, 0, 1, 2)
+        g.setColumnStretch(1, 1)
+        v.addWidget(box)
+        v.addStretch(1)
+        return w
+
+
+
 class TabScrollWatch(QObject):
     """Следит за полосой вкладок и показывает свои стрелки, когда вкладки не помещаются."""
 
@@ -10888,6 +11222,10 @@ class MainWindow(QMainWindow):
         m.addSeparator()
         m.addAction(act("Скопировать текст страницы", self.copy_page_text, "Ctrl+Shift+C",
                         "Скопировать весь текст открытой страницы в буфер обмена", doc=True))
+        m.addSeparator()
+        self.act_tools = act("Инструменты…", self.open_tools, "Ctrl+Shift+T",
+                             "Регистр текста, конвертеры валют, сумма прописью, л.с.⇄кВт", doc=False)
+        m.addAction(self.act_tools)
 
         # ---- Вид
         m = mb.addMenu("Вид")
@@ -10941,7 +11279,7 @@ class MainWindow(QMainWindow):
             [(self.act_rot_l, "rot_left"), (self.act_rot_r, "rot_right"), (self.act_crop, "crop"),
              (self.act_frame, "frame"), (self.act_split, "split")],
             [(self.act_scanlook, "scanlook"), (self.act_sheet, "sheet"), (self.act_ai_ocr, "ocr")],
-            [(self.act_word, "word_edit"), (self.act_act, "act")],
+            [(self.act_word, "word_edit"), (self.act_act, "act"), (self.act_tools, "tools")],
             [(self.act_zoom_in, "zoom_in"), (self.act_zoom_out, "zoom_out"), (self.act_fit, "fit")],
         ]
         for n, group in enumerate(groups):
@@ -11551,6 +11889,18 @@ class MainWindow(QMainWindow):
         self.center_stack.setCurrentWidget(pg)
 
     # ---------------------------------------------------------- акт осмотра
+    def open_tools(self):
+        """Окно инструментов: регистр, валюты, сумма прописью, л.с.⇄кВт. Одно на программу."""
+        dlg = getattr(self, "_tools_dialog", None)
+        if dlg is None:
+            dlg = ToolsDialog(self)
+            self._tools_dialog = dlg
+        else:
+            dlg.setStyleSheet(_tools_qss(settings_load().get("theme") == "dark"))
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
+
     def open_act_page(self):
         """Акт осмотра занимает середину окна, как ИИ и редактор Word."""
         act_kit_ensure()                       # бланки идут с программой; свои можно загрузить кнопкой «Бланки…»
@@ -15168,7 +15518,7 @@ def main():
             except Exception:
                 guide_n = 0
             f.write(f"OK {APP_VERSION} {EDITION} scanner={scanner_backend()} guide={guide_n} "
-                    f"ai={len(AI.PROVIDERS)} keys={len(AI.builtin_keys())} ocr={AI.selftest_ocr()} word={SW.selftest()} cloud={CLOUD.selftest()} act={'ok' if ACT.selftest() else 'fail'} license={'ok' if LIC.selftest() else 'fail'}")
+                    f"ai={len(AI.PROVIDERS)} keys={len(AI.builtin_keys())} ocr={AI.selftest_ocr()} word={SW.selftest()} cloud={CLOUD.selftest()} act={'ok' if ACT.selftest() else 'fail'} license={'ok' if LIC.selftest() else 'fail'} tools={'ok' if TOOLS.selftest() else 'fail'}")
         sys.exit(0)
     if not license_gate():                       # без действующего ключа программа не открывается
         sys.exit(0)
