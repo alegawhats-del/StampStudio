@@ -15845,7 +15845,20 @@ def main():
     win.show()
     win.place_mascot()
     win.license_watch()
-    sys.exit(app.exec())
+    code = app.exec()
+    # Выход без «разбора» объектов интерпретатором: библиотека PDF и Qt иногда спорят, кто что
+    # освобождает первым, и программа падала уже после закрытия окна. Всё нужное сохранено в closeEvent.
+    try:
+        if win.doc is not None:
+            win.doc.close()
+    except Exception:
+        pass
+    try:
+        sys.stdout.flush()
+        sys.stderr.flush()
+    except Exception:
+        pass
+    os._exit(int(code or 0))
 
 
 if __name__ == "__main__":
