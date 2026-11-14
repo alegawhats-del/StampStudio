@@ -13,3 +13,4 @@ winrt-Windows.Globalization; sys_platform == "win32"
 winrt-Windows.Graphics.Imaging; sys_platform == "win32"
 winrt-Windows.Storage.Streams; sys_platform == "win32"
 winrt-Windows.Media.Ocr; sys_platform == "win32"
+pdf2docx

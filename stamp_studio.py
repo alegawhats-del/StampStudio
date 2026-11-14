@@ -530,7 +530,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.12.0"
+APP_VERSION = "6.13.0"
 EDITION = "main"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -778,6 +778,84 @@ def prepare_stamp(pil_image, remove_bg=True, threshold=10, ink="file"):
 
     bbox2 = im.getbbox()
     return (im.crop(bbox2) if bbox2 else im), already_clean
+
+
+def looks_like_photo(pil_image) -> bool:
+    """Снимок на бумаге (фон неровный или не белый), а не готовая картинка печати."""
+    try:
+        im = pil_image.convert("RGBA")
+        if im.getchannel("A").getextrema()[0] < 250:
+            return False                                  # уже есть прозрачность
+        g = im.convert("L").resize((64, 64), Image.BILINEAR)
+        edge = Image.new("L", (64, 8))
+        edge.paste(g.crop((0, 0, 64, 4)), (0, 0))
+        edge.paste(g.crop((0, 60, 64, 64)), (0, 4))
+        st = ImageStat.Stat(edge)
+        return st.mean[0] < 236 or st.stddev[0] > 7
+    except Exception:
+        return False
+
+
+def prepare_signature(pil_image, threshold=10, ink="file"):
+    """Факсимиле из фотографии подписи: убрать бумагу, тени и неровный свет, оставить только чернила.
+
+    Фон оценивается по самой фотографии (светлая «подложка» без штрихов), чернила — это то, что
+    заметно темнее или цветнее фона в этом же месте. Поэтому тень от руки или телефона не мешает."""
+    im = pil_image.convert("RGB")
+    if max(im.size) > 2600:
+        k = 2600 / max(im.size)
+        im = im.resize((max(1, int(im.width * k)), max(1, int(im.height * k))), Image.LANCZOS)
+    W, H = im.size
+    sw, sh = max(8, W // 6), max(8, H // 6)
+
+    def background(ch):
+        """Яркость бумаги под штрихами: максимум стирает тонкие линии, размытие сглаживает."""
+        small = ch.resize((sw, sh), Image.BILINEAR)
+        k = min(15, max(7, (min(sw, sh) // 14) | 1))
+        # «закрытие»: максимум стирает штрихи, минимум возвращает на место края теней —
+        # поэтому резкая граница тени не превращается в серую кайму
+        small = small.filter(ImageFilter.MaxFilter(k)).filter(ImageFilter.MinFilter(k))
+        small = small.filter(ImageFilter.GaussianBlur(1.4))
+        return small.resize((W, H), Image.BILINEAR)
+
+    def flat(ch, bg):
+        """Канал с выровненным светом: ch * 255 / bg."""
+        inv = bg.point(lambda v: min(255, int(255 * 128 / max(v, 1))))
+        return ImageChops.multiply(ch, inv).point(lambda v: min(255, v * 2))
+
+    r, g, b = im.split()
+    bg_r, bg_g, bg_b = background(r), background(g), background(b)
+    fr, fg, fb = flat(r, bg_r), flat(g, bg_g), flat(b, bg_b)
+    gray = Image.merge("RGB", (fr, fg, fb)).convert("L")
+    dark = gray.point(lambda v: 255 - v)                                   # насколько темнее бумаги
+    mx = ImageChops.lighter(ImageChops.lighter(fr, fg), fb)
+    mn = ImageChops.darker(ImageChops.darker(fr, fg), fb)
+    chroma = ImageChops.subtract(mx, mn).point(lambda v: min(255, int(v * 1.5)))   # цветные чернила
+    score = ImageChops.lighter(dark, chroma)
+    # в глубокой тени выравнивание света усиливает и зерно бумаги — там требуем от чернил больше
+    trust = bg_g.point(lambda v: 255 if v >= 150 else max(110, int(255 * v / 150)))
+    score = ImageChops.multiply(score, trust)
+    lo = int(26 + threshold * 0.9)
+    hi = lo + 62
+    span = max(1, hi - lo)
+    alpha = score.point(lambda v: 0 if v <= lo else (255 if v >= hi else int((v - lo) * 255 / span)))
+    # убрать одиночные точки (зерно бумаги, пыль): остаётся то, у чего есть плотные соседи
+    core = alpha.point(lambda v: 255 if v > 110 else 0).filter(ImageFilter.MedianFilter(3))
+    near = core.filter(ImageFilter.MaxFilter(5)).filter(ImageFilter.GaussianBlur(1.2))
+    alpha = ImageChops.multiply(alpha, near.point(lambda v: min(255, v * 2)))
+
+    ink_rgb = INK_COLORS.get(ink)
+    if ink_rgb is not None:
+        out = Image.new("RGBA", (W, H), ink_rgb + (255,))
+    else:                                                                    # свой цвет чернил, чуть плотнее
+        out = Image.merge("RGB", (fr.point(lambda v: int(v * 0.82)), fg.point(lambda v: int(v * 0.82)),
+                                  fb.point(lambda v: int(v * 0.9)))).convert("RGBA")
+    out.putalpha(alpha)
+    box = alpha.point(lambda v: 255 if v > 40 else 0).getbbox()
+    if box:
+        m = max(4, min(W, H) // 60)
+        out = out.crop((max(0, box[0] - m), max(0, box[1] - m), min(W, box[2] + m), min(H, box[3] + m)))
+    return out, False
 
 
 # ---------------------------------------------------------------- элементы
@@ -10816,6 +10894,21 @@ class ToolsDialog(QDialog):
 
 
 
+class ConvertThread(QThread):
+    """PDF → Word в фоне, чтобы окно не замирало."""
+    done = Signal(str, str)              # (чем получилось, ошибка)
+
+    def __init__(self, src, out, method, parent=None):
+        super().__init__(parent)
+        self.src, self.out, self.method = src, out, method
+
+    def run(self):
+        try:
+            self.done.emit(AI.pdf_to_docx(self.src, self.out, self.method), "")
+        except Exception as e:
+            self.done.emit("", str(e))
+
+
 class TabScrollWatch(QObject):
     """Следит за полосой вкладок и показывает свои стрелки, когда вкладки не помещаются."""
 
@@ -11181,6 +11274,9 @@ class MainWindow(QMainWindow):
         self.act_word = act("Редактор Word…", self.act_word_fill_run, "Ctrl+Shift+W",
                             "Заполнить шаблон Word: ФИО, паспорт, даты, суммы прописью — оформление не меняется")
         m.addAction(self.act_word)
+        self.act_pdf2word = act("PDF в Word…", self.pdf_to_word, "Ctrl+Shift+D",
+                                "Превратить PDF в документ Word: текст, шрифты, таблицы и разметка сохраняются")
+        m.addAction(self.act_pdf2word)
         self.act_act = act("Акт осмотра…", self.open_act_page, "Ctrl+Shift+K",
                            "Акт осмотра автомобиля: оригинал на немецком и перевод, замеры ЛКП почерком мастера")
         m.addAction(self.act_act)
@@ -11279,7 +11375,8 @@ class MainWindow(QMainWindow):
             [(self.act_rot_l, "rot_left"), (self.act_rot_r, "rot_right"), (self.act_crop, "crop"),
              (self.act_frame, "frame"), (self.act_split, "split")],
             [(self.act_scanlook, "scanlook"), (self.act_sheet, "sheet"), (self.act_ai_ocr, "ocr")],
-            [(self.act_word, "word_edit"), (self.act_act, "act"), (self.act_tools, "tools")],
+            [(self.act_word, "word_edit"), (self.act_pdf2word, "word"), (self.act_act, "act"),
+             (self.act_tools, "tools")],
             [(self.act_zoom_in, "zoom_in"), (self.act_zoom_out, "zoom_out"), (self.act_fit, "fit")],
         ]
         for n, group in enumerate(groups):
@@ -11889,6 +11986,82 @@ class MainWindow(QMainWindow):
         self.center_stack.setCurrentWidget(pg)
 
     # ---------------------------------------------------------- акт осмотра
+    # ---------------------------------------------------------- PDF → Word
+    def pdf_to_word(self):
+        """Превратить PDF в документ Word с тем же текстом, шрифтами, таблицами и разметкой."""
+        src = ""
+        if self.doc is not None and str(self.doc_path or "").lower().endswith(".pdf") and os.path.isfile(str(self.doc_path)):
+            src = str(self.doc_path)
+        else:
+            item = self.file_list.currentItem() if hasattr(self, "file_list") else None
+            data = item.data(Qt.UserRole) if item is not None else None
+            if data and data[0] == "file" and str(data[1]).lower().endswith(".pdf"):
+                src = data[1]
+        if not src:
+            src, _ = QFileDialog.getOpenFileName(self, "Какой PDF превратить в Word", self.current_dir(), "PDF (*.pdf)")
+            if not src:
+                return
+        try:
+            with_text, total = AI.pdf_text_pages(src)
+        except Exception as e:
+            QMessageBox.critical(self, "PDF в Word", f"Не удалось прочитать PDF:\n{e}")
+            return
+        if with_text == 0:
+            QMessageBox.information(self, "PDF в Word",
+                                    "В этом PDF нет текста — это скан (картинки страниц).\n\n"
+                                    "В Word из него получатся только картинки. Сначала распознайте текст: "
+                                    "«ИИ → Распознать текст», затем сохраните PDF и повторите.")
+            return
+        st = settings_load()
+        box = QMessageBox(self)
+        box.setWindowTitle("PDF в Word")
+        box.setIcon(QMessageBox.Question)
+        note = "" if with_text == total else f"\n\nВнимание: текст есть на {with_text} из {total} страниц — остальные лягут картинками."
+        box.setText(f"Превратить в документ Word:\n{os.path.basename(src)}{note}")
+        box.setInformativeText("Через Microsoft Word получается точнее всего (нужен установленный Word).\n"
+                               "Встроенный способ работает без Word; сложные таблицы может упростить.")
+        b_auto = box.addButton("Через Word", QMessageBox.AcceptRole)
+        b_own = box.addButton("Встроенный", QMessageBox.ActionRole)
+        box.addButton("Отмена", QMessageBox.RejectRole)
+        box.setDefaultButton(b_own if st.get("pdf2word_method") == "builtin" else b_auto)
+        box.exec()
+        if box.clickedButton() not in (b_auto, b_own):
+            return
+        method = "builtin" if box.clickedButton() is b_own else "auto"
+        st["pdf2word_method"] = method
+        settings_save(st)
+        base = os.path.splitext(src)[0]
+        out = base + ".docx"
+        if os.path.exists(out):
+            out = base + " (из PDF).docx"
+        out, _ = QFileDialog.getSaveFileName(self, "Сохранить документ Word", out, "Документ Word (*.docx)")
+        if not out:
+            return
+        if not out.lower().endswith(".docx"):
+            out += ".docx"
+        prog = QProgressDialog("Превращаю PDF в Word…", None, 0, 0, self)
+        prog.setWindowTitle("PDF в Word")
+        prog.setWindowModality(Qt.WindowModal)
+        prog.setMinimumDuration(0)
+        prog.setCancelButton(None)
+        prog.show()
+        self._conv_thread = ConvertThread(src, out, method, self)
+
+        def finished(how, err):
+            prog.close()
+            if err:
+                QMessageBox.critical(self, "PDF в Word", f"Не получилось:\n{err}")
+                return
+            self.refresh_files()
+            way = "через Microsoft Word" if how == "word" else "встроенным способом"
+            self.show_toast(f"✔  Готово ({way}): {os.path.basename(out)}", 5000)
+            if QMessageBox.question(self, "PDF в Word", f"Документ сохранён:\n{os.path.basename(out)}\n\n"
+                                    "Открыть его в Microsoft Word?") == QMessageBox.Yes:
+                QDesktopServices.openUrl(QUrl.fromLocalFile(out))
+
+        self._conv_thread.done.connect(finished)
+        self._conv_thread.start()
+
     def open_tools(self):
         """Окно инструментов: регистр, валюты, сумма прописью, л.с.⇄кВт. Одно на программу."""
         dlg = getattr(self, "_tools_dialog", None)
@@ -14131,6 +14304,11 @@ class MainWindow(QMainWindow):
         self.chk_bg.setChecked(True)
         self.chk_bg.stateChanged.connect(self.reprocess_stamp)
         right_col.addWidget(self.chk_bg)
+        self.chk_photo = QCheckBox("подпись с фото")
+        self.chk_photo.setToolTip("Факсимиле из фотографии: убирает бумагу, тени и неровный свет, оставляет только "
+                                  "чернила.\nВключается само, если загружен снимок, а не готовая картинка.")
+        self.chk_photo.stateChanged.connect(self.reprocess_stamp)
+        right_col.addWidget(self.chk_photo)
         right_col.addStretch()
 
         top_row = QHBoxLayout()
@@ -14651,6 +14829,9 @@ class MainWindow(QMainWindow):
         if not from_library:
             self.current_lib_file = None
             self._update_geom_title()
+        self.chk_photo.blockSignals(True)                 # снимок подписи — сразу чистим как фотографию
+        self.chk_photo.setChecked(not from_library and looks_like_photo(im))
+        self.chk_photo.blockSignals(False)
         self.reprocess_stamp()
         return True
 
@@ -14666,17 +14847,22 @@ class MainWindow(QMainWindow):
         if getattr(self, "stamp_raw", None) is None:
             return
         self.lbl_thr.setText(f"Очистка фона: {self.slider_thr.value()}")
+        photo = self.chk_photo.isChecked() and self.chk_bg.isChecked()
         try:
-            im, had_alpha = prepare_stamp(
-                self.stamp_raw,
-                remove_bg=self.chk_bg.isChecked(),
-                threshold=self.slider_thr.value(),
-                ink=self.combo_ink.currentData())
+            if photo:
+                im, had_alpha = prepare_signature(self.stamp_raw, threshold=self.slider_thr.value(),
+                                                  ink=self.combo_ink.currentData())
+            else:
+                im, had_alpha = prepare_stamp(
+                    self.stamp_raw,
+                    remove_bg=self.chk_bg.isChecked(),
+                    threshold=self.slider_thr.value(),
+                    ink=self.combo_ink.currentData())
         except Exception:
             im, had_alpha = self.stamp_raw, False
         self.stamp_pil = im
-        self.stamp_status = ("✓ печать чистая" if had_alpha
-                             else "подложка убрана автоматически")
+        self.stamp_status = ("фон фотографии убран" if photo else
+                             ("✓ печать чистая" if had_alpha else "подложка убрана автоматически"))
         self.chk_bg.setEnabled(True)
         self.slider_thr.setEnabled(not had_alpha)
         self.stamp_pixmap = self._pixmap_from_pil(im)
@@ -15518,7 +15704,7 @@ def main():
             except Exception:
                 guide_n = 0
             f.write(f"OK {APP_VERSION} {EDITION} scanner={scanner_backend()} guide={guide_n} "
-                    f"ai={len(AI.PROVIDERS)} keys={len(AI.builtin_keys())} ocr={AI.selftest_ocr()} word={SW.selftest()} cloud={CLOUD.selftest()} act={'ok' if ACT.selftest() else 'fail'} license={'ok' if LIC.selftest() else 'fail'} tools={'ok' if TOOLS.selftest() else 'fail'}")
+                    f"ai={len(AI.PROVIDERS)} keys={len(AI.builtin_keys())} ocr={AI.selftest_ocr()} word={SW.selftest()} cloud={CLOUD.selftest()} act={'ok' if ACT.selftest() else 'fail'} license={'ok' if LIC.selftest() else 'fail'} tools={'ok' if TOOLS.selftest() else 'fail'} pdf2docx={AI.selftest_pdf2docx()}")
         sys.exit(0)
     if not license_gate():                       # без действующего ключа программа не открывается
         sys.exit(0)

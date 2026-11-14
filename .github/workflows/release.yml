@@ -69,6 +69,7 @@ jobs:
             "--hidden-import", "win32com.client", "--hidden-import", "pythoncom", "--hidden-import", "pywintypes",
             "--collect-data", "docx", "--hidden-import", "lxml._elementpath",
             "--collect-submodules", "pymongo", "--collect-submodules", "dns", "--hidden-import", "win32crypt",
+            "--collect-submodules", "pdf2docx",
             "--exclude-module", "torch", "--exclude-module", "torchvision", "--exclude-module", "tensorflow",
             "--exclude-module", "matplotlib", "--exclude-module", "scipy", "--exclude-module", "pandas",
             "--exclude-module", "IPython", "--exclude-module", "notebook", "--exclude-module", "PyQt5",
@@ -93,7 +94,7 @@ jobs:
             $txt = Get-Content $out -Raw
             "$exe -> $txt"
             if ($txt -notmatch "^OK ${{ steps.ver.outputs.ver }} ") { Write-Error "$exe selftest wrong: $txt"; exit 1 }
-            if ($txt -notmatch "guide=16") { Write-Error "guide is not bundled in ${exe} - $txt"; exit 1 }
+            if ($txt -notmatch "guide=17") { Write-Error "guide is not bundled in ${exe} - $txt"; exit 1 }
             if ($txt -notmatch " ai=15 ") { Write-Error "AI module is broken in ${exe} - $txt"; exit 1 }
             if ($txt -match "ocr=(fail|bad)") { Write-Error "Windows OCR is broken in ${exe} - $txt"; exit 1 }
             if ($txt -notmatch "word=ok") { Write-Error "Word filling is broken in ${exe} - $txt"; exit 1 }
@@ -101,6 +102,7 @@ jobs:
             if ($txt -notmatch "act=ok") { Write-Error "Inspection act module is broken in ${exe} - $txt"; exit 1 }
             if ($txt -notmatch "license=ok") { Write-Error "License module is broken in ${exe} - $txt"; exit 1 }
             if ($txt -notmatch "tools=ok") { Write-Error "Tools module is broken in ${exe} - $txt"; exit 1 }
+            if ($txt -notmatch "pdf2docx=ok") { Write-Error "PDF to Word is broken in ${exe} - $txt"; exit 1 }
           }
 
       - name: Inno Setup - both installers

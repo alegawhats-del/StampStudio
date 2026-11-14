@@ -754,6 +754,140 @@ def _word_com_pdf(path):
             pass
 
 
+def _word_com_docx(pdf_path, out_path):
+    """PDF → .docx через установленный Microsoft Word (его собственное преобразование PDF)."""
+    import pythoncom
+    import win32com.client
+    pythoncom.CoInitialize()
+    word = None
+    keys = []
+    try:
+        try:                                    # Word спрашивает «преобразовать PDF?» — на время отключаем вопрос
+            import winreg
+            for ver in ("16.0", "15.0"):
+                try:
+                    k = winreg.OpenKey(winreg.HKEY_CURRENT_USER, rf"Software\Microsoft\Office\{ver}\Word\Options",
+                                       0, winreg.KEY_READ | winreg.KEY_WRITE)
+                except OSError:
+                    continue
+                try:
+                    old = winreg.QueryValueEx(k, "DisableConvertPdfWarning")[0]
+                except OSError:
+                    old = None
+                winreg.SetValueEx(k, "DisableConvertPdfWarning", 0, winreg.REG_DWORD, 1)
+                keys.append((k, old))
+        except Exception:
+            pass
+        word = win32com.client.DispatchEx("Word.Application")
+        word.Visible = False
+        word.DisplayAlerts = 0
+        d = word.Documents.Open(os.path.abspath(pdf_path), ConfirmConversions=False, ReadOnly=True,
+                                AddToRecentFiles=False)
+        try:
+            d.SaveAs2(os.path.abspath(out_path), FileFormat=12)        # 12 = .docx
+        finally:
+            d.Close(False)
+    finally:
+        try:
+            if word is not None:
+                word.Quit()
+        except Exception:
+            pass
+        for k, old in keys:
+            try:
+                import winreg
+                if old is None:
+                    winreg.DeleteValue(k, "DisableConvertPdfWarning")
+                else:
+                    winreg.SetValueEx(k, "DisableConvertPdfWarning", 0, winreg.REG_DWORD, int(old))
+                winreg.CloseKey(k)
+            except Exception:
+                pass
+        try:
+            pythoncom.CoUninitialize()
+        except Exception:
+            pass
+
+
+def _builtin_docx(pdf_path, out_path):
+    """PDF → .docx встроенным преобразователем (pdf2docx): текст, шрифты, таблицы, картинки."""
+    import logging
+    logging.disable(logging.WARNING)             # библиотека много пишет в журнал — это не ошибки
+    try:
+        from pdf2docx import Converter
+        cv = Converter(pdf_path)
+        try:
+            cv.convert(out_path)
+        finally:
+            cv.close()
+    finally:
+        logging.disable(logging.NOTSET)
+
+
+def pdf_text_pages(pdf_path):
+    """Сколько страниц с настоящим текстом: (с текстом, всего). Скан без текста в Word не превратить."""
+    import fitz
+    d = fitz.open(pdf_path)
+    try:
+        n = sum(1 for pg in d if len(pg.get_text().strip()) >= 20)
+        return n, d.page_count
+    finally:
+        d.close()
+
+
+def pdf_to_docx(pdf_path, out_path, method="auto"):
+    """PDF → Word. method: auto (Word, если есть, иначе встроенный), word, builtin.
+    Возвращает "word" или "builtin" — чем получилось. Исходный PDF не меняется."""
+    err = ""
+    if method in ("auto", "word") and sys.platform == "win32":
+        try:
+            _word_com_docx(pdf_path, out_path)
+            if os.path.exists(out_path) and os.path.getsize(out_path) > 2000:
+                return "word"
+        except Exception as e:
+            err = str(e)
+        if method == "word":
+            raise RuntimeError("Microsoft Word не смог преобразовать этот PDF"
+                               + (f": {err[:200]}" if err else ". Попробуйте встроенный способ."))
+    elif method == "word":
+        raise RuntimeError("Microsoft Word на этом компьютере не найден — выберите встроенный способ.")
+    _builtin_docx(pdf_path, out_path)
+    if not os.path.exists(out_path) or os.path.getsize(out_path) < 1000:
+        raise RuntimeError("Не получилось собрать документ Word из этого PDF.")
+    return "builtin"
+
+
+def selftest_pdf2docx():
+    """Встроенное преобразование PDF → Word работает в этой сборке: 'ok' или причина."""
+    import tempfile
+    try:
+        import fitz
+        import docx
+        tmp = tempfile.mkdtemp(prefix="stampstudio_p2d_")
+        src, out = os.path.join(tmp, "a.pdf"), os.path.join(tmp, "a.docx")
+        d = fitz.open()
+        pg = d.new_page()
+        pg.insert_text((72, 100), "Dogovor 4245 Proverka", fontsize=14)
+        d.save(src)
+        d.close()
+        assert pdf_text_pages(src) == (1, 1)
+        _builtin_docx(src, out)
+        text = " ".join(p.text for p in docx.Document(out).paragraphs)
+        ok = "4245" in text
+        for f in (src, out):
+            try:
+                os.remove(f)
+            except OSError:
+                pass
+        try:
+            os.rmdir(tmp)
+        except OSError:
+            pass
+        return "ok" if ok else "bad:text"
+    except Exception as e:
+        return "fail:" + type(e).__name__ + ":" + str(e)[:60].replace(" ", "_")
+
+
 def office_to_pdf(path):
     """Документ Word → PDF в памяти. Возвращает (bytes, "word" | "simple"). Исходный файл не меняется."""
     err = ""
