@@ -24,7 +24,7 @@ from PySide6.QtCore import Qt, QRect, QRectF, QSize, QThread, Signal, QEvent, QO
 from PySide6.QtCore import QTimer, QPropertyAnimation
 from PySide6.QtWidgets import (QGraphicsOpacityEffect, QGraphicsObject,
                                QGraphicsDropShadowEffect, QTextBrowser, QGridLayout)
-from PySide6.QtGui import QRegion
+from PySide6.QtGui import QRegion, QPolygonF
 from PySide6.QtGui import (QAction, QIcon, QImage, QPixmap, QTransform, QPainter,
                            QKeySequence, QPen, QColor)
 from PySide6.QtWidgets import (
@@ -52,6 +52,7 @@ import stamp_ai as AI
 import stamp_word as SW
 import stamp_cloud as CLOUD
 import stamp_act as ACT
+import stamp_license as LIC
 
 PREVIEW_DPI = 150          # DPI отрисовки страницы в редакторе
 EXPORT_STAMP_DPI = 300     # DPI растеризации печати при экспорте
@@ -528,7 +529,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.10.4"
+APP_VERSION = "6.11.0"
 EDITION = "canon"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -10268,6 +10269,218 @@ class ActPage(QDialog):
                                          "чтобы сохранить в PDF", 15000)
 
 
+# ======================================================================
+#  Лицензия (KeyAuth): окно активации и проверка при запуске
+# ======================================================================
+
+def license_cached():
+    """(ключ, годится ли без сервера, срок) из настроек."""
+    return LIC.cached(settings_load().get("license") or {}, CLOUD.unprotect)
+
+
+def license_store(key, expiry):
+    s = settings_load()
+    s["license"] = LIC.remember(key, expiry, CLOUD.protect)
+    settings_save(s)
+
+
+def license_forget():
+    s = settings_load()
+    if s.pop("license", None) is not None:
+        settings_save(s)
+
+
+class LicenseThread(QThread):
+    done = Signal(dict)
+
+    def __init__(self, key, parent=None):
+        super().__init__(parent)
+        self.key = key
+
+    def run(self):
+        try:
+            res = LIC.check(self.key)
+        except Exception as e:
+            res = {"ok": False, "net": True, "message": f"Не удалось проверить ключ: {e}"}
+        res["key"] = self.key
+        self.done.emit(res)
+
+
+def telegram_icon(size=18) -> QIcon:
+    """Бумажный самолётик, как у Telegram."""
+    pm = QPixmap(size * 2, size * 2)
+    pm.fill(Qt.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.Antialiasing, True)
+    s = size * 2 / 16.0
+    p.setPen(Qt.NoPen)
+    p.setBrush(QColor("#ffffff"))
+    p.drawPolygon(QPolygonF([QPointF(1.6 * s, 7.6 * s), QPointF(14.4 * s, 2.4 * s), QPointF(12.2 * s, 13.4 * s),
+                             QPointF(8.3 * s, 10.6 * s), QPointF(6.4 * s, 12.6 * s), QPointF(6.0 * s, 9.3 * s)]))
+    p.setBrush(QColor("#229ED9"))
+    p.drawPolygon(QPolygonF([QPointF(6.0 * s, 9.3 * s), QPointF(12.0 * s, 4.6 * s), QPointF(7.4 * s, 10.0 * s)]))
+    p.end()
+    pm.setDevicePixelRatio(2.0)
+    return QIcon(pm)
+
+
+LICENSE_QSS = """
+QDialog#license { background: #fbf9f4; }
+QDialog#license QLabel { color: #2b2a26; font-size: 13px; }
+QDialog#license QLabel#lic_title { font-size: 20px; font-weight: 700; color: #1f1e1b; }
+QDialog#license QLabel#lic_sub { color: #6f6a5c; }
+QDialog#license QLabel#lic_err { color: #b3261e; }
+QDialog#license QLabel#lic_ok { color: #1b7a3d; }
+QDialog#license QLineEdit { background: #ffffff; border: 1px solid #d9d2bf; border-radius: 8px; padding: 9px 12px;
+    font-size: 14px; color: #1f1e1b; selection-background-color: #f1d79a; }
+QDialog#license QLineEdit:focus { border-color: #d69a33; }
+QDialog#license QPushButton { border-radius: 8px; padding: 9px 16px; font-size: 13px; font-weight: 600;
+    background: #ffffff; border: 1px solid #d9d2bf; color: #2b2a26; }
+QDialog#license QPushButton:hover { border-color: #d69a33; }
+QDialog#license QPushButton#lic_go { background: #d69a33; border-color: #d69a33; color: #ffffff; }
+QDialog#license QPushButton#lic_go:hover { background: #c58a26; }
+QDialog#license QPushButton#lic_go:disabled { background: #e7d3a8; border-color: #e7d3a8; }
+QDialog#license QPushButton#lic_tg { background: #229ED9; border-color: #229ED9; color: #ffffff; }
+QDialog#license QPushButton#lic_tg:hover { background: #1b8fc7; border-color: #1b8fc7; }
+QDialog#license QFrame#lic_line { background: #e6e1d6; border: none; }
+"""
+
+
+class LicenseDialog(QDialog):
+    """Активация программы ключом. info=True — окно «Лицензия» из меню (показать срок, сменить ключ)."""
+
+    def __init__(self, parent=None, message="", info=False):
+        super().__init__(parent)
+        self.setObjectName("license")
+        self.setWindowTitle(f"{APP_TITLE} — лицензия")
+        self.setStyleSheet(LICENSE_QSS)
+        self.setFixedWidth(470)
+        self.result_data = None
+        self._th = None
+        key, _fresh, expiry = license_cached()
+        root = QVBoxLayout(self)
+        root.setContentsMargins(26, 24, 26, 22)
+        root.setSpacing(12)
+        t = QLabel("Лицензия" if info else "Активация программы")
+        t.setObjectName("lic_title")
+        root.addWidget(t)
+        if info and key:
+            sub = QLabel(f"Программа активирована.\nКлюч: {LIC.mask(key)}   ·   действует {LIC.expiry_text(expiry)}")
+        else:
+            sub = QLabel("Введите лицензионный ключ — программа проверит его и запомнит на этом компьютере.")
+        sub.setObjectName("lic_sub")
+        sub.setWordWrap(True)
+        root.addWidget(sub)
+        self.ed_key = QLineEdit()
+        self.ed_key.setPlaceholderText("новый ключ" if info and key else "лицензионный ключ")
+        self.ed_key.returnPressed.connect(self.activate)
+        root.addWidget(self.ed_key)
+        self.lbl_msg = QLabel(message)
+        self.lbl_msg.setObjectName("lic_err")
+        self.lbl_msg.setWordWrap(True)
+        self.lbl_msg.setVisible(bool(message))
+        root.addWidget(self.lbl_msg)
+        row = QHBoxLayout()
+        row.setSpacing(10)
+        self.btn_go = QPushButton("Сменить ключ" if info and key else "Активировать")
+        self.btn_go.setObjectName("lic_go")
+        self.btn_go.setCursor(Qt.PointingHandCursor)
+        self.btn_go.clicked.connect(self.activate)
+        row.addWidget(self.btn_go, 1)
+        self.btn_exit = QPushButton("Закрыть" if info else "Выход")
+        self.btn_exit.clicked.connect(self.reject)
+        row.addWidget(self.btn_exit)
+        root.addLayout(row)
+        line = QFrame()
+        line.setObjectName("lic_line")
+        line.setFrameShape(QFrame.NoFrame)
+        line.setFixedHeight(1)
+        root.addWidget(line)
+        buy = QLabel(f"Для приобретения ключа обратитесь в Telegram "
+                     f"<a href='{LIC.TELEGRAM}' style='color:#229ED9; text-decoration:none;'><b>{LIC.TELEGRAM_NAME}</b></a>")
+        buy.setTextFormat(Qt.RichText)
+        buy.setOpenExternalLinks(True)
+        buy.setWordWrap(True)
+        root.addWidget(buy)
+        self.btn_tg = QPushButton("  Написать в Telegram")
+        self.btn_tg.setObjectName("lic_tg")
+        self.btn_tg.setIcon(telegram_icon(18))
+        self.btn_tg.setIconSize(QSize(18, 18))
+        self.btn_tg.setCursor(Qt.PointingHandCursor)
+        self.btn_tg.setToolTip(LIC.TELEGRAM)
+        self.btn_tg.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(LIC.TELEGRAM)))
+        root.addWidget(self.btn_tg)
+
+    def _say(self, text, ok=False):
+        self.lbl_msg.setObjectName("lic_ok" if ok else "lic_err")
+        self.lbl_msg.setStyleSheet("")            # перечитать стиль по новому имени
+        self.lbl_msg.style().unpolish(self.lbl_msg)
+        self.lbl_msg.style().polish(self.lbl_msg)
+        self.lbl_msg.setText(text)
+        self.lbl_msg.setVisible(bool(text))
+        self.adjustSize()
+
+    def activate(self):
+        key = self.ed_key.text().strip()
+        if not key:
+            self._say("Введите ключ.")
+            return
+        if self._th is not None and self._th.isRunning():
+            return
+        self.btn_go.setEnabled(False)
+        self.ed_key.setEnabled(False)
+        self._say("Проверяю ключ…", ok=True)
+        self._th = LicenseThread(key, self)
+        self._th.done.connect(self._done)
+        self._th.start()
+
+    def _done(self, res):
+        self.btn_go.setEnabled(True)
+        self.ed_key.setEnabled(True)
+        if res.get("ok"):
+            license_store(res["key"], res.get("expiry"))
+            self.result_data = res
+            self.accept()
+            return
+        self._say(res.get("message") or "Ключ не принят.")
+        if res.get("update"):
+            QDesktopServices.openUrl(QUrl(res["update"]))
+        self.ed_key.setFocus()
+        self.ed_key.selectAll()
+
+    def reject(self):
+        if self._th is not None and self._th.isRunning():
+            self._th.wait(15000)
+        super().reject()
+
+
+def license_gate() -> bool:
+    """Перед запуском: пустить, если лицензия в порядке, иначе — окно активации. False — выйти.
+
+    Ключ, проверенный не больше трёх дней назад, пускает сразу (и без интернета);
+    сервер при этом спрашивается уже в работающей программе — см. MainWindow.license_recheck."""
+    key, fresh, _expiry = license_cached()
+    if key and fresh:
+        return True
+    message = ""
+    if key:                                        # ключ есть, но давно не проверялся — спросить сервер сейчас
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            res = LIC.check(key)
+        finally:
+            QApplication.restoreOverrideCursor()
+        if res.get("ok"):
+            license_store(key, res.get("expiry"))
+            return True
+        message = res.get("message", "")
+        if res.get("net"):
+            message = "Ключ давно не проверялся, а сервер лицензий недоступен. Подключите интернет и нажмите «Активировать»."
+    dlg = LicenseDialog(None, message)
+    if key:
+        dlg.ed_key.setText(key)
+    return dlg.exec() == QDialog.Accepted
+
+
 class TabScrollWatch(QObject):
     """Следит за полосой вкладок и показывает свои стрелки, когда вкладки не помещаются."""
 
@@ -10704,6 +10917,8 @@ class MainWindow(QMainWindow):
                         "Проверить, не вышла ли новая версия"))
         m.addAction(act("Версии и откат…", self.show_versions, None,
                         "Вернуться к прежней версии, если новая не подошла"))
+        m.addAction(act("Лицензия…", self.show_license, None,
+                        "Срок действия ключа, смена ключа, связь в Telegram"))
         m.addSeparator()
         m.addAction(act("О программе", self.show_about))
         self._build_toolstrip()
@@ -11436,6 +11651,44 @@ class MainWindow(QMainWindow):
             notes.append("У мастера нет подписи и печати в профиле — поставьте их вручную.")
         notes.append("Дальше сохраните как PDF или «Как скан».")
         return " ".join(notes)
+
+    # ---------------------------------------------------------- лицензия
+    def license_recheck(self):
+        """Тихая проверка ключа на сервере уже в работающей программе (раз за запуск и раз в 6 часов)."""
+        key, _fresh, _expiry = license_cached()
+        if not key:
+            return
+        th = getattr(self, "_lic_thread", None)
+        if th is not None and th.isRunning():
+            return
+        self._lic_thread = LicenseThread(key, self)
+        self._lic_thread.done.connect(self._license_checked)
+        self._lic_thread.start()
+
+    def _license_checked(self, res):
+        if res.get("ok"):
+            license_store(res["key"], res.get("expiry"))
+            return
+        if res.get("net"):
+            return                                  # нет связи — это не отказ; запас в три дня считает license_cached
+        license_forget()                            # сервер ключ не принял: срок вышел, ключ отозван или перенесён
+        dlg = LicenseDialog(self, res.get("message", ""))
+        if dlg.exec() != QDialog.Accepted:
+            self._license_closed = True
+            QApplication.instance().quit()
+
+    def show_license(self):
+        dlg = LicenseDialog(self, info=True)
+        if dlg.exec() == QDialog.Accepted:
+            self.show_toast("✔  Ключ принят — лицензия действует " + LIC.expiry_text((dlg.result_data or {}).get("expiry")))
+
+    def license_watch(self):
+        """Запускается из main(): спросить сервер вскоре после старта и потом раз в 6 часов."""
+        QTimer.singleShot(5000, self.license_recheck)
+        self._lic_timer = QTimer(self)
+        self._lic_timer.setInterval(6 * 3600 * 1000)
+        self._lic_timer.timeout.connect(self.license_recheck)
+        self._lic_timer.start()
 
     def ai_mode(self, on=True):
         """ИИ-помощник занимает середину главного окна вместо страницы; список файлов слева остаётся."""
@@ -14915,11 +15168,14 @@ def main():
             except Exception:
                 guide_n = 0
             f.write(f"OK {APP_VERSION} {EDITION} scanner={scanner_backend()} guide={guide_n} "
-                    f"ai={len(AI.PROVIDERS)} keys={len(AI.builtin_keys())} ocr={AI.selftest_ocr()} word={SW.selftest()} cloud={CLOUD.selftest()} act={'ok' if ACT.selftest() else 'fail'}")
+                    f"ai={len(AI.PROVIDERS)} keys={len(AI.builtin_keys())} ocr={AI.selftest_ocr()} word={SW.selftest()} cloud={CLOUD.selftest()} act={'ok' if ACT.selftest() else 'fail'} license={'ok' if LIC.selftest() else 'fail'}")
+        sys.exit(0)
+    if not license_gate():                       # без действующего ключа программа не открывается
         sys.exit(0)
     win = MainWindow()
     win.show()
     win.place_mascot()
+    win.license_watch()
     sys.exit(app.exec())
 
 
