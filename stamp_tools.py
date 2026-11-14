@@ -2,8 +2,8 @@
 """Инструменты для заполнения документов: регистр текста, конвертеры валют,
 сумма прописью в рублях, перевод л.с. ⇄ кВт. Без Qt.
 
-Курсы валют берутся официальные (Нацбанк РБ, api.nbrb.by) — именно они стоят в
-таможенных документах; курс можно задать и вручную, и на нужную дату.
+Курсы валют: как показывает Google (по умолчанию) или официальные Нацбанка РБ на дату;
+любой курс можно вписать вручную.
 """
 import datetime
 import json
@@ -96,10 +96,41 @@ def _nbrb(cur, on_date=None):
     return rate, str(d.get("Date", ""))[:10]
 
 
-def fetch_rates(on_date=None):
-    """Официальные курсы на дату (или на сегодня). Возвращает:
-        {eur_byn, rub_byn, rub_eur, date, source} — всё в BYN за 1 единицу валюты.
+GOOGLE = "https://www.google.com/finance/quote/{a}-{b}"
+_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+       "Chrome/126.0 Safari/537.36")
+
+
+def google_price(html, a, b):
+    """Курс пары из страницы Google Финансов — то самое число, что Google показывает в поиске."""
+    m = re.search(r'"%s / %s",\d+,null,\[([0-9]+(?:\.[0-9]+)?(?:[eE][-+]?\d+)?)' % (a, b), html)
+    if not m:
+        m = re.search(r'data-source="%s" data-target="%s" data-last-price="([0-9.]+)"' % (a, b), html)
+    if not m:
+        raise ValueError("на странице Google нет курса %s/%s" % (a, b))
+    v = float(m.group(1))
+    if v <= 0:
+        raise ValueError("нулевой курс")
+    return v
+
+
+def _google(a, b):
+    req = urllib.request.Request(GOOGLE.format(a=a, b=b), headers={"User-Agent": _UA, "Accept-Language": "en"})
+    with urllib.request.urlopen(req, timeout=15) as r:
+        return google_price(r.read().decode("utf-8", "replace"), a, b)
+
+
+def fetch_rates(on_date=None, source="google"):
+    """Курсы валют. source: google — как показывает Google сейчас; nbrb — официальный Нацбанка РБ на дату.
+    Возвращает {eur_byn, rub_byn, rub_eur, date, source}: сколько второй валюты за 1 единицу первой.
     Бросает RateError, если получить не удалось."""
+    if source == "google":
+        try:
+            eur_byn, rub_byn, rub_eur = _google("EUR", "BYN"), _google("RUB", "BYN"), _google("RUB", "EUR")
+        except Exception as e:
+            raise RateError("Google: " + str(e))
+        return {"eur_byn": eur_byn, "rub_byn": rub_byn, "rub_eur": rub_eur,
+                "date": datetime.date.today().strftime("%d.%m.%Y"), "source": "Google"}
     try:
         eur_byn, d1 = _nbrb("EUR", on_date)
         rub_byn, d2 = _nbrb("RUB", on_date)
@@ -107,8 +138,13 @@ def fetch_rates(on_date=None):
         raise RateError(str(e))
     if eur_byn <= 0 or rub_byn <= 0:
         raise RateError("нулевой курс")
+    d = d1 or d2
+    try:
+        d = datetime.date.fromisoformat(d).strftime("%d.%m.%Y")
+    except Exception:
+        pass
     return {"eur_byn": eur_byn, "rub_byn": rub_byn, "rub_eur": rub_byn / eur_byn,
-            "date": d1 or d2, "source": "Нацбанк РБ"}
+            "date": d, "source": "Нацбанк РБ"}
 
 
 class RateError(Exception):
@@ -174,6 +210,14 @@ def selftest():
     assert convert("14587.54", "3.392") == "49 480,94"
     assert convert("100", "3,40") == "340,00"
     assert percent("21090.50", "49482.39") == "42,62"
+    page = '[3.3115,0.035,0.0107,4,4,5]]]]],null,0,3.3419,"EUR / BYN",86400,3,["EUR","BYN"]] x "EUR / BYN",3,null,[3.3115,-0.03,-0.9,4,4,2],null,3.34'
+    assert google_price(page, "EUR", "BYN") == 3.3115
+    assert google_price('"RUB / EUR",3,null,[0.01095211,2.7E-4,0.02', "RUB", "EUR") == 0.01095211
+    try:
+        google_price("пусто", "EUR", "BYN")
+        raise AssertionError("должно было не найтись")
+    except ValueError:
+        pass
     assert percent("1", "0") == ""
     assert _num("14 587,54") == 14587.54 and _num("14587.54") == 14587.54 and _num("x") is None
     assert fmt_plain("14 587,54") == "14587.54" and _fmt(1234567.8) == "1 234 567,80"

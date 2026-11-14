@@ -530,7 +530,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.13.1"
+APP_VERSION = "6.13.2"
 EDITION = "canon"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -9514,6 +9514,9 @@ def act_doc_name(name: str) -> bool:
     return bool(re.match(r"^(\(Kreuzberg\)|Перевод инспекции) \d{2}\.\d{2} \S", str(name or "")))
 
 
+ACT_SIGN_W = 30.0                 # ширина подписи мастера на листе по умолчанию, мм
+
+
 def act_masters_load() -> list:
     return [m for m in (settings_load().get("act_masters") or []) if m.get("name")]
 
@@ -9659,8 +9662,8 @@ class ActMasterDialog(QDialog):
     def __init__(self, master=None, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Мастер")
-        self.resize(820, 690)
-        self.setMinimumSize(800, 670)
+        self.resize(820, 750)
+        self.setMinimumSize(800, 730)
         m = dict(master or {})
         root = QVBoxLayout(self)
         root.setSpacing(10)
@@ -9706,9 +9709,36 @@ class ActMasterDialog(QDialog):
         self.pad_sign.set_strokes(m.get("sign"))
         hl.addWidget(self.pad_sign)
         col = QVBoxLayout()
+        col.setSpacing(8)
         b = QPushButton("Стереть подпись")
         b.clicked.connect(self.pad_sign.clear)
         col.addWidget(b)
+        srow = QHBoxLayout()
+        srow.addWidget(QLabel("Ширина подписи:"))
+        self.sp_sign_w = QDoubleSpinBox()
+        self.sp_sign_w.setRange(10.0, 90.0)
+        self.sp_sign_w.setDecimals(0)
+        self.sp_sign_w.setSuffix(" мм")
+        self.sp_sign_w.setValue(float(m.get("sign_w") or ACT_SIGN_W))
+        self.sp_sign_w.setMinimumSize(120, 30)
+        self.sp_sign_w.setToolTip("Такой ширины подпись ляжет на лист акта. Если подвинуть или растянуть её на странице "
+                                  "и сохранить акт — программа запомнит новое место и размер.")
+        srow.addWidget(self.sp_sign_w)
+        srow.addStretch(1)
+        col.addLayout(srow)
+        srow = QHBoxLayout()
+        srow.addWidget(QLabel("Ширина печати:"))
+        self.sp_stamp_w = QDoubleSpinBox()
+        self.sp_stamp_w.setRange(0.0, 80.0)
+        self.sp_stamp_w.setDecimals(0)
+        self.sp_stamp_w.setSuffix(" мм")
+        self.sp_stamp_w.setSpecialValueText("как в «Мои печати»")
+        self.sp_stamp_w.setValue(float(m.get("stamp_w") or 0))
+        self.sp_stamp_w.setMinimumSize(190, 30)
+        srow.addWidget(self.sp_stamp_w)
+        srow.addStretch(1)
+        col.addLayout(srow)
+        self._keep = {k: m[k] for k in ("sign_pos", "stamp_pos") if m.get(k)}
         col.addWidget(QLabel("Печать (из «Мои печати»):"))
         self.cmb_stamp = QComboBox()
         self.cmb_stamp.addItem("— без печати —", "")
@@ -9748,8 +9778,11 @@ class ActMasterDialog(QDialog):
         self.lbl_prev.setPixmap(pm)
 
     def master(self):
-        return {"name": self.ed_name.text().strip(), "glyphs": self.glyphs(), "sign": self.pad_sign.data(),
-                "stamp": self.cmb_stamp.currentData() or ""}
+        out = {"name": self.ed_name.text().strip(), "glyphs": self.glyphs(), "sign": self.pad_sign.data(),
+               "stamp": self.cmb_stamp.currentData() or "", "sign_w": float(self.sp_sign_w.value()),
+               "stamp_w": float(self.sp_stamp_w.value())}
+        out.update(self._keep)                        # запомненное место подписи и печати на листе
+        return out
 
     def _save(self):
         m = self.master()
@@ -10484,13 +10517,25 @@ class ActPage(QDialog):
         s["act_last_master"] = m["name"]
         settings_save(s)
         self.ed_number.setText(str(int(got) + 1))
+        ru_pdf = self.win.act_translation_pdf(ru_path)            # перевод сразу готовым PDF
         self.win.reload_files()
         self.win.open_word(de_path, quiet=True)                  # оригинал → PDF (через Word) и на страницу
         note = self.win.act_finish(d, m)
         self.win.ai_mode(False)
         self.win.show_toast(f"✔  Акт № {got} создан. {note}", 6500)
-        self.win.statusBar().showMessage(f"Перевод сохранён: {os.path.basename(ru_path)} — откройте его в списке файлов, "
-                                         "чтобы сохранить в PDF", 15000)
+        if ru_pdf:
+            QMessageBox.information(self.win, "Акт осмотра",
+                                    f"Акт № {got} готов — два документа:\n\n"
+                                    f"1) Перевод — уже сохранён:\n     {os.path.basename(ru_pdf)}\n\n"
+                                    f"2) Оригинал — открыт на странице. Подпись и печать мастера уже стоят: "
+                                    f"проверьте место и сохраните (PDF или «Как скан»).\n\n"
+                                    f"Файлы Word обоих документов лежат в той же папке.")
+        else:
+            QMessageBox.information(self.win, "Акт осмотра",
+                                    f"Акт № {got}: оригинал открыт на странице, перевод сохранён в Word:\n"
+                                    f"{os.path.basename(ru_path)}\n\n"
+                                    "Готовый PDF перевода сделать не удалось (нужен Microsoft Word). "
+                                    "Откройте перевод в списке файлов и сохраните его в PDF.")
 
 
 # ======================================================================
@@ -10726,13 +10771,13 @@ def _tools_qss(dark: bool) -> str:
 class RatesThread(QThread):
     done = Signal(object, str)          # (rates|None, ошибка)
 
-    def __init__(self, on_date=None, parent=None):
+    def __init__(self, on_date=None, source="google", parent=None):
         super().__init__(parent)
-        self.on_date = on_date
+        self.on_date, self.source = on_date, source
 
     def run(self):
         try:
-            self.done.emit(TOOLS.fetch_rates(self.on_date), "")
+            self.done.emit(TOOLS.fetch_rates(self.on_date, self.source), "")
         except Exception as e:
             self.done.emit(None, str(e))
 
@@ -10780,8 +10825,8 @@ class ToolsDialog(QDialog):
         self.setObjectName("tools")
         self.setWindowTitle(f"{APP_TITLE} — инструменты")
         self.setWindowFlags(Qt.Tool | Qt.WindowCloseButtonHint | Qt.WindowStaysOnTopHint)
-        self.resize(560, 580)
-        self.setMinimumSize(520, 540)
+        self.resize(580, 640)
+        self.setMinimumSize(540, 560)
         self._rates_thread = None
         root = QVBoxLayout(self)
         root.setContentsMargins(14, 12, 14, 10)
@@ -10811,36 +10856,50 @@ class ToolsDialog(QDialog):
         w = QWidget()
         v = QVBoxLayout(w)
         v.setSpacing(8)
-        box = QGroupBox("Курсы (как в п. 6 ТПО)")
+        box = QGroupBox("Курсы")
         g = QGridLayout(box)
         g.setHorizontalSpacing(8)
         g.setVerticalSpacing(6)
-        g.addWidget(QLabel("На дату:"), 0, 0)
+        g.addWidget(QLabel("Откуда:"), 0, 0)
+        self.cmb_src = QComboBox()
+        self.cmb_src.addItem("Google — как в поиске", "google")
+        self.cmb_src.addItem("Нацбанк РБ — официальный, на дату", "nbrb")
+        self.cmb_src.setCurrentIndex(1 if settings_load().get("rates_source") == "nbrb" else 0)
+        self.cmb_src.currentIndexChanged.connect(self._src_changed)
+        g.addWidget(self.cmb_src, 0, 1, 1, 3)
+        self.lbl_date = QLabel("На дату:")
+        g.addWidget(self.lbl_date, 1, 0)
         self.date = QDateEdit()
         self.date.setCalendarPopup(True)
         self.date.setDisplayFormat("dd.MM.yyyy")
         self.date.setDate(QDate.currentDate())
         self.date.setMaximumWidth(130)
-        g.addWidget(self.date, 0, 1)
+        g.addWidget(self.date, 1, 1)
         self.btn_rates = QPushButton("Обновить курс")
-        self.btn_rates.setToolTip("Взять официальный курс Нацбанка РБ на эту дату")
+        self.btn_rates.setToolTip("Взять свежий курс из выбранного источника")
         self.btn_rates.clicked.connect(self.load_rates)
-        g.addWidget(self.btn_rates, 0, 2)
-        self.lbl_rates = QLabel("курс не загружен")
+        g.addWidget(self.btn_rates, 1, 2)
+        self.lbl_rates = QLabel("курс не загружен — нажмите «Обновить курс» или впишите вручную")
         self.lbl_rates.setObjectName("toolhint")
-        g.addWidget(self.lbl_rates, 0, 3)
-        g.addWidget(QLabel("Br за 1 €:"), 1, 0)
-        self.rate_eur = QLineEdit()
-        self.rate_eur.setPlaceholderText("3.4245")
-        self.rate_eur.setMaximumWidth(110)
-        g.addWidget(self.rate_eur, 1, 1)
-        g.addWidget(QLabel("Br за 100 ₽:"), 1, 2)
-        self.rate_rub = QLineEdit()
-        self.rate_rub.setPlaceholderText("3.6060")
-        self.rate_rub.setMaximumWidth(110)
-        g.addWidget(self.rate_rub, 1, 3)
+        self.lbl_rates.setWordWrap(True)
+        self.lbl_rates.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        g.addWidget(self.lbl_rates, 3, 0, 1, 4)
+        rrow = QHBoxLayout()
+        rrow.setSpacing(6)
+        self.rate = {}
+        for key, cap, ph in (("eur_byn", "1 € =", "Br"), ("rub_byn", "100 ₽ =", "Br"), ("rub_eur", "100 ₽ =", "€")):
+            rrow.addWidget(QLabel(cap))
+            ed = QLineEdit()
+            ed.setMinimumWidth(58)
+            ed.setToolTip("Курс можно вписать вручную")
+            ed.textChanged.connect(self._recalc_currency)
+            rrow.addWidget(ed, 1)
+            rrow.addWidget(QLabel(ph))
+            self.rate[key] = ed
+        g.addLayout(rrow, 2, 0, 1, 4)
         g.setColumnStretch(3, 1)
         v.addWidget(box)
+        self._src_changed()
 
         self.conv = {}
         for key, title, color, src_cap in (
@@ -10882,12 +10941,11 @@ class ToolsDialog(QDialog):
         g.setColumnStretch(1, 1)
         v.addWidget(box)
 
-        self.rate_eur.textChanged.connect(self._recalc_currency)
-        self.rate_rub.textChanged.connect(self._recalc_currency)
         v.addStretch(1)
         self._auto_pct()
         sc = QScrollArea()
         sc.setWidgetResizable(True)
+        sc.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         sc.setFrameShape(QFrame.NoFrame)
         sc.setWidget(w)
         return sc
@@ -10896,6 +10954,15 @@ class ToolsDialog(QDialog):
         """Жёлтое и синее берутся из конвертеров RUB→BYN и EUR→BYN, пока их не трогали руками."""
         self._pct_auto = True
 
+    def _src_changed(self, *_):
+        nb = self.cmb_src.currentData() == "nbrb"
+        self.date.setEnabled(nb)                    # Google показывает только сегодняшний курс
+        self.lbl_date.setEnabled(nb)
+        st = settings_load()
+        if st.get("rates_source", "google") != self.cmb_src.currentData():
+            st["rates_source"] = self.cmb_src.currentData()
+            settings_save(st)
+
     def load_rates(self):
         if self._rates_thread is not None and self._rates_thread.isRunning():
             return
@@ -10903,28 +10970,31 @@ class ToolsDialog(QDialog):
         self.lbl_rates.setText("загружаю…")
         d = self.date.date()
         import datetime
-        self._rates_thread = RatesThread(datetime.date(d.year(), d.month(), d.day()), self)
+        self._rates_thread = RatesThread(datetime.date(d.year(), d.month(), d.day()), self.cmb_src.currentData(), self)
         self._rates_thread.done.connect(self._rates_done)
         self._rates_thread.start()
 
     def _rates_done(self, rates, err):
         self.btn_rates.setEnabled(True)
         if rates is None:
-            self.lbl_rates.setText("нет связи — впишите курс вручную")
+            self.lbl_rates.setText("не получилось взять курс — впишите вручную")
             self.lbl_rates.setToolTip(err)
             return
-        self.rate_eur.setText(TOOLS.fmt_plain(rates["eur_byn"], 4))
-        self.rate_rub.setText(TOOLS.fmt_plain(rates["rub_byn"] * 100, 4))
-        self.lbl_rates.setText(f"Нацбанк РБ на {rates['date']}")
+        self.rate["eur_byn"].setText(TOOLS.fmt_plain(rates["eur_byn"], 4))
+        self.rate["rub_byn"].setText(TOOLS.fmt_plain(rates["rub_byn"] * 100, 4))
+        self.rate["rub_eur"].setText(TOOLS.fmt_plain(rates["rub_eur"] * 100, 4))
+        self.lbl_rates.setText(f"{rates['source']}, {rates['date']}")
         self.lbl_rates.setToolTip("")
         self._recalc_currency()
 
     def _recalc_currency(self, *_):
-        eur_byn = TOOLS._num(self.rate_eur.text())
-        rub100 = TOOLS._num(self.rate_rub.text())
-        rub_byn = (rub100 / 100.0) if rub100 else None
-        rub_eur = (rub_byn / eur_byn) if (rub_byn and eur_byn) else None
-        pairs = {"rub_eur": rub_eur, "eur_byn": eur_byn, "rub_byn": rub_byn}
+        if not hasattr(self, "conv") or not hasattr(self, "pct_out"):
+            return
+        eur_byn = TOOLS._num(self.rate["eur_byn"].text())
+        rub_byn = TOOLS._num(self.rate["rub_byn"].text())
+        rub_eur = TOOLS._num(self.rate["rub_eur"].text())
+        pairs = {"rub_eur": (rub_eur / 100.0) if rub_eur else None, "eur_byn": eur_byn,
+                 "rub_byn": (rub_byn / 100.0) if rub_byn else None}
         for key, (ed, out) in self.conv.items():
             rate = pairs[key]
             out.set_text(TOOLS.convert(ed.text(), rate) if rate else "")
@@ -12190,6 +12260,68 @@ class MainWindow(QMainWindow):
         if b is not None:
             b.setVisible(act_kit_ready())
 
+    def act_translation_pdf(self, ru_docx):
+        """Перевод акта → готовый PDF рядом с файлом Word. Возвращает путь или '' (если Word не справился)."""
+        box = {}
+
+        class _T(QThread):
+            def run(self_t):
+                try:
+                    box["res"] = AI.office_to_pdf(ru_docx)
+                except Exception as e:
+                    box["err"] = str(e)
+
+        th = _T(self)
+        prog = QProgressDialog("Готовлю перевод акта…", None, 0, 0, self)
+        prog.setWindowTitle("Акт осмотра")
+        prog.setWindowModality(Qt.WindowModal)
+        prog.setMinimumDuration(300)
+        prog.setCancelButton(None)
+        loop = QEventLoop(self)
+        th.finished.connect(loop.quit)
+        th.start()
+        if th.isRunning():
+            loop.exec()
+        th.wait()
+        prog.close()
+        prog.deleteLater()
+        data, how = box.get("res") or (None, "")
+        if not data or how != "word":                 # без Word вёрстка бланка не сохраняется — такой PDF не нужен
+            return ""
+        out = os.path.splitext(ru_docx)[0] + ".pdf"
+        try:
+            write_file_safely(out, data, owner=self)
+        except Exception:
+            return ""
+        return out
+
+    def act_remember_layout(self):
+        """Перед сохранением акта: запомнить в профиле мастера, где и каким размером стоят его подпись и печать."""
+        if self.doc is None:
+            return
+        found = {}
+        for it in self.stamps:
+            role = getattr(it, "act_role", None)
+            if not role:
+                continue
+            try:
+                pr = self.doc[it.page_index].rect
+                to_px = PREVIEW_DPI / 72.0
+                pos = [round(it.pos().x() / (pr.width * to_px), 4), round(it.pos().y() / (pr.height * to_px), 4)]
+                found.setdefault(role[1], {})[role[0]] = (pos, round(float(it.mm_w), 1))
+            except Exception:
+                continue
+        if not found:
+            return
+        items, changed = act_masters_load(), False
+        for m in items:
+            for kind, (pos, w_mm) in (found.get(m["name"]) or {}).items():
+                if m.get(kind + "_pos") != pos or float(m.get(kind + "_w") or 0) != w_mm:
+                    m[kind + "_pos"], m[kind + "_w"] = pos, w_mm
+                    changed = True
+        if changed:
+            act_masters_save(items)
+
     def act_finish(self, d, master):
         """Оригинал акта уже открыт: вписать замеры почерком мастера, положить его подпись и печать.
         Возвращает короткую подсказку, что делать дальше."""
@@ -12235,28 +12367,30 @@ class MainWindow(QMainWindow):
         pr = doc[last].rect
         to_px = PREVIEW_DPI / 72.0
 
-        def put(pil, mm_w, fx, fy, opacity):
+        def put(pil, mm_w, pos, opacity, role):
             mm_h = mm_w * pil.height / max(1, pil.width)
             pm = self._pixmap_from_pil(pil)
             item = StampItem(pm, pil, mm_w, mm_h, last)
             item.opacity_value = opacity
             item.setOpacity(opacity)
             self.scene.addItem(item)
-            item.setPos(pr.width * fx * to_px, pr.height * fy * to_px)
+            item.setPos(pr.width * float(pos[0]) * to_px, pr.height * float(pos[1]) * to_px)
+            item.act_role = (role, master.get("name", ""))        # чтобы запомнить, куда и каким размером поставили
             self.stamps.append(item)
             return item
 
         placed = []
         sg = sign_pil(master.get("sign"), 220)
         if sg is not None:
-            put(sg, 46.0, 0.60, 0.80, 1.0)
+            put(sg, float(master.get("sign_w") or ACT_SIGN_W), master.get("sign_pos") or (0.62, 0.82), 1.0, "sign")
             placed.append("подпись")
         if master.get("stamp"):
             ent = next((s for s in lib_load() if os.path.basename(s["file"]) == master["stamp"]), None)
             try:
                 if ent is not None:
                     st = Image.open(ent["file"]).convert("RGBA")
-                    put(st, float(ent.get("mm_w") or 40.0), 0.28, 0.76, 0.9)
+                    put(st, float(master.get("stamp_w") or ent.get("mm_w") or 40.0),
+                        master.get("stamp_pos") or (0.28, 0.76), 0.9, "stamp")
                     placed.append("печать")
             except Exception:
                 pass
@@ -15273,6 +15407,10 @@ class MainWindow(QMainWindow):
 
     def _stamped_pdf_bytes(self, clean_meta=False, flatten=False, flat_dpi=200,
                            compress=None):
+        try:
+            self.act_remember_layout()            # акт осмотра: запомнить место и размер подписи и печати
+        except Exception:
+            pass
         out = fitz.open()
         out.insert_pdf(self.doc)
         for it in self.stamps:
