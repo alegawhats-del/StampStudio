@@ -530,7 +530,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.13.0"
+APP_VERSION = "6.13.1"
 EDITION = "main"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -569,10 +569,43 @@ _SYNCED_KEYS = ("word_marks", "pen_presets", "name_templates", "doc_counters", "
 _synced_seen = [None]
 
 
+def write_json_whole(path, data, indent=2):
+    """Записать JSON целиком или никак: сначала рядом, потом подмена. Тот, кто читает файл в эту
+    секунду (фоновая синхронизация), не увидит половину файла; сбой питания не оставит обрывок."""
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=indent)
+    for attempt in range(6):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:                  # Windows: файл на миг занят читателем
+            time.sleep(0.03 * (attempt + 1))
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=indent)
+    try:
+        os.remove(tmp)
+    except OSError:
+        pass
+
+
+def read_json_strict(path, default):
+    """Для фоновой работы: файла нет — default; файл есть, но не читается — исключение
+    (а не «пусто», иначе синхронизация решила бы, что всё удалили)."""
+    for attempt in range(6):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except FileNotFoundError:
+            return default
+        except (OSError, ValueError):
+            time.sleep(0.05 * (attempt + 1))
+    raise RuntimeError(f"файл занят: {os.path.basename(path)}")
+
+
 def settings_save(d: dict):
     os.makedirs(LIB_DIR, exist_ok=True)
-    with open(SETTINGS_JSON, "w", encoding="utf-8") as f:
-        json.dump(d, f, ensure_ascii=False, indent=2)
+    write_json_whole(SETTINGS_JSON, d)
     try:
         now = json.dumps([d.get(k) for k in _SYNCED_KEYS], ensure_ascii=False, sort_keys=True, default=str)
     except Exception:
@@ -616,8 +649,7 @@ LIB_CHANGED = []                 # кому сообщить, что библи�
 
 def lib_save(items: list):
     os.makedirs(LIB_DIR, exist_ok=True)
-    with open(LIB_JSON, "w", encoding="utf-8") as f:
-        json.dump(items, f, ensure_ascii=False, indent=2)
+    write_json_whole(LIB_JSON, items)
     for fn in list(LIB_CHANGED):
         try:
             fn()
@@ -6195,6 +6227,62 @@ class DateTimeDialog(QDialog):
         self.accept()
 
 
+def cloud_snapshot():
+    """Собрать всё, что сверяется с облаком. Без Qt — вызывается из фонового потока:
+    чтение печатей, карточек клиентов и бланков не должно подвешивать окно."""
+    st = read_json_strict(SETTINGS_JSON, {})
+    parts = st.get("cloud_parts") or {}
+    local = {"stamps": {}, "clients": {}, "settings": {}, "counters": {}}
+    if parts.get("stamps", True):
+        for e in [x for x in read_json_strict(LIB_JSON, []) if os.path.exists(x.get("file", ""))]:
+            try:
+                with open(e["file"], "rb") as f:
+                    data = f.read()
+                local["stamps"][os.path.basename(e["file"])] = {
+                    "meta": {k: v for k, v in e.items() if k != "file"}, "data": data,
+                    "mtime": max(os.path.getmtime(e["file"]), os.path.getmtime(LIB_JSON))}
+            except OSError:
+                pass
+    if parts.get("clients", True):
+        for key, vals in (read_json_strict(CLOUD_CLIENTS, {}) or {}).items():
+            if vals:
+                local["clients"][key] = {"values": vals, "mtime": 0}
+        for key, folder in list((st.get("client_dirs") or {}).items()):
+            vals = SW.card_load(folder, fallback=False) if os.path.isdir(folder) else {}
+            if not vals and os.path.isdir(folder):
+                try:                                      # карточку как раз пишут — подождать, а не считать удалённой
+                    if os.path.getsize(SW.card_path(folder)) > 2:
+                        time.sleep(0.15)
+                        vals = SW.card_load(folder, fallback=False)
+                        if not vals:
+                            raise RuntimeError("карточка клиента занята")
+                except OSError:
+                    pass
+            if vals:
+                try:
+                    mt = os.path.getmtime(SW.card_path(folder))
+                except OSError:
+                    mt = 0
+                local["clients"][key] = {"values": vals, "mtime": mt}
+    if parts.get("settings", True):
+        try:
+            mt = os.path.getmtime(SETTINGS_JSON)
+        except OSError:
+            mt = 0
+        for name in ("word_marks", "pen_presets", "name_templates", "sheet_templates", "crop_templates", "act_masters", "act_dict"):
+            if st.get(name):
+                local["settings"][name] = {"value": st[name], "mtime": mt}
+        try:
+            kit, kmt = act_kit_value()                   # бланки акта осмотра — общие на всю мастерскую
+            if kit:
+                local["settings"]["act_kit"] = {"value": kit, "mtime": kmt}
+        except Exception:
+            pass
+    if parts.get("counters", True):
+        local["counters"] = {k: dict(v) for k, v in (st.get("doc_counters") or {}).items() if v.get("last")}
+    return local
+
+
 class CloudThread(QThread):
     done = Signal(object)
     failed = Signal(str)
@@ -6205,7 +6293,10 @@ class CloudThread(QThread):
 
     def run(self):
         try:
-            self.done.emit(CLOUD.sync(*self.args))
+            uri, local, snap, private_local = self.args
+            if local is None:
+                local = cloud_snapshot()             # файлы читаются здесь, в фоне, — окно не замирает
+            self.done.emit(CLOUD.sync(uri, local, snap, private_local))
         except Exception as e:
             self.failed.emit(CLOUD.explain(e))
 
@@ -6371,6 +6462,47 @@ class SettingsDialog(QDialog):
         check(l, "Разрешить ставить подпись на все места разом", "sign_all_enabled", False,
               "Появится пункт «Правка → Подписать все места…»: программа найдёт в документе строки\n"
               "подписи выбранного человека и поставит его подпись на каждую.")
+        l.addStretch(1)
+        # ---- Акт осмотра
+        l = page("Акт осмотра", "Оригинал на немецком и перевод из одних данных. Бланки уже в программе; мастера, их почерк, "
+                                "подпись и печать настраиваются на странице акта.")
+        nrow = QHBoxLayout()
+        nrow.addWidget(QLabel("Следующий номер акта:"))
+        self.ed_act_next = QLineEdit(str(act_next_number()))
+        self.ed_act_next.setMaximumWidth(120)
+        self.ed_act_next.setToolTip("Номер, который получит следующий акт. С облаком счётчик общий на все компьютеры.")
+        nrow.addWidget(self.ed_act_next)
+        nrow.addStretch(1)
+        l.addLayout(nrow)
+        button(l, "Открыть акт осмотра", lambda: (self.reject(), win.open_act_page()),
+               "Страница акта: мастера, бланки, схема ЛКП  (Ctrl+Shift+K)")
+        l.addStretch(1)
+        # ---- Инструменты
+        l = page("Инструменты", "Конвертеры валют, регистр, сумма прописью, л.с.⇄кВт, PDF в Word, факсимиле из фото.")
+        prow = QHBoxLayout()
+        prow.addWidget(QLabel("PDF в Word по умолчанию:"))
+        self.cmb_p2w = QComboBox()
+        self.cmb_p2w.addItem("через Microsoft Word (точнее)", "auto")
+        self.cmb_p2w.addItem("встроенный способ (без Word)", "builtin")
+        self.cmb_p2w.setCurrentIndex(1 if st.get("pdf2word_method") == "builtin" else 0)
+        prow.addWidget(self.cmb_p2w)
+        prow.addStretch(1)
+        l.addLayout(prow)
+        check(l, "Снимок подписи сразу очищать как фотографию", "photo_auto", True,
+              "Когда в «Мои печати» загружают фотографию, а не готовую картинку, галочка «подпись с фото»\n"
+              "включается сама: бумага, тени и неровный свет убираются.")
+        button(l, "Открыть инструменты", lambda: (self.reject(), win.open_tools()),
+               "Валюты, регистр, сумма прописью, л.с.⇄кВт  (Ctrl+Shift+T)")
+        l.addStretch(1)
+        # ---- Лицензия
+        l = page("Лицензия", "Программа работает по ключу. Ключ хранится на этом компьютере и привязан к нему.")
+        _k, _fresh, _exp = license_cached()
+        info = QLabel(f"Ключ: {LIC.mask(_k)}   ·   действует {LIC.expiry_text(_exp)}" if _k else "Ключ не введён.")
+        l.addWidget(info)
+        button(l, "Лицензия…", lambda: win.show_license(), "Срок действия, смена ключа, связь в Telegram")
+        tg = QLabel(f"Ключ можно получить в Telegram <a href='{LIC.TELEGRAM}'>{LIC.TELEGRAM_NAME}</a>")
+        tg.setOpenExternalLinks(True)
+        l.addWidget(tg)
         l.addStretch(1)
         # ---- Облако
         l = page("Облако", "Копия печатей, клиентов и настроек в вашей базе MongoDB Atlas. Всё остаётся и на компьютере: "
@@ -6581,7 +6713,14 @@ class SettingsDialog(QDialog):
         st = settings_load()
         for c, key in self._checks:
             st[key] = c.isChecked()
+        st["pdf2word_method"] = self.cmb_p2w.currentData()
         settings_save(st)
+        try:                                              # следующий номер акта — если его поправили
+            n = int(re.sub(r"\D", "", self.ed_act_next.text()) or 0)
+            if n and n != act_next_number():
+                act_set_last(n - 1)
+        except Exception:
+            pass
         want = "dark" if self.rb_dark.isChecked() else "light"
         if want != self.win.theme:
             self.win.toggle_theme()
@@ -11595,49 +11734,8 @@ class MainWindow(QMainWindow):
             self._cloud_timer.start(ms)
 
     def _cloud_local(self):
-        """Собрать всё, что сверяется с облаком (в главном потоке)."""
-        st = settings_load()
-        parts = st.get("cloud_parts") or {}
-        local = {"stamps": {}, "clients": {}, "settings": {}, "counters": {}}
-        if parts.get("stamps", True):
-            for e in lib_load():
-                try:
-                    with open(e["file"], "rb") as f:
-                        data = f.read()
-                    local["stamps"][os.path.basename(e["file"])] = {
-                        "meta": {k: v for k, v in e.items() if k != "file"}, "data": data,
-                        "mtime": max(os.path.getmtime(e["file"]), os.path.getmtime(LIB_JSON))}
-                except OSError:
-                    pass
-        if parts.get("clients", True):
-            for key, vals in (_json_read(CLOUD_CLIENTS, {}) or {}).items():
-                if vals:
-                    local["clients"][key] = {"values": vals, "mtime": 0}
-            for key, folder in list((st.get("client_dirs") or {}).items()):
-                vals = SW.card_load(folder, fallback=False) if os.path.isdir(folder) else {}
-                if vals:
-                    try:
-                        mt = os.path.getmtime(SW.card_path(folder))
-                    except OSError:
-                        mt = 0
-                    local["clients"][key] = {"values": vals, "mtime": mt}
-        if parts.get("settings", True):
-            try:
-                mt = os.path.getmtime(SETTINGS_JSON)
-            except OSError:
-                mt = 0
-            for name in ("word_marks", "pen_presets", "name_templates", "sheet_templates", "crop_templates", "act_masters", "act_dict"):
-                if st.get(name):
-                    local["settings"][name] = {"value": st[name], "mtime": mt}
-            try:
-                kit, kmt = act_kit_value()                   # бланки акта осмотра — общие на всю мастерскую
-                if kit:
-                    local["settings"]["act_kit"] = {"value": kit, "mtime": kmt}
-            except Exception:
-                pass
-        if parts.get("counters", True):
-            local["counters"] = {k: dict(v) for k, v in (st.get("doc_counters") or {}).items() if v.get("last")}
-        return local
+        """Всё, что сверяется с облаком (то же, что собирает фоновый поток)."""
+        return cloud_snapshot()
 
     def cloud_sync(self, manual=False, report=None):
         uri = cloud_uri()
@@ -11652,13 +11750,10 @@ class MainWindow(QMainWindow):
         state = _json_read(CLOUD_STATE, {})
         uid = CLOUD.digest(uri)[:12]
         snap = state.get("snap") if state.get("uri") == uid else {}       # другая база — сверяем с нуля
-        local = self._cloud_local()
-        self._cloud_local_hashes = {
-            "stamps": {i: CLOUD.digest([e["meta"], CLOUD.digest(e["data"])]) for i, e in local["stamps"].items()}}
         private = bool(settings_load().get("cloud_private_local", False))
         self._cloud_state = ("…", "Идёт синхронизация")
         self._cloud_label()
-        th = CloudThread(uri, local, snap or {}, private, self)
+        th = CloudThread(uri, None, snap or {}, private, self)
         self._cloud_thread = th
         self._cloud_last = time.time()
 
@@ -14124,24 +14219,61 @@ class MainWindow(QMainWindow):
         self.show_page(max(0, cur))
 
     def refresh_page_list(self, current=0):
-        """Перестроить список страниц с миниатюрами."""
+        """Перестроить список страниц с миниатюрами.
+
+        Миниатюры рисуются понемногу: сначала открытая страница и её соседи, остальные — в паузах,
+        не подвешивая окно. На больших сканах это убирает «замирание» после каждого действия."""
+        self._thumb_gen = getattr(self, "_thumb_gen", 0) + 1
+        self._thumb_queue = []
         self.page_list.blockSignals(True)
         self.page_list.clear()
         if self.doc is not None:
-            for i in range(self.doc.page_count):
-                pix = self.doc[i].get_pixmap(dpi=24, alpha=False)
-                img = QImage(pix.samples, pix.width, pix.height, pix.stride,
-                             QImage.Format_RGB888)
-                pm = QPixmap.fromImage(img.copy()).scaled(
-                    104, 140, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-                it = QListWidgetItem(QIcon(pm), f"стр. {i + 1}")
+            blank = getattr(self, "_thumb_blank", None)
+            if blank is None:
+                pm = QPixmap(104, 140)
+                pm.fill(QColor("#f1efe9"))
+                blank = self._thumb_blank = QIcon(pm)
+            n = self.doc.page_count
+            for i in range(n):
+                it = QListWidgetItem(blank, f"стр. {i + 1}")
                 it.setData(Qt.UserRole, i)
                 it.setTextAlignment(Qt.AlignHCenter)
                 self.page_list.addItem(it)
+            cur = max(0, min(current, n - 1)) if n else 0
+            order, lo, hi = [], cur, cur + 1                 # от открытой страницы в обе стороны
+            while lo >= 0 or hi < n:
+                if lo >= 0:
+                    order.append(lo)
+                    lo -= 1
+                if hi < n:
+                    order.append(hi)
+                    hi += 1
+            self._thumb_queue = order
         self.page_list.blockSignals(False)
         if self.doc is not None and self.doc.page_count:
             current = max(0, min(current, self.doc.page_count - 1))
             self.page_list.setCurrentRow(current)
+        self._thumb_step(self._thumb_gen, budget=0.12)        # небольшой документ рисуется сразу целиком
+
+    def _thumb_step(self, gen, budget=0.025):
+        if gen != getattr(self, "_thumb_gen", 0) or self.doc is None:
+            return
+        t0 = time.time()
+        q = self._thumb_queue
+        while q and time.time() - t0 < budget:
+            i = q.pop(0)
+            it = self.page_list.item(i)
+            if it is None or i >= self.doc.page_count:
+                continue
+            try:
+                pix = self.doc[i].get_pixmap(dpi=24, alpha=False)
+                img = QImage(pix.samples, pix.width, pix.height, pix.stride, QImage.Format_RGB888)
+                pm = QPixmap.fromImage(img.copy()).scaled(104, 140, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                it.setIcon(QIcon(pm))
+            except Exception:
+                pass
+        if q:
+            QTimer.singleShot(12, lambda: self._thumb_step(gen))
 
     def apply_page_order(self, order):
         """Применить новый порядок/набор страниц (список старых индексов)."""
@@ -14830,7 +14962,8 @@ class MainWindow(QMainWindow):
             self.current_lib_file = None
             self._update_geom_title()
         self.chk_photo.blockSignals(True)                 # снимок подписи — сразу чистим как фотографию
-        self.chk_photo.setChecked(not from_library and looks_like_photo(im))
+        self.chk_photo.setChecked(not from_library and bool(settings_load().get("photo_auto", True))
+                                  and looks_like_photo(im))
         self.chk_photo.blockSignals(False)
         self.reprocess_stamp()
         return True
