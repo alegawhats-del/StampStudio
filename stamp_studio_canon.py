@@ -56,6 +56,7 @@ import stamp_license as LIC
 import stamp_tools as TOOLS
 import stamp_decline as DECL
 import stamp_customs as CUSTOMS
+from PySide6.QtWidgets import QSizeGrip, QLayout
 from PySide6.QtGui import QFont, QFontMetrics
 from PySide6.QtCore import QByteArray, QBuffer, QIODevice
 from PySide6.QtCore import QMimeData
@@ -146,9 +147,12 @@ QComboBox, QDoubleSpinBox, QSpinBox, QLineEdit {{
 }}
 QComboBox:hover, QDoubleSpinBox:hover, QSpinBox:hover {{ border-color: {GOLD}; }}
 QComboBox QAbstractItemView {{
-    background: #232735; selection-background-color: {GOLD};
-    selection-color: #1b1300; border: 1px solid #2e3345;
+    background: #232735; selection-background-color: #2c3145;
+    selection-color: {GOLD}; border: 1px solid #2e3345; border-radius: 8px; padding: 4px; outline: none;
 }}
+QComboBox QAbstractItemView::item {{ padding: 5px 8px; border-radius: 5px; min-height: 20px; }}
+QComboBox {{ combobox-popup: 0; }}
+QComboBoxPrivateContainer {{ background: transparent; border: none; }}
 QListWidget {{
     background: #171a22; border: 1px solid #262b38; border-radius: 10px; padding: 4px;
 }}
@@ -285,9 +289,12 @@ QComboBox, QDoubleSpinBox, QSpinBox, QLineEdit {{
 }}
 QComboBox:hover, QDoubleSpinBox:hover, QSpinBox:hover {{ border-color: {GOLD_L}; }}
 QComboBox QAbstractItemView {{
-    background: #ffffff; selection-background-color: {GOLD_L};
-    selection-color: #ffffff; border: 1px solid #d8d2c4;
+    background: #ffffff; selection-background-color: #f4e3c2;
+    selection-color: #6b4a00; border: 1px solid #d8d2c4; border-radius: 8px; padding: 4px; outline: none;
 }}
+QComboBox QAbstractItemView::item {{ padding: 5px 8px; border-radius: 5px; min-height: 20px; }}
+QComboBox {{ combobox-popup: 0; }}
+QComboBoxPrivateContainer {{ background: transparent; border: none; }}
 QListWidget {{
     background: #faf8f4; border: 1px solid #e9e4d9; border-radius: 10px; padding: 4px;
 }}
@@ -432,6 +439,12 @@ QFrame#modebar QToolButton:hover { color: #e8b04b; }
 QFrame#modebar QToolButton:checked { background: #3a321c; color: #e8b04b; font-weight: bold; }
 QToolButton#corner { border: 1px solid #2e3345; border-radius: 7px; padding: 1px 9px; background: #1b1e27; color: #c9cddb; }
 QToolButton#corner:hover { border-color: #e8b04b; color: #e8b04b; }
+QDialog[chrome="true"] { background: transparent; }
+QFrame#chromeback { background: #14161c; border: 1px solid #343a4c; border-radius: 12px; }
+QWidget#chromebar { background: #1b1e27; border-top-left-radius: 11px; border-top-right-radius: 11px; border-bottom: 1px solid #262b39; }
+QLabel#chrometitle { color: #dcdfe8; font-weight: 600; background: transparent; }
+QToolButton#chromeclose { border: none; border-radius: 7px; background: transparent; }
+QToolButton#chromeclose:hover { background: #c73a3a; }
 QFrame#zoompill { background: #1b1e27; border: 1px solid #2e3345; border-radius: 11px; }
 QFrame#zoompill QToolButton { border: none; border-radius: 7px; padding: 3px 7px; background: transparent; color: #c9cddb; }
 QFrame#zoompill QToolButton:hover { background: #232735; }
@@ -519,6 +532,12 @@ QFrame#modebar QToolButton:hover { color: #96590c; }
 QFrame#modebar QToolButton:checked { background: #ffffff; color: #96590c; font-weight: bold; }
 QToolButton#corner { border: 1px solid #e4ddcf; border-radius: 7px; padding: 1px 9px; background: #ffffff; color: #2a251e; }
 QToolButton#corner:hover { border-color: #d69a33; }
+QDialog[chrome="true"] { background: transparent; }
+QFrame#chromeback { background: #f3f1ec; border: 1px solid #cfc7b6; border-radius: 12px; }
+QWidget#chromebar { background: #ece6d9; border-top-left-radius: 11px; border-top-right-radius: 11px; border-bottom: 1px solid #e0d9c9; }
+QLabel#chrometitle { color: #2a251e; font-weight: 600; background: transparent; }
+QToolButton#chromeclose { border: none; border-radius: 7px; background: transparent; }
+QToolButton#chromeclose:hover { background: #e06a5c; }
 QFrame#zoompill { background: #ffffff; border: 1px solid #e4ddcf; border-radius: 11px; }
 QFrame#zoompill QToolButton { border: none; border-radius: 7px; padding: 3px 7px; background: transparent; color: #2a251e; }
 QFrame#zoompill QToolButton:hover { background: #f4ebda; }
@@ -560,7 +579,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.15.1"
+APP_VERSION = "6.16.0"
 EDITION = "canon"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -2148,6 +2167,67 @@ def draw_icon(kind: str, color: str, size: int = 64) -> QIcon:
         p.setBrush(c)
         p.drawEllipse(QPointF(8.0 * u, 8.0 * u), 0.9 * u, 0.9 * u)
         p.setBrush(Qt.NoBrush)
+    elif kind == "gear":
+        import math as _m
+        path = QPainterPath()
+        n = 8
+        for i in range(n):
+            a = 2 * _m.pi * i / n
+            for da, rr in ((-0.25, 4.7), (-0.15, 6.3), (0.15, 6.3), (0.25, 4.7)):
+                x, y = (8 + rr * _m.cos(a + da)) * u, (8 + rr * _m.sin(a + da)) * u
+                if i == 0 and da == -0.25:
+                    path.moveTo(x, y)
+                else:
+                    path.lineTo(x, y)
+        path.closeSubpath()
+        p.drawPath(path)
+        p.drawEllipse(QPointF(8.0 * u, 8.0 * u), 2.1 * u, 2.1 * u)
+    elif kind == "door":
+        fl(6.0, 2.6, 12.4, 2.6, 12.4, 13.4, 9.4, 13.4)
+        path = QPainterPath()
+        path.moveTo(3.4 * u, 3.4 * u); path.lineTo(8.6 * u, 2.2 * u)
+        path.lineTo(8.6 * u, 14.2 * u); path.lineTo(3.4 * u, 12.8 * u)
+        path.closeSubpath()
+        p.drawPath(path)
+        p.setBrush(c)
+        p.drawEllipse(QPointF(7.0 * u, 8.4 * u), 0.7 * u, 0.7 * u)
+        p.setBrush(Qt.NoBrush)
+    elif kind == "clock":
+        p.drawEllipse(QPointF(8.0 * u, 8.0 * u), 5.8 * u, 5.8 * u)
+        fl(8.0, 4.6, 8.0, 8.0, 10.6, 9.6)
+    elif kind == "tag":
+        path = QPainterPath()
+        path.moveTo(2.6 * u, 8.8 * u); path.lineTo(8.4 * u, 3.0 * u); path.lineTo(13.2 * u, 3.0 * u)
+        path.lineTo(13.2 * u, 7.8 * u); path.lineTo(7.4 * u, 13.6 * u)
+        path.closeSubpath()
+        p.drawPath(path)
+        p.setBrush(c)
+        p.drawEllipse(QPointF(10.6 * u, 5.6 * u), 0.8 * u, 0.8 * u)
+        p.setBrush(Qt.NoBrush)
+    elif kind == "datalist":
+        p.setBrush(c)
+        for y in (4.4, 8.0, 11.6):
+            p.drawEllipse(QPointF(3.4 * u, y * u), 0.7 * u, 0.7 * u)
+        p.setBrush(Qt.NoBrush)
+        for y in (4.4, 8.0, 11.6):
+            line(6.0, y, 13.2, y)
+    elif kind == "check":
+        p.drawEllipse(QPointF(8.0 * u, 8.0 * u), 5.8 * u, 5.8 * u)
+        fl(5.2, 8.2, 7.2, 10.3, 10.9, 6.0)
+    elif kind == "key":
+        p.drawEllipse(QPointF(5.3 * u, 10.7 * u), 2.7 * u, 2.7 * u)
+        fl(7.2, 8.8, 13.2, 2.8)
+        fl(11.0, 5.0, 12.8, 6.8)
+        fl(9.2, 6.8, 10.6, 8.2)
+    elif kind == "info":
+        p.drawEllipse(QPointF(8.0 * u, 8.0 * u), 5.8 * u, 5.8 * u)
+        fl(8.0, 7.4, 8.0, 11.2)
+        p.setBrush(c)
+        p.drawEllipse(QPointF(8.0 * u, 5.1 * u), 0.75 * u, 0.75 * u)
+        p.setBrush(Qt.NoBrush)
+    elif kind == "signs":
+        fl(2.8, 12.2, 5.0, 11.6, 11.8, 4.8, 10.2, 3.2, 3.4, 10.0, 2.8, 12.2)
+        fl(8.0, 13.2, 13.2, 13.2)
     elif kind == "copy":
         rect(5.6, 5.6, 7.8, 7.8, 1.2)
         line(2.8, 10.2, 2.8, 2.8); line(2.8, 2.8, 10.2, 2.8)
@@ -6446,6 +6526,7 @@ class SettingsDialog(QDialog):
         l.addStretch(1)
         # ---- Обновления
         l.insertWidget(l.count() - 1, self._strip_check(st))
+        l.insertWidget(l.count() - 1, self._frames_check(st))
         l = page("Обновления", f"Сейчас установлена версия {APP_VERSION}.")
         check(l, "Проверять обновления при запуске", "auto_update", True,
               "Программа сама спросит, когда выйдет новая версия")
@@ -6832,6 +6913,13 @@ class SettingsDialog(QDialog):
         settings_save(st)
         self._fill()
 
+    def _frames_check(self, st):
+        self.chk_frames = QCheckBox("Окна программы — в её стиле: свой заголовок и скруглённые углы")
+        self.chk_frames.setChecked(bool(st.get("own_frames", True)))
+        self.chk_frames.setToolTip("Действует после перезапуска программы. Если окна ведут себя странно — снимите галочку:\n"
+                                   "вернутся обычные системные рамки.")
+        return self.chk_frames
+
     def _strip_check(self, st):
         self.chk_strip = QCheckBox("Боковая панель значков раскрыта — с подписями и группами")
         self.chk_strip.setChecked(bool(st.get("strip_open", False)))
@@ -6862,6 +6950,7 @@ class SettingsDialog(QDialog):
             st[key] = c.currentData()
         st["pdf2word_method"] = self.cmb_p2w.currentData()
         st["strip_open"] = self.chk_strip.isChecked()
+        st["own_frames"] = self.chk_frames.isChecked()
         fee = CUSTOMS._d(self.ed_calc_fee.text())
         if fee is not None and fee >= 0:
             st["calc_fee"] = CUSTOMS.money(fee)
@@ -12125,6 +12214,7 @@ class CalcPage(QDialog):
         g.setVerticalSpacing(7)
         g.addWidget(QLabel("Дата расчёта:"), 0, 0)
         self.d_on = date_edit(QDate.currentDate())
+        self.d_on.setMinimumWidth(118)
         g.addWidget(self.d_on, 0, 1)
         self.btn_rates = QPushButton("Взять курс")
         self.btn_rates.setToolTip("Официальный курс Нацбанка РБ на дату расчёта (запрос на сайт nbrb.by)")
@@ -12296,6 +12386,182 @@ class ConvertThread(QThread):
             self.done.emit("", str(e))
 
 
+# ======================================================================
+#  Свои рамки окон: заголовок в цветах программы и скруглённые углы у всех диалогов
+# ======================================================================
+
+CHROME_H = 34
+
+
+def chrome_wanted():
+    """Рисовать ли окнам свои рамки: настройка «Общие» и запасной ключ запуска --native-frames."""
+    return "--native-frames" not in sys.argv and bool(settings_load().get("own_frames", True))
+
+
+def dwm_tint(widget, dark):
+    """Windows 11: покрасить системный заголовок главного окна в цвет программы. На других системах — ничего."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        hwnd = int(widget.winId())
+
+        def put(attr, value):
+            v = ctypes.c_int(value)
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, attr, ctypes.byref(v), ctypes.sizeof(v))
+
+        put(20, 1 if dark else 0)                              # тёмные кнопки заголовка
+        put(35, 0x001C1614 if dark else 0x00ECF1F3)            # цвет заголовка (0x00BBGGRR)
+        put(34, 0x00392B26 if dark else 0x00B6C7CF)            # цвет рамки
+        put(36, 0x00DBCDC9 if dark else 0x001E252A)            # цвет текста заголовка
+    except Exception:
+        pass
+
+
+class ChromeBar(QWidget):
+    """Заголовок окна в стиле программы: значок, название, крестик. За него окно перетаскивается."""
+
+    def __init__(self, dlg):
+        super().__init__(dlg)
+        self.setObjectName("chromebar")
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        h = QHBoxLayout(self)
+        h.setContentsMargins(12, 0, 6, 0)
+        h.setSpacing(8)
+        self.icon = QLabel()
+        pm = QApplication.windowIcon().pixmap(16, 16)
+        if not pm.isNull():
+            self.icon.setPixmap(pm)
+            h.addWidget(self.icon)
+        self.title = QLabel(dlg.windowTitle())
+        self.title.setObjectName("chrometitle")
+        self.title.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        h.addWidget(self.title, 1)
+        self.btn = QToolButton()
+        self.btn.setObjectName("chromeclose")
+        self.btn.setIconSize(QSize(14, 14))
+        self.btn.setFixedSize(30, 24)
+        self.btn.setFocusPolicy(Qt.NoFocus)
+        self.btn.setToolTip("Закрыть")
+        self.btn.clicked.connect(dlg.close)
+        h.addWidget(self.btn)
+        self.retint()
+
+    def retint(self):
+        self.btn.setIcon(draw_icon("close", ui_icon_color()))
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.LeftButton:
+            wh = self.window().windowHandle()
+            if wh is not None:
+                wh.startSystemMove()                           # двигает сама система: прилипание к краям работает
+            e.accept()
+
+
+class WindowChrome(QObject):
+    """Даёт каждому диалогу программы свою рамку. Системные окна (выбор файла) и главное окно не трогает."""
+
+    SKIP = (QFileDialog, QProgressDialog)
+
+    def eventFilter(self, obj, ev):
+        t = ev.type()
+        if t == QEvent.Polish:
+            if isinstance(obj, QDialog) and not isinstance(obj, self.SKIP):
+                try:
+                    if obj.isWindow() and not obj.property("chrome") and obj.layout() is not None:
+                        self.adopt(obj)
+                except Exception:
+                    pass
+            elif isinstance(obj, (QMenu, QComboBox)):
+                try:
+                    self.soften(obj)
+                except Exception:
+                    pass
+        elif t == QEvent.Resize or t == QEvent.WindowTitleChange:
+            if isinstance(obj, QDialog) and getattr(obj, "_chrome_bar", None) is not None:
+                self.place(obj)
+        return False
+
+    def soften(self, obj):
+        """Меню и выпадающие списки: скруглённые углы вместо прямоугольной системной рамки."""
+        pop = obj if isinstance(obj, QMenu) else obj.view().window()
+        if pop is None or pop is obj.window() and not isinstance(obj, QMenu) or pop.property("chrome"):
+            return
+        pop.setProperty("chrome", True)
+        pop.setAttribute(Qt.WA_TranslucentBackground, True)
+        pop.setWindowFlags(pop.windowFlags() | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint)
+
+    def adopt(self, dlg):
+        b = 1
+        dlg.setProperty("chrome", True)
+        resized = dlg.testAttribute(Qt.WA_Resized)
+        size = dlg.size()
+        dlg.setAttribute(Qt.WA_TranslucentBackground, True)
+        dlg.setWindowFlags(dlg.windowFlags() | Qt.FramelessWindowHint)
+        lay = dlg.layout()
+        m = lay.contentsMargins()
+        lay.setContentsMargins(m.left() + b, m.top() + CHROME_H + b, m.right() + b, m.bottom() + b)
+        dw, dh = 2 * b, CHROME_H + 2 * b
+        mn, mx = dlg.minimumSize(), dlg.maximumSize()
+        fixed = (mn == mx and mn.width() > 0) or lay.sizeConstraint() == QLayout.SetFixedSize
+        fixed = fixed or isinstance(dlg, (QMessageBox, QInputDialog))      # эти окна сами держат свой размер
+        if mx.height() < 16777215:
+            dlg.setMaximumHeight(mx.height() + dh)
+        if mx.width() < 16777215:
+            dlg.setMaximumWidth(mx.width() + dw)
+        if mn.height() > 0:
+            dlg.setMinimumHeight(mn.height() + dh)
+        if mn.width() > 0:
+            dlg.setMinimumWidth(mn.width() + dw)
+        if resized:
+            dlg.resize(size.width() + dw, size.height() + dh)
+        back = QFrame(dlg)
+        back.setObjectName("chromeback")
+        back.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        back.lower()
+        name, own = dlg.objectName(), dlg.styleSheet()
+        if name and own:                                       # у окна свой фон — отдаём его скруглённой подложке
+            mm = re.search(r"QDialog#%s\s*\{[^}]*?background(?:-color)?:\s*([^;}]+)" % re.escape(name), own)
+            if mm:
+                back.setStyleSheet("QFrame#chromeback { background: %s; }" % mm.group(1).strip())
+                dlg.setStyleSheet(own + '\nQDialog#%s[chrome="true"] { background: transparent; }' % name)
+        dlg._chrome_back = back
+        dlg._chrome_grip = None
+        if not fixed:
+            dlg._chrome_grip = QSizeGrip(dlg)
+        dlg._chrome_bar = ChromeBar(dlg)
+        self.place(dlg)
+
+    def place(self, dlg):
+        bar = dlg._chrome_bar
+        w, h = dlg.width(), dlg.height()
+        dlg._chrome_back.setGeometry(0, 0, w, h)
+        dlg._chrome_back.lower()
+        bar.setGeometry(1, 1, max(0, w - 2), CHROME_H)
+        bar.raise_()
+        if bar.title.text() != dlg.windowTitle():
+            bar.title.setText(dlg.windowTitle())
+        g = dlg._chrome_grip
+        if g is not None:
+            g.resize(14, 14)
+            g.move(w - 17, h - 17)
+            g.raise_()
+
+    def retint(self):
+        for w in QApplication.topLevelWidgets():
+            bar = getattr(w, "_chrome_bar", None)
+            if bar is not None:
+                bar.retint()
+
+
+def install_window_chrome(app):
+    """Включить свои рамки окон (если не выключены в настройках)."""
+    if getattr(app, "_chrome", None) is None and chrome_wanted():
+        app._chrome = WindowChrome(app)
+        app.installEventFilter(app._chrome)
+    return getattr(app, "_chrome", None)
+
+
 class PillWatch(QObject):
     """Держит плашку масштаба под страницей и обновляет на ней проценты."""
 
@@ -12376,11 +12642,24 @@ class MainWindow(QMainWindow):
         style += ("\nQTabBar::scroller { width: 0px; }"
                   "\nQTabBar QToolButton { width: 0px; max-width: 0px; border: none; margin: 0; padding: 0; background: transparent; }")
         style += EXTRA_QSS_DARK if self.theme == "dark" else EXTRA_QSS_LIGHT
+        arrow = qss_icon_path("chev_down", "#c9cddb" if self.theme == "dark" else "#4a4636")
+        if arrow:                                             # выпадающие списки: без системной «кнопки» со своей рамкой
+            dark = self.theme == "dark"
+            style += ("\nQDateEdit { background: %s; border: 1px solid %s; border-radius: 8px; padding: 5px 8px; }"
+                      "\nQDateEdit:hover, QDateEdit:focus { border-color: %s; }"
+                      % (("#232735", "#2e3345", GOLD) if dark else ("#ffffff", "#d8d2c4", GOLD_L)))
+            style += ("\nQComboBox::drop-down, QDateEdit::drop-down { subcontrol-origin: padding; "
+                      "subcontrol-position: center right; width: 22px; border: none; background: transparent; }"
+                      f"\nQComboBox::down-arrow, QDateEdit::down-arrow {{ image: url('{arrow}'); width: 12px; height: 12px; }}")
         QApplication.instance().setStyleSheet(style)
         self.view.set_theme(self.theme)
         self._retint_icons()
         if hasattr(self, "tool_strip") and hasattr(self, "_strip_open"):
             self._strip_apply()
+        QTimer.singleShot(0, lambda: dwm_tint(self, self.theme == "dark"))
+        ch = getattr(QApplication.instance(), "_chrome", None)
+        if ch is not None:
+            ch.retint()
         if getattr(self, "_tools_dialog", None) is not None:
             self._tools_dialog.retheme()
         if getattr(self, "_conv_page", None) is not None:
@@ -12774,9 +13053,41 @@ class MainWindow(QMainWindow):
                         "Срок действия ключа, смена ключа, связь в Telegram"))
         m.addSeparator()
         m.addAction(act("О программе", self.show_about))
+        self._menu_icons()
         self._build_toolstrip()
         self._build_modebar()
         self._build_zoom_pill()
+
+    MENU_ICONS = (("Настройки ИИ", "key"), ("Настройки", "gear"), ("Выход", "door"), ("Подписать все места", "signs"),
+                  ("Скопировать текст страницы", "copy"), ("Следующая страница", "down"), ("Предыдущая страница", "up"),
+                  ("Дата и время", "clock"), ("ИИ-помощник", "ai"), ("Предложить имя файла", "tag"),
+                  ("Данные из документа", "datalist"), ("Проверить перед отправкой", "check"),
+                  ("Что нового", "star"), ("Проверить обновления", "refresh"), ("Версии и откат", "undo"),
+                  ("Лицензия", "key"), ("О программе", "info"))
+
+    def _menu_icons(self):
+        """Значки у пунктов меню, у которых их ещё нет (кроме галочек — там место занято отметкой)."""
+        known = {a for a, _k in self._themed_actions}
+
+        def walk(menu):
+            for a in menu.actions():
+                if a.isSeparator():
+                    continue
+                if a.menu() is not None:
+                    walk(a.menu())
+                if a in known or a.isCheckable() or not a.icon().isNull():
+                    continue
+                text = a.text().replace("&", "")
+                kind = next((k for start, k in self.MENU_ICONS if text.startswith(start)), None)
+                if kind:
+                    self._themed_actions.append((a, kind))
+                    known.add(a)
+
+        for top in self.menuBar().actions():
+            if top.menu() is not None:
+                walk(top.menu())
+        if hasattr(self, "ai_menu"):
+            walk(self.ai_menu)
 
     def _build_toolstrip(self):
         """Вертикальная панель инструментов у левого края: те же действия, что в меню, — одним щелчком.
@@ -17590,6 +17901,7 @@ def main():
             f.write(f"OK {APP_VERSION} {EDITION} scanner={scanner_backend()} guide={guide_n} "
                     f"ai={len(AI.PROVIDERS)} keys={len(AI.builtin_keys())} ocr={AI.selftest_ocr()} word={SW.selftest()} cloud={CLOUD.selftest()} act={'ok' if ACT.selftest() else 'fail'} license={'ok' if LIC.selftest() else 'fail'} tools={'ok' if TOOLS.selftest() else 'fail'} pdf2docx={AI.selftest_pdf2docx()} decline={DECL.selftest_text()} calc={'ok' if CUSTOMS.selftest() else 'fail'} conv={AI.selftest_convert()}")
         sys.exit(0)
+    install_window_chrome(app)                   # диалоги — в стиле программы
     if not license_gate():                       # без действующего ключа программа не открывается
         sys.exit(0)
     win = MainWindow()
