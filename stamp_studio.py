@@ -593,7 +593,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.16.3"
+APP_VERSION = "6.17.0"
 EDITION = "main"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -8888,6 +8888,7 @@ class WordFillPage(QDialog):
         self.win = win
         self.setWindowFlags(Qt.Widget)
         self.setObjectName("aipage")
+        self.setAcceptDrops(True)
         self.wd = None
         self.path = ""
         self.rows = []
@@ -8931,9 +8932,13 @@ class WordFillPage(QDialog):
         head.addWidget(self.b_dir)
         root.addLayout(head)
 
-        body = QHBoxLayout()
+        self.empty = self._empty_state()
+        root.addWidget(self.empty, 1)
+        self.body_w = QWidget()
+        body = QHBoxLayout(self.body_w)
+        body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(10)
-        root.addLayout(body, 1)
+        root.addWidget(self.body_w, 1)
         self.view = WordView()
         self.view.blocked.connect(lambda t: self._say(t, warn=True))
         self.view.mark_asked.connect(self._add_mark)
@@ -9006,6 +9011,98 @@ class WordFillPage(QDialog):
 
     def reject(self):
         self.win.ai_mode(False)
+
+    def _empty_state(self):
+        """Пока документ не выбран: поле для перетаскивания, кнопка выбора и документы Word из открытой папки."""
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(10)
+        self.zone = DropZone()
+        self.zone.exts = (".docx",)
+        zl = QVBoxLayout(self.zone)
+        zl.setContentsMargins(20, 18, 20, 18)
+        zl.setSpacing(8)
+        zl.addStretch(1)
+        big = QLabel("Перетащите сюда документ Word")
+        f = big.font()
+        f.setPointSize(f.pointSize() + 5)
+        f.setBold(True)
+        big.setFont(f)
+        big.setAlignment(Qt.AlignCenter)
+        big.setAttribute(Qt.WA_TransparentForMouseEvents)
+        zl.addWidget(big)
+        sub = QLabel("Файл .docx откроется здесь для заполнения: ФИО, паспорт, даты, суммы — оформление не меняется.\n"
+                     "Исходный файл остаётся нетронутым.")
+        sub.setObjectName("hint")
+        sub.setAlignment(Qt.AlignCenter)
+        sub.setWordWrap(True)
+        sub.setAttribute(Qt.WA_TransparentForMouseEvents)
+        zl.addWidget(sub)
+        hb = QHBoxLayout()
+        hb.addStretch(1)
+        self.btn_pick = QPushButton("Выбрать файл Word…")
+        self.btn_pick.setObjectName("accent")
+        self.btn_pick.setCursor(Qt.PointingHandCursor)
+        self.btn_pick.setMinimumHeight(36)
+        self.btn_pick.setMinimumWidth(210)
+        self.btn_pick.clicked.connect(self.pick)
+        hb.addWidget(self.btn_pick)
+        hb.addStretch(1)
+        zl.addLayout(hb)
+        zl.addStretch(1)
+        self.zone.dropped.connect(lambda files: self.win.word_fill(files[0]))
+        self.zone.clicked.connect(self.pick)
+        v.addWidget(self.zone, 2)
+        self.lbl_here = QLabel("Документы Word в открытой папке:")
+        self.lbl_here.setObjectName("plain")
+        v.addWidget(self.lbl_here)
+        self.lst_here = QListWidget()
+        self.lst_here.setToolTip("Щелчок — открыть документ в редакторе")
+        self.lst_here.itemClicked.connect(lambda it: self.win.word_fill(it.data(Qt.UserRole)))
+        v.addWidget(self.lst_here, 3)
+        return w
+
+    def pick(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Выберите документ Word для заполнения",
+                                              self.win.current_dir(), "Документ Word (*.docx)")
+        if path:
+            self.win.word_fill(path)
+
+    def show_empty(self, on):
+        """Показать приглашение выбрать документ (on) или сам редактор."""
+        on = bool(on)
+        self.empty.setVisible(on)
+        self.body_w.setVisible(not on)
+        for wdg in (self.b_save, self.lbl_client, self.b_card, self.b_dir):
+            wdg.setVisible(not on)
+        if on:
+            self.zone._paint()
+            self.lbl_doc.setText("")
+            self.lbl_info.setText("Выберите документ — или щёлкните по нему в списке файлов слева и нажмите «Редактор».")
+            self.lst_here.clear()
+            folder = self.win.current_dir()
+            try:
+                names = sorted(n for n in os.listdir(folder) if n.lower().endswith(".docx") and not n.startswith("~$"))
+            except OSError:
+                names = []
+            for n in names:
+                it = QListWidgetItem(n)
+                it.setData(Qt.UserRole, os.path.join(folder, n))
+                self.lst_here.addItem(it)
+            self.lbl_here.setVisible(bool(names))
+            self.lst_here.setVisible(bool(names))
+
+    def dragEnterEvent(self, e):
+        if self.empty.isVisible():
+            self.zone.dragEnterEvent(e)
+
+    def dragLeaveEvent(self, e):
+        self.zone.dragLeaveEvent(e)
+
+    def dropEvent(self, e):
+        if self.empty.isVisible():
+            self.zone.dropEvent(e)
 
     def _say(self, text, warn=False):
         self.lbl_info.setText(("⚠ " if warn else "") + text)
@@ -12115,18 +12212,20 @@ class DropZone(QFrame):
         bg = ("rgba(232,176,75,0.10)" if dark else "rgba(214,154,51,0.10)") if self._hot else "transparent"
         self.setStyleSheet(f"QFrame#dropzone {{ border: 2px dashed {line}; border-radius: 16px; background: {bg}; }}")
 
+    exts = None                      # какие расширения принимать; None — всё, что умеет конвертер
+
     @staticmethod
-    def files_of(mime):
+    def files_of(mime, exts=None):
         out = []
         if mime.hasUrls():
             for u in mime.urls():
                 p = u.toLocalFile()
-                if p and os.path.isfile(p) and os.path.splitext(p)[1].lower() in AI.CONVERT_EXT:
+                if p and os.path.isfile(p) and os.path.splitext(p)[1].lower() in (exts or AI.CONVERT_EXT):
                     out.append(p)
         return out
 
     def dragEnterEvent(self, e):
-        if self.files_of(e.mimeData()):
+        if self.files_of(e.mimeData(), self.exts):
             self._hot = True
             self._paint()
             e.acceptProposedAction()
@@ -12140,7 +12239,7 @@ class DropZone(QFrame):
     def dropEvent(self, e):
         self._hot = False
         self._paint()
-        files = self.files_of(e.mimeData())
+        files = self.files_of(e.mimeData(), self.exts)
         if files:
             e.acceptProposedAction()
             self.dropped.emit(files)
@@ -14105,13 +14204,23 @@ class MainWindow(QMainWindow):
         """Заполнить документ Word: поля, образцы, правка текста — без поломки оформления."""
         if not path:
             cur = str(self.doc_path or "")
-            if cur.endswith(" (из Word)"):
+            pg = getattr(self, "_word_page", None)
+            if cur.endswith(" (из Word)") and cur[:-len(" (из Word)")].lower().endswith(".docx"):
                 path = cur[:-len(" (из Word)")]
-            else:
-                path, _ = QFileDialog.getOpenFileName(self, "Выберите документ Word для заполнения",
-                                                      self.current_dir(), "Документ Word (*.docx)")
-                if not path:
-                    return
+            elif pg is not None and pg.wd is not None and pg.path:
+                path = pg.path                                    # вернуться к документу, с которым работали
+            else:                                                 # раздел открывается сразу; документ выбирают уже в нём
+                if pg is None:
+                    pg = WordFillPage(self)
+                    self._word_page = pg
+                    self.center_stack.addWidget(pg)
+                if self.view.pen_active():
+                    self.pen_finish(commit=True)
+                pg.show_empty(True)
+                self.right_dock.hide()
+                self.left_dock.show()
+                self.center_stack.setCurrentWidget(pg)
+                return
         if not path.lower().endswith(".docx"):
             QMessageBox.information(self, "Заполнение Word",
                                     "Заполнять можно файлы .docx. Откройте этот документ в Word и сохраните "
@@ -14132,6 +14241,7 @@ class MainWindow(QMainWindow):
             self.open_word(path, quiet=True)                 # слева и на странице — тот же документ
         if self.view.pen_active():
             self.pen_finish(commit=True)
+        pg.show_empty(False)
         self.right_dock.hide()
         self.left_dock.hide()
         self.center_stack.setCurrentWidget(pg)
