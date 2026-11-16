@@ -54,6 +54,9 @@ import stamp_cloud as CLOUD
 import stamp_act as ACT
 import stamp_license as LIC
 import stamp_tools as TOOLS
+import stamp_decline as DECL
+from PySide6.QtCore import QMimeData
+from PySide6.QtWidgets import QToolBar, QStackedWidget
 
 PREVIEW_DPI = 150          # DPI отрисовки страницы в редакторе
 EXPORT_STAMP_DPI = 300     # DPI растеризации печати при экспорте
@@ -418,6 +421,18 @@ QToolBar#tools QToolButton:hover { background: #232735; border-color: #e8b04b; }
 QToolBar#tools QToolButton:checked { background: #3a321c; border-color: #e8b04b; }
 QToolBar#tools QToolButton:disabled { background: transparent; border-color: transparent; }
 QToolBar#tools::separator { background: #2a2f3d; height: 1px; margin: 1px 5px; }
+QToolBar#tools[open="true"] QToolButton { min-width: 178px; max-width: 178px; padding: 0 6px; }
+QLabel#stripcap { color: #e8b04b; font-size: 9px; font-weight: bold; padding: 0 7px; }
+QFrame#modebar { background: #232735; border-radius: 9px; }
+QFrame#modebar QToolButton { border: none; border-radius: 7px; padding: 1px 12px; background: transparent; color: #c9cddb; }
+QFrame#modebar QToolButton:hover { color: #e8b04b; }
+QFrame#modebar QToolButton:checked { background: #3a321c; color: #e8b04b; font-weight: bold; }
+QToolButton#corner { border: 1px solid #2e3345; border-radius: 7px; padding: 1px 9px; background: #1b1e27; color: #c9cddb; }
+QToolButton#corner:hover { border-color: #e8b04b; color: #e8b04b; }
+QFrame#zoompill { background: #1b1e27; border: 1px solid #2e3345; border-radius: 11px; }
+QFrame#zoompill QToolButton { border: none; border-radius: 7px; padding: 3px 7px; background: transparent; color: #c9cddb; }
+QFrame#zoompill QToolButton:hover { background: #232735; }
+QFrame#zoompill QLabel { color: #9a968c; padding: 0 6px; background: transparent; }
 QMenuBar { background: #171a22; border-bottom: 1px solid #262b39; padding: 1px 6px; }
 QMenuBar::item { background: transparent; padding: 4px 12px; border-radius: 6px; color: #c9cddb; }
 QMenuBar::item:selected, QMenuBar::item:pressed { background: #2c3145; color: #e8b04b; }
@@ -493,6 +508,18 @@ QToolBar#tools QToolButton:hover { background: #ffffff; border-color: #d69a33; }
 QToolBar#tools QToolButton:checked { background: #fbefd3; border-color: #d69a33; }
 QToolBar#tools QToolButton:disabled { background: transparent; border-color: transparent; }
 QToolBar#tools::separator { background: #e6e1d6; height: 1px; margin: 1px 5px; }
+QToolBar#tools[open="true"] QToolButton { min-width: 178px; max-width: 178px; padding: 0 6px; }
+QLabel#stripcap { color: #96590c; font-size: 9px; font-weight: bold; padding: 0 7px; }
+QFrame#modebar { background: #ece6d9; border-radius: 9px; }
+QFrame#modebar QToolButton { border: none; border-radius: 7px; padding: 1px 12px; background: transparent; color: #4a4337; }
+QFrame#modebar QToolButton:hover { color: #96590c; }
+QFrame#modebar QToolButton:checked { background: #ffffff; color: #96590c; font-weight: bold; }
+QToolButton#corner { border: 1px solid #e4ddcf; border-radius: 7px; padding: 1px 9px; background: #ffffff; color: #2a251e; }
+QToolButton#corner:hover { border-color: #d69a33; }
+QFrame#zoompill { background: #ffffff; border: 1px solid #e4ddcf; border-radius: 11px; }
+QFrame#zoompill QToolButton { border: none; border-radius: 7px; padding: 3px 7px; background: transparent; color: #2a251e; }
+QFrame#zoompill QToolButton:hover { background: #f4ebda; }
+QFrame#zoompill QLabel { color: #6f6657; padding: 0 6px; background: transparent; }
 QMenuBar { background: #fbf9f4; border-bottom: 1px solid #e6e1d6; padding: 1px 6px; }
 QMenuBar::item { background: transparent; padding: 4px 12px; border-radius: 6px; color: #4a4636; }
 QMenuBar::item:selected, QMenuBar::item:pressed { background: #f4e3c2; color: #6b4a00; }
@@ -530,7 +557,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.13.2"
+APP_VERSION = "6.14.0"
 EDITION = "main"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -2118,6 +2145,19 @@ def draw_icon(kind: str, color: str, size: int = 64) -> QIcon:
         p.setBrush(c)
         p.drawEllipse(QPointF(8.0 * u, 8.0 * u), 0.9 * u, 0.9 * u)
         p.setBrush(Qt.NoBrush)
+    elif kind == "copy":
+        rect(5.6, 5.6, 7.8, 7.8, 1.2)
+        line(2.8, 10.2, 2.8, 2.8); line(2.8, 2.8, 10.2, 2.8)
+    elif kind == "insert":
+        line(12.6, 3.4, 12.6, 9.6); line(12.6, 9.6, 3.8, 9.6)
+        fl(6.6, 6.8, 3.8, 9.6, 6.6, 12.4)
+    elif kind == "chev2_right":
+        fl(3.8, 4.4, 7.4, 8, 3.8, 11.6); fl(8.6, 4.4, 12.2, 8, 8.6, 11.6)
+    elif kind == "chev2_left":
+        fl(12.2, 4.4, 8.6, 8, 12.2, 11.6); fl(7.4, 4.4, 3.8, 8, 7.4, 11.6)
+    elif kind == "convert":
+        line(2.6, 5.4, 13.0, 5.4); fl(10.4, 2.8, 13.0, 5.4, 10.4, 8.0)
+        line(13.4, 10.6, 3.0, 10.6); fl(5.6, 8.0, 3.0, 10.6, 5.6, 13.2)
     elif kind == "more":
         p.setBrush(c)
         for cx in (4.0, 8.0, 12.0):
@@ -6491,7 +6531,7 @@ class SettingsDialog(QDialog):
         check(l, "Снимок подписи сразу очищать как фотографию", "photo_auto", True,
               "Когда в «Мои печати» загружают фотографию, а не готовую картинку, галочка «подпись с фото»\n"
               "включается сама: бумага, тени и неровный свет убираются.")
-        button(l, "Открыть инструменты", lambda: (self.reject(), win.open_tools()),
+        button(l, "Открыть инструменты", lambda: (self.reject(), win.show_tools()),
                "Валюты, регистр, сумма прописью, л.с.⇄кВт  (Ctrl+Shift+T)")
         l.addStretch(1)
         # ---- Лицензия
@@ -10754,19 +10794,33 @@ def license_gate() -> bool:
 def _tools_qss(dark: bool) -> str:
     res = "#2a2d1f" if dark else "#fff8e6"
     hint = "#9a968c" if dark else "#8a8474"
-    flash = "#1b7a3d"
+    seg = "#232735" if dark else "#ece6d9"
+    seg_on = "#3a321c" if dark else "#ffffff"
+    gold = "#e8b04b" if dark else "#96590c"
+    text = "#c9cddb" if dark else "#4a4337"
+    line = "#2a2f3d" if dark else "#e6e1d6"
+    hover = "#232735" if dark else "#ffffff"
     return (
-        f"QDialog#tools QLineEdit#toolresult {{ background: {res}; font-weight: 600; }}"
-        f"QDialog#tools QLabel#toolhint {{ color: {hint}; }}"
-        f"QDialog#tools QLabel#toolflash {{ color: {flash}; font-weight: 600; }}"
-        "QDialog#tools QGroupBox[conv=\"#e23b3b\"] { border-left: 3px solid #e23b3b; }"
-        "QDialog#tools QGroupBox[conv=\"#2f6fe2\"] { border-left: 3px solid #2f6fe2; }"
-        "QDialog#tools QGroupBox[conv=\"#d6a400\"] { border-left: 3px solid #d6a400; }"
+        f"#toolspanel QLineEdit#toolresult, #toolspanel QTextEdit#toolresult {{ background: {res}; font-weight: 600; }}"
+        f"#toolspanel QLabel#toolhint {{ color: {hint}; }}"
+        f"#toolspanel QLabel#toolflash {{ color: #1b7a3d; font-weight: 600; }}"
+        f"#toolspanel QLabel#casebadge {{ background: {seg}; color: {gold}; font-weight: 700; border-radius: 6px; }}"
+        "#toolspanel QGroupBox[conv=\"#e23b3b\"] { border-left: 3px solid #e23b3b; }"
+        "#toolspanel QGroupBox[conv=\"#2f6fe2\"] { border-left: 3px solid #2f6fe2; }"
+        "#toolspanel QGroupBox[conv=\"#d6a400\"] { border-left: 3px solid #d6a400; }"
+        "#toolspanel QTabBar::tab { padding: 5px 8px; min-width: 0px; margin-right: 2px; }"
+        f"#toolspanel QToolButton#mini {{ min-width: 28px; max-width: 28px; min-height: 28px; max-height: 28px; "
+        f"padding: 0; border: 1px solid {line}; border-radius: 7px; background: transparent; }}"
+        f"#toolspanel QToolButton#mini:hover {{ background: {hover}; border-color: {gold}; }}"
+        f"#toolspanel QPushButton#seg {{ padding: 4px 10px; border: 1px solid {line}; border-radius: 7px; "
+        f"background: transparent; color: {text}; }}"
+        f"#toolspanel QPushButton#seg:checked {{ background: {seg_on}; color: {gold}; border-color: {gold}; font-weight: 700; }}"
     )
 
 
 # ======================================================================
-#  Окно «Инструменты»: регистр текста, конвертеры валют, сумма прописью, л.с.⇄кВт
+#  «Инструменты»: валюты, регистр, падежи, сумма прописью, л.с.⇄кВт.
+#  Панель сбоку окна (или отдельным окном, если её открепить).
 # ======================================================================
 
 class RatesThread(QThread):
@@ -10783,26 +10837,50 @@ class RatesThread(QThread):
             self.done.emit(None, str(e))
 
 
-class CopyLine(QWidget):
-    """Поле результата с кнопкой «Копировать»."""
+def _tools_owner(widget):
+    """Панель инструментов, в которой лежит виджет."""
+    w = widget
+    while w is not None and not isinstance(w, ToolsPanel):
+        w = w.parentWidget()
+    return w
 
-    def __init__(self, parent=None, placeholder=""):
+
+class CopyLine(QWidget):
+    """Поле результата со значками «копировать» и «вставить в документ»."""
+
+    def __init__(self, parent=None, placeholder="", editable=False):
         super().__init__(parent)
         lay = QHBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(6)
+        lay.setSpacing(5)
         self.out = QLineEdit()
-        self.out.setReadOnly(True)
+        self.out.setReadOnly(not editable)
         self.out.setPlaceholderText(placeholder)
         self.out.setObjectName("toolresult")
+        self.out.setMinimumWidth(60)
         lay.addWidget(self.out, 1)
-        self.btn = QPushButton("Копировать")
-        self.btn.setToolTip("Скопировать результат в буфер обмена")
+        self.btn = QToolButton()
+        self.btn.setObjectName("mini")
+        self.btn.setIconSize(QSize(16, 16))
+        self.btn.setToolTip("Скопировать в буфер обмена")
         self.btn.clicked.connect(self._copy)
         lay.addWidget(self.btn)
+        self.btn_ins = QToolButton()
+        self.btn_ins.setObjectName("mini")
+        self.btn_ins.setIconSize(QSize(16, 16))
+        self.btn_ins.setToolTip("Вставить в документ — туда, где стоит курсор")
+        self.btn_ins.clicked.connect(self._insert)
+        lay.addWidget(self.btn_ins)
+        self.retint()
+
+    def retint(self):
+        col = ui_icon_color()
+        self.btn.setIcon(draw_icon("copy", col))
+        self.btn_ins.setIcon(draw_icon("insert", col))
 
     def set_text(self, t):
         self.out.setText(t)
+        self.out.setCursorPosition(0)
 
     def text(self):
         return self.out.text()
@@ -10811,134 +10889,270 @@ class CopyLine(QWidget):
         t = self.out.text()
         if t:
             QApplication.clipboard().setText(t)
-            win = self.window()
-            if hasattr(win, "flash_copied"):
-                win.flash_copied()
+            own = _tools_owner(self)
+            if own is not None:
+                own.flash_copied()
+
+    def _insert(self):
+        t = self.out.text()
+        own = _tools_owner(self)
+        if t and own is not None:
+            own.insert_text(t)
 
 
-class ToolsDialog(QDialog):
-    """Инструменты для заполнения документов. Окно не перекрывает работу —
-    остаётся поверх и доступно, пока заполняешь ТПО/ПТД."""
+class ToolsPanel(QWidget):
+    """Инструменты для заполнения документов. Стоят сбоку окна и не закрывают документ:
+    выделил число или ФИО в документе — оно уже в панели, значок ↵ вставляет результат обратно."""
+
+    TABS = ("currency", "case", "decline", "words", "power")
 
     def __init__(self, win):
-        super().__init__(win)
+        super().__init__()
         self.win = win
-        self.setObjectName("tools")
-        self.setWindowTitle(f"{APP_TITLE} — инструменты")
-        self.setWindowFlags(Qt.Tool | Qt.WindowCloseButtonHint | Qt.WindowStaysOnTopHint)
-        self.resize(580, 640)
-        self.setMinimumSize(540, 560)
+        self.setObjectName("toolspanel")
         self._rates_thread = None
+        self._amount_target = None
+        self._last_sel = ""
         root = QVBoxLayout(self)
-        root.setContentsMargins(14, 12, 14, 10)
-        root.setSpacing(8)
+        root.setContentsMargins(10, 8, 10, 8)
+        root.setSpacing(6)
+        head = QHBoxLayout()
+        head.setSpacing(4)
+        ttl = QLabel("ИНСТРУМЕНТЫ")
+        ttl.setObjectName("paneltitle")
+        head.addWidget(ttl, 1)
+        self.btn_detach = QToolButton()
+        self.btn_detach.setObjectName("ghost")
+        self.btn_detach.setIconSize(QSize(16, 16))
+        self.btn_detach.setCursor(Qt.PointingHandCursor)
+        self.btn_detach.clicked.connect(lambda: self.win.tools_detach())
+        head.addWidget(self.btn_detach)
+        self.btn_close = QToolButton()
+        self.btn_close.setObjectName("ghost")
+        self.btn_close.setIconSize(QSize(16, 16))
+        self.btn_close.setCursor(Qt.PointingHandCursor)
+        self.btn_close.setToolTip("Убрать панель  (Ctrl+Shift+T)")
+        self.btn_close.clicked.connect(lambda: self.win.tools_close())
+        head.addWidget(self.btn_close)
+        root.addLayout(head)
         self.tabs = QTabWidget()
+        self.tabs.setUsesScrollButtons(False)
+        self.tabs.tabBar().setExpanding(False)
         self.tabs.addTab(self._tab_currency(), "Валюты")
         self.tabs.addTab(self._tab_case(), "Регистр")
-        self.tabs.addTab(self._tab_words(), "Сумма прописью")
-        self.tabs.addTab(self._tab_power(), "Л.с. ⇄ кВт")
+        self.tabs.addTab(self._tab_decline(), "Падежи")
+        self.tabs.addTab(self._tab_words(), "Прописью")
+        self.tabs.addTab(self._tab_power(), "кВт")
+        self.tabs.setTabToolTip(3, "Сумма прописью")
+        self.tabs.setTabToolTip(4, "Лошадиные силы ⇄ киловатты")
+        self.tabs.currentChanged.connect(self._tab_changed)
         root.addWidget(self.tabs, 1)
+        self.chk_sel = QCheckBox("Брать выделенное в документе")
+        self.chk_sel.setToolTip("Выделите в редакторе Word число, ФИО или слово — оно само попадёт в открытую вкладку")
+        self.chk_sel.setChecked(bool(settings_load().get("tools_take_selection", True)))
+        self.chk_sel.toggled.connect(self._sel_toggled)
+        root.addWidget(self.chk_sel)
         self.lbl_flash = QLabel("")
         self.lbl_flash.setObjectName("toolflash")
         self.lbl_flash.setAlignment(Qt.AlignCenter)
-        self.lbl_flash.setFixedHeight(18)
+        self.lbl_flash.setFixedHeight(16)
         root.addWidget(self.lbl_flash)
         self._flash_timer = QTimer(self)
         self._flash_timer.setSingleShot(True)
         self._flash_timer.timeout.connect(lambda: self.lbl_flash.setText(""))
-        self.setStyleSheet(_tools_qss(settings_load().get('theme') == 'dark'))
+        self._sel_timer = QTimer(self)
+        self._sel_timer.setInterval(350)
+        self._sel_timer.timeout.connect(self._poll_selection)
+        self.retheme()
+
+    # ---------------------------------------------------------- общее
+    def retheme(self):
+        self.setStyleSheet(_tools_qss(settings_load().get("theme") == "dark"))
+        col = ui_icon_color()
+        self.btn_close.setIcon(draw_icon("close", col))
+        self.btn_detach.setIcon(draw_icon("external", col))
+        self.btn_rates.setIcon(draw_icon("refresh", col))
+        for cl in self.findChildren(CopyLine):
+            cl.retint()
+        self.set_detached(getattr(self, "_detached", False))
+
+    def set_detached(self, on):
+        self._detached = bool(on)
+        self.btn_detach.setToolTip("Вернуть панель в окно программы" if on
+                                   else "Открепить: инструменты отдельным окном поверх остальных")
+        QTimer.singleShot(0, self._case_place)
+
+    def flash(self, text):
+        self.lbl_flash.setText(text)
+        self._flash_timer.start(1600)
 
     def flash_copied(self):
-        self.lbl_flash.setText("Скопировано в буфер обмена")
-        self._flash_timer.start(1600)
+        self.flash("Скопировано в буфер обмена")
+
+    def insert_text(self, text):
+        if self.win.tools_insert(text):
+            self.flash("Вставлено в документ")
+        else:
+            self.flash("Сначала щёлкните в документе или в поле")
+
+    def showEvent(self, e):
+        super().showEvent(e)
+        self._sel_timer.start()
+        if not getattr(self, "_rates_asked", False):     # курс берётся сам при первом открытии
+            self._rates_asked = True
+            if not any(ed.text().strip() for ed in self.rate.values()):
+                QTimer.singleShot(200, self.load_rates)
+
+    def hideEvent(self, e):
+        super().hideEvent(e)
+        self._sel_timer.stop()
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self._case_place()
+
+    def eventFilter(self, obj, ev):
+        if ev.type() == QEvent.FocusIn and obj in [ed for ed, _o in self.conv.values()]:
+            self._amount_target = obj
+        return False
+
+    def _sel_toggled(self, on):
+        st = settings_load()
+        st["tools_take_selection"] = bool(on)
+        settings_save(st)
+
+    def _tab_changed(self, *_):
+        self._last_sel = ""                      # на новой вкладке то же выделение пригодится заново
+
+    def take_text(self, text):
+        """Положить текст из документа в открытую вкладку. True — если взяли."""
+        text = " ".join(str(text or "").replace(" ", " ").split())
+        if not text or len(text) > 300:
+            return False
+        key = self.TABS[self.tabs.currentIndex()]
+        is_num = TOOLS._num(text) is not None
+        if key == "currency" and is_num:
+            ed = self._amount_target or self.conv["rub_eur"][0]
+            ed.setText(text)
+        elif key == "case":
+            self.case_in.setPlainText(text)
+        elif key == "decline" and not is_num:
+            self.decl_in.setText(text)
+        elif key == "words" and is_num:
+            self.words_in.setText(text)
+        elif key == "power" and is_num:
+            self.hp_in.setText(text)
+        else:
+            return False
+        return True
+
+    def _poll_selection(self):
+        if not self.chk_sel.isChecked():
+            return
+        text = self.win.tools_selected_text()
+        if text == self._last_sel:
+            return
+        self._last_sel = text
+        if text:
+            self.take_text(text)
 
     # ---------------------------------------------------------- Валюты
     def _tab_currency(self):
         w = QWidget()
         v = QVBoxLayout(w)
-        v.setSpacing(8)
+        v.setContentsMargins(4, 6, 4, 4)
+        v.setSpacing(7)
         box = QGroupBox("Курсы")
         g = QGridLayout(box)
-        g.setHorizontalSpacing(8)
-        g.setVerticalSpacing(6)
-        g.addWidget(QLabel("Откуда:"), 0, 0)
+        g.setContentsMargins(10, 2, 10, 8)
+        g.setHorizontalSpacing(6)
+        g.setVerticalSpacing(3)
         self.cmb_src = QComboBox()
         self.cmb_src.addItem("Google — как в поиске", "google")
-        self.cmb_src.addItem("Нацбанк РБ — официальный, на дату", "nbrb")
+        self.cmb_src.addItem("Нацбанк РБ — на дату", "nbrb")
         self.cmb_src.setCurrentIndex(1 if settings_load().get("rates_source") == "nbrb" else 0)
+        self.cmb_src.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.cmb_src.setMinimumContentsLength(10)
         self.cmb_src.currentIndexChanged.connect(self._src_changed)
-        g.addWidget(self.cmb_src, 0, 1, 1, 3)
+        g.addWidget(self.cmb_src, 0, 0, 1, 2)
+        self.btn_rates = QToolButton()
+        self.btn_rates.setObjectName("mini")
+        self.btn_rates.setIconSize(QSize(16, 16))
+        self.btn_rates.setToolTip("Обновить курс — взять свежий из выбранного источника")
+        self.btn_rates.clicked.connect(self.load_rates)
+        g.addWidget(self.btn_rates, 0, 2, Qt.AlignRight)
         self.lbl_date = QLabel("На дату:")
         g.addWidget(self.lbl_date, 1, 0)
         self.date = QDateEdit()
         self.date.setCalendarPopup(True)
         self.date.setDisplayFormat("dd.MM.yyyy")
         self.date.setDate(QDate.currentDate())
-        self.date.setMaximumWidth(130)
-        g.addWidget(self.date, 1, 1)
-        self.btn_rates = QPushButton("Обновить курс")
-        self.btn_rates.setToolTip("Взять свежий курс из выбранного источника")
-        self.btn_rates.clicked.connect(self.load_rates)
-        g.addWidget(self.btn_rates, 1, 2)
-        self.lbl_rates = QLabel("курс не загружен — нажмите «Обновить курс» или впишите вручную")
+        g.addWidget(self.date, 1, 1, 1, 2)
+        self.rate = {}
+        for col, (key, cap) in enumerate((("eur_byn", "1 € в Br"), ("rub_byn", "100 ₽ в Br"), ("rub_eur", "100 ₽ в €"))):
+            lab = QLabel(cap)
+            lab.setObjectName("toolhint")
+            g.addWidget(lab, 2, col)
+            ed = QLineEdit()
+            ed.setMinimumWidth(50)
+            ed.setToolTip("Курс можно вписать вручную — считается по тому, что написано здесь")
+            ed.textChanged.connect(self._recalc_currency)
+            g.addWidget(ed, 3, col)
+            self.rate[key] = ed
+        self.lbl_rates = QLabel("курс не загружен — впишите вручную")
         self.lbl_rates.setObjectName("toolhint")
         self.lbl_rates.setWordWrap(True)
         self.lbl_rates.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-        g.addWidget(self.lbl_rates, 3, 0, 1, 4)
-        rrow = QHBoxLayout()
-        rrow.setSpacing(6)
-        self.rate = {}
-        for key, cap, ph in (("eur_byn", "1 € =", "Br"), ("rub_byn", "100 ₽ =", "Br"), ("rub_eur", "100 ₽ =", "€")):
-            rrow.addWidget(QLabel(cap))
-            ed = QLineEdit()
-            ed.setMinimumWidth(58)
-            ed.setToolTip("Курс можно вписать вручную")
-            ed.textChanged.connect(self._recalc_currency)
-            rrow.addWidget(ed, 1)
-            rrow.addWidget(QLabel(ph))
-            self.rate[key] = ed
-        g.addLayout(rrow, 2, 0, 1, 4)
-        g.setColumnStretch(3, 1)
+        g.addWidget(self.lbl_rates, 4, 0, 1, 3)
+        for col in range(3):
+            g.setColumnStretch(col, 1)
         v.addWidget(box)
         self._src_changed()
 
         self.conv = {}
-        for key, title, color, src_cap in (
+        for key, title, color, ph in (
                 ("rub_eur", "RUB → EUR", "#e23b3b", "сумма, ₽"),
                 ("eur_byn", "EUR → BYN", "#2f6fe2", "сумма, €"),
                 ("rub_byn", "RUB → BYN", "#d6a400", "сумма, ₽")):
             box = QGroupBox(title)
             box.setProperty("conv", color)
-            gv = QVBoxLayout(box)
-            gv.setSpacing(5)
-            row = QHBoxLayout()
-            row.addWidget(QLabel(src_cap + ":"))
+            row = QHBoxLayout(box)
+            row.setContentsMargins(10, 2, 10, 8)
+            row.setSpacing(5)
             ed = QLineEdit()
-            ed.setPlaceholderText("14587.54")
+            ed.setPlaceholderText(ph)
+            ed.setToolTip("Сумма. Выделите число в документе — оно попадёт в то поле, где вы были последним")
             ed.textChanged.connect(self._recalc_currency)
-            row.addWidget(ed, 1)
-            gv.addLayout(row)
+            ed.installEventFilter(self)
+            row.addWidget(ed, 4)
+            eq = QLabel("=")
+            eq.setObjectName("toolhint")
+            row.addWidget(eq)
             out = CopyLine(placeholder="результат")
-            gv.addWidget(out)
+            row.addWidget(out, 7)
             v.addWidget(box)
             self.conv[key] = (ed, out)
 
-        box = QGroupBox("Процент (п. 18, розовое): жёлтое ÷ синее")
+        box = QGroupBox("Процент: жёлтое ÷ синее")
         g = QGridLayout(box)
-        g.addWidget(QLabel("Жёлтое (RUB→BYN):"), 0, 0)
+        g.setContentsMargins(10, 2, 10, 8)
+        g.setHorizontalSpacing(6)
+        g.setVerticalSpacing(3)
+        for col, cap in enumerate(("жёлтое (RUB→BYN)", "синее (EUR→BYN)")):
+            lab = QLabel(cap)
+            lab.setObjectName("toolhint")
+            g.addWidget(lab, 0, col)
         self.pct_part = QLineEdit()
-        self.pct_part.setPlaceholderText("21090.50")
         self.pct_part.textChanged.connect(self._recalc_currency)
         self.pct_part.textEdited.connect(self._pct_manual)
-        g.addWidget(self.pct_part, 0, 1)
-        g.addWidget(QLabel("Синее (EUR→BYN):"), 1, 0)
+        g.addWidget(self.pct_part, 1, 0)
         self.pct_whole = QLineEdit()
-        self.pct_whole.setPlaceholderText("49482.39")
         self.pct_whole.textChanged.connect(self._recalc_currency)
         self.pct_whole.textEdited.connect(self._pct_manual)
         g.addWidget(self.pct_whole, 1, 1)
         self.pct_out = CopyLine(placeholder="%")
         g.addWidget(self.pct_out, 2, 0, 1, 2)
+        g.setColumnStretch(0, 1)
         g.setColumnStretch(1, 1)
         v.addWidget(box)
 
@@ -10957,8 +11171,8 @@ class ToolsDialog(QDialog):
 
     def _src_changed(self, *_):
         nb = self.cmb_src.currentData() == "nbrb"
-        self.date.setEnabled(nb)                    # Google показывает только сегодняшний курс
-        self.lbl_date.setEnabled(nb)
+        self.date.setVisible(nb)                    # Google показывает только сегодняшний курс
+        self.lbl_date.setVisible(nb)
         st = settings_load()
         if st.get("rates_source", "google") != self.cmb_src.currentData():
             st["rates_source"] = self.cmb_src.currentData()
@@ -10981,9 +11195,10 @@ class ToolsDialog(QDialog):
             self.lbl_rates.setText("не получилось взять курс — впишите вручную")
             self.lbl_rates.setToolTip(err)
             return
-        self.rate["eur_byn"].setText(TOOLS.fmt_plain(rates["eur_byn"], 4))
-        self.rate["rub_byn"].setText(TOOLS.fmt_plain(rates["rub_byn"] * 100, 4))
-        self.rate["rub_eur"].setText(TOOLS.fmt_plain(rates["rub_eur"] * 100, 4))
+        # курс приводится к сотым — как его пишут в документах; расчёт идёт по показанному числу
+        self.rate["eur_byn"].setText(TOOLS.fmt_plain(rates["eur_byn"], 2))
+        self.rate["rub_byn"].setText(TOOLS.fmt_plain(rates["rub_byn"] * 100, 2))
+        self.rate["rub_eur"].setText(TOOLS.fmt_plain(rates["rub_eur"] * 100, 2))
         self.lbl_rates.setText(f"{rates['source']}, {rates['date']}")
         self.lbl_rates.setToolTip("")
         self._recalc_currency()
@@ -11015,40 +11230,304 @@ class ToolsDialog(QDialog):
     # ---------------------------------------------------------- Регистр
     def _tab_case(self):
         w = QWidget()
+        self._case_tab = w
         v = QVBoxLayout(w)
-        v.setSpacing(8)
-        v.addWidget(QLabel("Вставьте текст — ниже сразу все варианты регистра, рядом «Копировать»."))
+        v.setContentsMargins(4, 6, 4, 4)
+        v.setSpacing(7)
+        top = QHBoxLayout()
+        top.setSpacing(4)
+        lab = QLabel("Текст")
+        top.addWidget(lab, 1)
+        self.case_view = "pair" if settings_load().get("case_view") == "pair" else "list"
+        self.btn_case_list = QPushButton("Список")
+        self.btn_case_pair = QPushButton("Две панели")
+        for b, key, tip in ((self.btn_case_list, "list", "Все варианты регистра сразу, у каждого свои значки"),
+                            (self.btn_case_pair, "pair", "Слева текст, справа результат; вариант выбирается кнопкой")):
+            b.setObjectName("seg")
+            b.setCheckable(True)
+            b.setCursor(Qt.PointingHandCursor)
+            b.setToolTip(tip)
+            b.clicked.connect(lambda _=False, k=key: self.set_case_view(k))
+            top.addWidget(b)
+        v.addLayout(top)
+        self.case_grid = QGridLayout()
+        self.case_grid.setHorizontalSpacing(8)
+        self.case_grid.setVerticalSpacing(7)
+        v.addLayout(self.case_grid, 1)
+
         self.case_in = QTextEdit()
         self.case_in.setAcceptRichText(False)
         self.case_in.setPlaceholderText("молчанов дмитрий анатольевич")
-        self.case_in.setFixedHeight(70)
         self.case_in.textChanged.connect(self._recalc_case)
-        v.addWidget(self.case_in)
+
+        # вид «Список»
+        self.case_list = QWidget()
+        lv = QVBoxLayout(self.case_list)
+        lv.setContentsMargins(0, 0, 0, 0)
+        lv.setSpacing(4)
         self.case_out = {}
         for mode, title, _fn in TOOLS.CASE_MODES:
-            box = QGroupBox(title)
-            h = QVBoxLayout(box)
-            h.setContentsMargins(8, 4, 8, 6)
+            cap = QLabel(title)
+            cap.setObjectName("toolhint")
+            lv.addWidget(cap)
             out = CopyLine()
-            h.addWidget(out)
-            v.addWidget(box)
+            lv.addWidget(out)
             self.case_out[mode] = out
-        v.addStretch(1)
+        lv.addStretch(1)
+
+        # вид «Две панели»
+        self.case_modes = QWidget()
+        mg = QGridLayout(self.case_modes)
+        mg.setContentsMargins(0, 0, 0, 0)
+        mg.setSpacing(5)
+        self.case_mode = settings_load().get("case_mode") or "upper"
+        if self.case_mode not in [m for m, _t, _f in TOOLS.CASE_MODES]:
+            self.case_mode = "upper"
+        self.case_btn = {}
+        for n, (mode, title, _fn) in enumerate(TOOLS.CASE_MODES):
+            b = QPushButton(title)
+            b.setObjectName("seg")
+            b.setCheckable(True)
+            b.setCursor(Qt.PointingHandCursor)
+            b.clicked.connect(lambda _=False, m=mode: self.set_case_mode(m))
+            last_odd = n == len(TOOLS.CASE_MODES) - 1 and n % 2 == 0
+            mg.addWidget(b, n // 2, n % 2, 1, 2 if last_odd else 1)
+            self.case_btn[mode] = b
+        self.case_res = QTextEdit()
+        self.case_res.setReadOnly(True)
+        self.case_res.setObjectName("toolresult")
+        self.case_res.setPlaceholderText("результат")
+        self.case_actions = QWidget()
+        ah = QHBoxLayout(self.case_actions)
+        ah.setContentsMargins(0, 0, 0, 0)
+        ah.setSpacing(5)
+        b = QPushButton("Копировать")
+        b.clicked.connect(self._case_copy)
+        ah.addWidget(b, 1)
+        b = QPushButton("В документ")
+        b.setToolTip("Вставить результат в документ — туда, где стоит курсор")
+        b.clicked.connect(lambda: self.insert_text(self.case_res.toPlainText()) if self.case_res.toPlainText() else None)
+        ah.addWidget(b, 1)
+        b = QPushButton("Очистить")
+        b.clicked.connect(self.case_in.clear)
+        ah.addWidget(b)
+        self.lbl_case_count = QLabel("")
+        self.lbl_case_count.setObjectName("toolhint")
+        self._case_wide = None
+        self._case_place(force=True)
         return w
 
+    def set_case_view(self, key):
+        self.case_view = "pair" if key == "pair" else "list"
+        st = settings_load()
+        if st.get("case_view") != self.case_view:
+            st["case_view"] = self.case_view
+            settings_save(st)
+        self._case_place(force=True)
+
+    def set_case_mode(self, mode):
+        self.case_mode = mode
+        st = settings_load()
+        if st.get("case_mode") != mode:
+            st["case_mode"] = mode
+            settings_save(st)
+        self._recalc_case()
+
+    def _case_place(self, force=False):
+        """Разложить вкладку «Регистр»: список; две панели друг над другом; в широком окне — рядом."""
+        if not hasattr(self, "case_actions"):
+            return
+        wide = self.case_view == "pair" and self.width() >= 620
+        state = (self.case_view, wide)
+        if not force and state == self._case_wide:
+            return
+        self._case_wide = state
+        g = self.case_grid
+        parts = (self.case_in, self.case_list, self.case_modes, self.case_res, self.case_actions, self.lbl_case_count)
+        for wdg in parts:
+            g.removeWidget(wdg)
+        pair = self.case_view == "pair"
+        self.btn_case_list.setChecked(not pair)
+        self.btn_case_pair.setChecked(pair)
+        for r in range(6):
+            g.setRowStretch(r, 0)
+        if not pair:
+            self.case_in.setFixedHeight(70)
+            g.addWidget(self.case_in, 0, 0, 1, 2)
+            g.addWidget(self.case_list, 1, 0, 1, 2)
+            g.setRowStretch(1, 1)
+        elif wide:
+            self.case_in.setMinimumHeight(120)
+            self.case_in.setMaximumHeight(16777215)
+            g.addWidget(self.case_in, 0, 0)
+            g.addWidget(self.case_res, 0, 1)
+            g.addWidget(self.case_modes, 1, 0, 1, 2)
+            g.addWidget(self.case_actions, 2, 0, 1, 2)
+            g.addWidget(self.lbl_case_count, 3, 0, 1, 2)
+            g.setRowStretch(0, 1)
+        else:
+            self.case_in.setMinimumHeight(90)
+            self.case_in.setMaximumHeight(16777215)
+            g.addWidget(self.case_in, 0, 0, 1, 2)
+            g.addWidget(self.case_modes, 1, 0, 1, 2)
+            g.addWidget(self.case_res, 2, 0, 1, 2)
+            g.addWidget(self.case_actions, 3, 0, 1, 2)
+            g.addWidget(self.lbl_case_count, 4, 0, 1, 2)
+            g.setRowStretch(0, 1)
+            g.setRowStretch(2, 1)
+        for wdg in (self.case_modes, self.case_res, self.case_actions, self.lbl_case_count):
+            wdg.setVisible(pair)
+        self.case_list.setVisible(not pair)
+        self.case_in.setVisible(True)
+        self._recalc_case()
+
+    def _case_copy(self):
+        t = self.case_res.toPlainText()
+        if t:
+            QApplication.clipboard().setText(t)
+            self.flash_copied()
+
     def _recalc_case(self):
+        if not hasattr(self, "lbl_case_count"):
+            return
         text = self.case_in.toPlainText()
         for mode, _title, fn in TOOLS.CASE_MODES:
             self.case_out[mode].set_text(fn(text))
+            self.case_btn[mode].setChecked(mode == self.case_mode)
+            if mode == self.case_mode:
+                self.case_res.setPlainText(fn(text))
+        self.lbl_case_count.setText(f"Знаков: {len(text)}")
+
+    # ---------------------------------------------------------- Падежи
+    def _tab_decline(self):
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setContentsMargins(4, 6, 4, 4)
+        v.setSpacing(6)
+        v.addWidget(QLabel("ФИО, должность или слово в именительном падеже"))
+        self.decl_in = QLineEdit()
+        self.decl_in.setPlaceholderText("Жидяева Алла Павловна")
+        self.decl_in.setClearButtonEnabled(True)
+        self.decl_in.textChanged.connect(self._recalc_decline)
+        v.addWidget(self.decl_in)
+        row = QHBoxLayout()
+        row.setSpacing(6)
+        lab = QLabel("Род:")
+        lab.setObjectName("toolhint")
+        row.addWidget(lab)
+        self.decl_gender = QComboBox()
+        for code, name in DECL.GENDERS:
+            self.decl_gender.addItem(name, code)
+        self.decl_gender.setToolTip("Род определяется по отчеству или имени. Если не угадан "
+                                    "(например, фамилия с инициалами) — выберите сами")
+        self.decl_gender.currentIndexChanged.connect(self._recalc_decline)
+        row.addWidget(self.decl_gender)
+        self.lbl_decl = QLabel("")
+        self.lbl_decl.setObjectName("toolhint")
+        self.lbl_decl.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        row.addWidget(self.lbl_decl, 1)
+        v.addLayout(row)
+        self.decl_out = {}
+        self.decl_pre = None
+        self._decl_auto = {}
+        g = QGridLayout()
+        g.setHorizontalSpacing(7)
+        g.setVerticalSpacing(1)
+        for n, (case, letter, question, name) in enumerate(DECL.CASES):
+            badge = QLabel(letter)
+            badge.setObjectName("casebadge")
+            badge.setAlignment(Qt.AlignCenter)
+            badge.setFixedSize(24, 24)
+            badge.setToolTip(name.capitalize() + " падеж")
+            g.addWidget(badge, n * 2 + 1, 0)
+            q = QLabel(question)
+            q.setObjectName("toolhint")
+            g.addWidget(q, n * 2, 1)
+            out = CopyLine(editable=(case != "nomn"))
+            out.out.setToolTip("Строку можно поправить руками — исправление запомнится для этого ФИО или слова")
+            out.out.editingFinished.connect(lambda c=case: self._decl_fixed(c))
+            if case == "loct":
+                hold = QHBoxLayout()
+                hold.setSpacing(5)
+                self.decl_pre = QLabel("о")
+                self.decl_pre.setObjectName("toolhint")
+                self.decl_pre.setToolTip("Предлог не копируется — только само слово")
+                hold.addWidget(self.decl_pre)
+                hold.addWidget(out, 1)
+                g.addLayout(hold, n * 2 + 1, 1)
+            else:
+                g.addWidget(out, n * 2 + 1, 1)
+            self.decl_out[case] = out
+        g.setColumnStretch(1, 1)
+        v.addLayout(g)
+        v.addStretch(1)
+        sc = QScrollArea()
+        sc.setWidgetResizable(True)
+        sc.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        sc.setFrameShape(QFrame.NoFrame)
+        sc.setWidget(w)
+        return sc
+
+    def _decl_key(self):
+        return " ".join(self.decl_in.text().split()).lower() + "|" + (self.decl_gender.currentData() or "")
+
+    def _recalc_decline(self, *_):
+        text = self.decl_in.text()
+        res = DECL.decline(text, self.decl_gender.currentData() or "")
+        fixes = (settings_load().get("decline_fixes") or {}).get(self._decl_key(), {})
+        self._decl_auto = dict(res["forms"])
+        for case, out in self.decl_out.items():
+            out.set_text(fixes.get(case) or res["forms"][case])
+        if self.decl_pre is not None:
+            self.decl_pre.setText(DECL.about_prefix(self.decl_out["loct"].text()))
+        if not text.strip():
+            self.lbl_decl.setText("")
+        elif not res["ok"]:
+            self.lbl_decl.setText("не склоняется — поправьте строки вручную")
+        elif not self.decl_gender.currentData() and res["gender"]:
+            self.lbl_decl.setText("определён: " + ("мужской" if res["gender"] == "m" else "женский"))
+        elif not self.decl_gender.currentData() and res["fio"]:
+            self.lbl_decl.setText("род не определён — выберите")
+        else:
+            self.lbl_decl.setText("")
+
+    def _decl_fixed(self, case):
+        """Поправленную руками строку запомнить для этого слова."""
+        out = self.decl_out[case]
+        text = out.text().strip()
+        key = self._decl_key()
+        if not self.decl_in.text().strip():
+            return
+        st = settings_load()
+        fixes = dict(st.get("decline_fixes") or {})
+        own = dict(fixes.get(key) or {})
+        if text and text != self._decl_auto.get(case, ""):
+            if own.get(case) == text:
+                return
+            own[case] = text
+        elif case in own:
+            del own[case]
+        else:
+            return
+        if own:
+            fixes[key] = own
+        else:
+            fixes.pop(key, None)
+        st["decline_fixes"] = fixes
+        settings_save(st)
+        if self.decl_pre is not None:
+            self.decl_pre.setText(DECL.about_prefix(self.decl_out["loct"].text()))
 
     # ---------------------------------------------------------- Сумма прописью
     def _tab_words(self):
         w = QWidget()
         v = QVBoxLayout(w)
-        v.setSpacing(8)
-        v.addWidget(QLabel("Сумма цифрами — пропись для договоров, счетов и актов."))
+        v.setContentsMargins(4, 6, 4, 4)
+        v.setSpacing(7)
+        lab = QLabel("Сумма цифрами — пропись для договоров, счетов и актов.")
+        lab.setWordWrap(True)
+        v.addWidget(lab)
         row = QHBoxLayout()
-        row.addWidget(QLabel("Сумма:"))
         self.words_in = QLineEdit()
         self.words_in.setPlaceholderText("49482,39")
         self.words_in.textChanged.connect(self._recalc_words)
@@ -11059,48 +11538,381 @@ class ToolsDialog(QDialog):
         self.words_cur.currentIndexChanged.connect(self._recalc_words)
         row.addWidget(self.words_cur)
         v.addLayout(row)
-        box = QGroupBox("Прописью")
-        h = QVBoxLayout(box)
+        self.words_text = QTextEdit()
+        self.words_text.setReadOnly(True)
+        self.words_text.setObjectName("toolresult")
+        self.words_text.setPlaceholderText("сумма прописью")
+        self.words_text.setFixedHeight(84)
+        v.addWidget(self.words_text)
         self.words_out = CopyLine(placeholder="сумма прописью")
-        h.addWidget(self.words_out)
-        v.addWidget(box)
+        self.words_out.out.hide()
+        hold = QHBoxLayout()
+        hold.addStretch(1)
+        hold.addWidget(self.words_out)
+        v.addLayout(hold)
         v.addStretch(1)
         return w
 
     def _recalc_words(self):
-        self.words_out.set_text(TOOLS.rub_in_words(self.words_in.text(), self.words_cur.currentData()))
+        t = TOOLS.rub_in_words(self.words_in.text(), self.words_cur.currentData())
+        self.words_out.set_text(t)
+        self.words_text.setPlainText(t)
 
     # ---------------------------------------------------------- Л.с. ⇄ кВт
     def _tab_power(self):
         w = QWidget()
         v = QVBoxLayout(w)
-        v.setSpacing(8)
-        v.addWidget(QLabel("Мощность двигателя для документов (1 л.с. = 0,7355 кВт)."))
+        v.setContentsMargins(4, 6, 4, 4)
+        v.setSpacing(7)
+        lab = QLabel("Мощность двигателя для документов (1 л.с. = 0,7355 кВт).")
+        lab.setWordWrap(True)
+        v.addWidget(lab)
         box = QGroupBox("Лошадиные силы → киловатты")
-        g = QGridLayout(box)
-        g.addWidget(QLabel("л.с.:"), 0, 0)
+        row = QHBoxLayout(box)
+        row.setSpacing(5)
         self.hp_in = QLineEdit()
-        self.hp_in.setPlaceholderText("249")
+        self.hp_in.setPlaceholderText("л.с.")
         self.hp_in.textChanged.connect(lambda: self.hp_out.set_text(TOOLS.hp_to_kw(self.hp_in.text())))
-        g.addWidget(self.hp_in, 0, 1)
+        row.addWidget(self.hp_in, 4)
+        eq = QLabel("=")
+        eq.setObjectName("toolhint")
+        row.addWidget(eq)
         self.hp_out = CopyLine(placeholder="кВт")
-        g.addWidget(self.hp_out, 1, 0, 1, 2)
-        g.setColumnStretch(1, 1)
+        row.addWidget(self.hp_out, 7)
         v.addWidget(box)
         box = QGroupBox("Киловатты → лошадиные силы")
-        g = QGridLayout(box)
-        g.addWidget(QLabel("кВт:"), 0, 0)
+        row = QHBoxLayout(box)
+        row.setSpacing(5)
         self.kw_in = QLineEdit()
-        self.kw_in.setPlaceholderText("183.14")
+        self.kw_in.setPlaceholderText("кВт")
         self.kw_in.textChanged.connect(lambda: self.kw_out.set_text(TOOLS.kw_to_hp(self.kw_in.text())))
-        g.addWidget(self.kw_in, 0, 1)
+        row.addWidget(self.kw_in, 4)
+        eq = QLabel("=")
+        eq.setObjectName("toolhint")
+        row.addWidget(eq)
         self.kw_out = CopyLine(placeholder="л.с.")
-        g.addWidget(self.kw_out, 1, 0, 1, 2)
-        g.setColumnStretch(1, 1)
+        row.addWidget(self.kw_out, 7)
         v.addWidget(box)
         v.addStretch(1)
         return w
 
+
+ToolsDialog = ToolsPanel                 # прежнее имя — для совместимости
+
+
+class ToolsWindow(QDialog):
+    """Открепленные инструменты: отдельное окно поверх остальных."""
+
+    def __init__(self, win):
+        super().__init__(win)
+        self.win = win
+        self.setWindowTitle(f"{APP_TITLE} — инструменты")
+        self.setWindowFlags(Qt.Tool | Qt.WindowCloseButtonHint | Qt.WindowStaysOnTopHint)
+        self.resize(700, 640)
+        self.setMinimumSize(380, 520)
+        self.lay = QVBoxLayout(self)
+        self.lay.setContentsMargins(0, 0, 0, 0)
+
+    def closeEvent(self, e):
+        e.accept()                                # закрыли крестиком — окно просто прячется
+
+
+# ======================================================================
+#  Конвертер: Word → PDF и PDF → Word, без метаданных
+# ======================================================================
+
+class FileConvertThread(QThread):
+    one = Signal(int, str, str, str)             # (номер, результат, чем, ошибка)
+
+    def __init__(self, jobs, strip_meta, method, parent=None):
+        super().__init__(parent)
+        self.jobs, self.strip_meta, self.method = list(jobs), strip_meta, method
+
+    def run(self):
+        for n, src in self.jobs:
+            try:
+                out, how = AI.convert_file(src, self.strip_meta, self.method)
+                self.one.emit(n, out, how, "")
+            except Exception as e:
+                self.one.emit(n, "", "", str(e) or type(e).__name__)
+
+
+class DropZone(QFrame):
+    """Поле, куда бросают файлы."""
+    dropped = Signal(list)
+    clicked = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("dropzone")
+        self.setAcceptDrops(True)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setMinimumHeight(170)
+        self._hot = False
+        self._paint()
+
+    def _paint(self):
+        dark = settings_load().get("theme") == "dark"
+        gold = "#e8b04b" if dark else "#c08a1e"
+        line = gold if self._hot else ("#3a4052" if dark else "#cfc7b6")
+        bg = ("rgba(232,176,75,0.10)" if dark else "rgba(214,154,51,0.10)") if self._hot else "transparent"
+        self.setStyleSheet(f"QFrame#dropzone {{ border: 2px dashed {line}; border-radius: 16px; background: {bg}; }}")
+
+    @staticmethod
+    def files_of(mime):
+        out = []
+        if mime.hasUrls():
+            for u in mime.urls():
+                p = u.toLocalFile()
+                if p and os.path.isfile(p) and os.path.splitext(p)[1].lower() in AI.CONVERT_EXT:
+                    out.append(p)
+        return out
+
+    def dragEnterEvent(self, e):
+        if self.files_of(e.mimeData()):
+            self._hot = True
+            self._paint()
+            e.acceptProposedAction()
+        else:
+            e.ignore()
+
+    def dragLeaveEvent(self, e):
+        self._hot = False
+        self._paint()
+
+    def dropEvent(self, e):
+        self._hot = False
+        self._paint()
+        files = self.files_of(e.mimeData())
+        if files:
+            e.acceptProposedAction()
+            self.dropped.emit(files)
+
+    def mouseReleaseEvent(self, e):
+        if e.button() == Qt.LeftButton and self.rect().contains(e.position().toPoint()):
+            self.clicked.emit()
+
+
+class ConvertPage(QDialog):
+    """Конвертер внутри главного окна: бросили файл Word — получили PDF, бросили PDF — получили Word.
+    Результат ложится рядом с исходным файлом, метаданные вычищаются."""
+
+    def __init__(self, win):
+        super().__init__(win)
+        self.win = win
+        self.setWindowFlags(Qt.Widget)
+        self.setObjectName("aipage")
+        self.setAcceptDrops(True)
+        self._thread = None
+        self._queue = []
+        self.items = []                          # [{src, out, state}]
+        root = QVBoxLayout(self)
+        root.setContentsMargins(16, 10, 16, 10)
+        root.setSpacing(10)
+        head = QHBoxLayout()
+        head.setSpacing(10)
+        b_back = QPushButton(" К документу")
+        b_back.setIcon(draw_icon("back", win._icon_color()))
+        b_back.setIconSize(QSize(16, 16))
+        b_back.setCursor(Qt.PointingHandCursor)
+        b_back.setToolTip("Вернуться к странице документа (Esc)")
+        b_back.clicked.connect(lambda: win.ai_mode(False))
+        win._themed_buttons.append((b_back, "back", False))
+        head.addWidget(b_back)
+        ttl = QLabel("КОНВЕРТЕР  WORD ⇄ PDF")
+        ttl.setObjectName("paneltitle")
+        head.addWidget(ttl)
+        head.addStretch(1)
+        root.addLayout(head)
+
+        self.zone = DropZone()
+        zl = QVBoxLayout(self.zone)
+        zl.setContentsMargins(20, 18, 20, 18)
+        zl.setSpacing(8)
+        zl.addStretch(1)
+        self.lbl_big = QLabel("Перетащите сюда файлы Word или PDF")
+        f = self.lbl_big.font()
+        f.setPointSize(f.pointSize() + 5)
+        f.setBold(True)
+        self.lbl_big.setFont(f)
+        self.lbl_big.setAlignment(Qt.AlignCenter)
+        self.lbl_big.setAttribute(Qt.WA_TransparentForMouseEvents)
+        zl.addWidget(self.lbl_big)
+        sub = QLabel("Word (.docx, .doc, .rtf) станет PDF, а PDF станет документом Word.\n"
+                     "Готовый файл появится рядом с исходным, под тем же именем. Можно бросить несколько сразу.")
+        sub.setObjectName("hint")
+        sub.setAlignment(Qt.AlignCenter)
+        sub.setWordWrap(True)
+        sub.setAttribute(Qt.WA_TransparentForMouseEvents)
+        zl.addWidget(sub)
+        hb = QHBoxLayout()
+        hb.addStretch(1)
+        self.btn_pick = QPushButton("Выбрать файлы…")
+        self.btn_pick.setObjectName("accent")
+        self.btn_pick.setCursor(Qt.PointingHandCursor)
+        self.btn_pick.setMinimumHeight(36)
+        self.btn_pick.setMinimumWidth(190)
+        self.btn_pick.clicked.connect(self.pick)
+        hb.addWidget(self.btn_pick)
+        hb.addStretch(1)
+        zl.addLayout(hb)
+        zl.addStretch(1)
+        self.zone.dropped.connect(self.add_files)
+        self.zone.clicked.connect(self.pick)
+        root.addWidget(self.zone, 2)
+
+        opt = QHBoxLayout()
+        opt.setSpacing(14)
+        self.chk_meta = QCheckBox("Без метаданных")
+        self.chk_meta.setToolTip("Убрать из готового файла автора, организацию, название, программу и даты")
+        self.chk_meta.setChecked(bool(settings_load().get("conv_strip_meta", True)))
+        self.chk_meta.toggled.connect(lambda on: self._save_opt("conv_strip_meta", bool(on)))
+        opt.addWidget(self.chk_meta)
+        lab = QLabel("PDF → Word:")
+        lab.setObjectName("hint")
+        opt.addWidget(lab)
+        self.cmb_method = QComboBox()
+        self.cmb_method.addItem("через Word — точнее", "auto")
+        self.cmb_method.addItem("встроенный — без Word", "builtin")
+        self.cmb_method.setCurrentIndex(1 if settings_load().get("pdf2word_method") == "builtin" else 0)
+        self.cmb_method.currentIndexChanged.connect(
+            lambda *_: self._save_opt("pdf2word_method", self.cmb_method.currentData()))
+        opt.addWidget(self.cmb_method)
+        opt.addStretch(1)
+        root.addLayout(opt)
+
+        self.list = QListWidget()
+        self.list.setToolTip("Двойной щелчок — открыть готовый файл")
+        self.list.itemDoubleClicked.connect(self._open_item)
+        root.addWidget(self.list, 3)
+        foot = QHBoxLayout()
+        self.lbl_state = QLabel("")
+        self.lbl_state.setObjectName("hint")
+        foot.addWidget(self.lbl_state, 1)
+        self.btn_clear = QPushButton("Очистить список")
+        self.btn_clear.clicked.connect(self.clear)
+        foot.addWidget(self.btn_clear)
+        self.btn_folder = QPushButton("Показать в папке")
+        self.btn_folder.clicked.connect(self._show_folder)
+        foot.addWidget(self.btn_folder)
+        root.addLayout(foot)
+        self._state()
+
+    def refresh(self):
+        self.zone._paint()
+
+    def _save_opt(self, key, value):
+        st = settings_load()
+        if st.get(key) != value:
+            st[key] = value
+            settings_save(st)
+
+    # файлы можно бросать в любое место страницы
+    def dragEnterEvent(self, e):
+        self.zone.dragEnterEvent(e)
+
+    def dragLeaveEvent(self, e):
+        self.zone.dragLeaveEvent(e)
+
+    def dropEvent(self, e):
+        self.zone.dropEvent(e)
+
+    def pick(self):
+        files, _ = QFileDialog.getOpenFileNames(
+            self, "Какие файлы конвертировать", self.win.current_dir(),
+            "Word и PDF (*.docx *.doc *.rtf *.odt *.pdf);;Документы Word (*.docx *.doc *.rtf *.odt);;PDF (*.pdf)")
+        if files:
+            self.add_files(files)
+
+    def add_files(self, files):
+        jobs = []
+        for p in files:
+            if os.path.splitext(p)[1].lower() not in AI.CONVERT_EXT:
+                continue
+            n = len(self.items)
+            to = "Word" if p.lower().endswith(".pdf") else "PDF"
+            it = QListWidgetItem(f"…  {os.path.basename(p)}  →  {to}")
+            it.setToolTip(p)
+            self.list.addItem(it)
+            self.items.append({"src": p, "out": "", "state": "wait", "item": it})
+            jobs.append((n, p))
+        if not jobs:
+            self.win.show_toast("Нужны файлы Word (.docx, .doc, .rtf) или PDF", 3500)
+            return
+        self._queue.extend(jobs)
+        self.list.scrollToBottom()
+        self._run()
+
+    def _run(self):
+        if self._thread is not None and self._thread.isRunning():
+            return
+        if not self._queue:
+            self._state()
+            return
+        jobs, self._queue = self._queue, []
+        self._thread = FileConvertThread(jobs, self.chk_meta.isChecked(), self.cmb_method.currentData(), self)
+        self._thread.one.connect(self._one_done)
+        self._thread.finished.connect(self._run)
+        self._thread.start()
+        self._state()
+
+    def busy(self):
+        return bool(self._queue) or (self._thread is not None and self._thread.isRunning())
+
+    def _one_done(self, n, out, how, err):
+        rec = self.items[n]
+        name = os.path.basename(rec["src"])
+        if err:
+            rec["state"] = "error"
+            rec["item"].setText(f"✖  {name} — не получилось: {err}")
+            rec["item"].setToolTip(err)
+        else:
+            rec["state"], rec["out"] = "done", out
+            way = {"word": "через Word", "builtin": "встроенным способом", "simple": "упрощённо, без Word"}.get(how, how)
+            rec["item"].setText(f"✔  {name}  →  {os.path.basename(out)}   ({way})")
+            rec["item"].setToolTip(out)
+            self.list.setCurrentItem(rec["item"])
+            try:
+                self.win.refresh_files()
+            except Exception:
+                pass
+        self._state()
+
+    def _state(self):
+        done = sum(1 for r in self.items if r["state"] == "done")
+        bad = sum(1 for r in self.items if r["state"] == "error")
+        wait = sum(1 for r in self.items if r["state"] == "wait")
+        if not self.items:
+            self.lbl_state.setText("Исходные файлы не меняются.")
+        elif wait:
+            self.lbl_state.setText(f"Конвертирую… осталось {wait}")
+        else:
+            self.lbl_state.setText(f"Готово: {done}" + (f", не получилось: {bad}" if bad else ""))
+        self.btn_folder.setEnabled(done > 0)
+        self.btn_clear.setEnabled(bool(self.items) and not wait)
+
+    def clear(self):
+        if self.busy():
+            return
+        self.items = []
+        self.list.clear()
+        self._state()
+
+    def _current(self):
+        row = self.list.currentRow()
+        if 0 <= row < len(self.items) and self.items[row]["out"]:
+            return self.items[row]
+        return next((r for r in reversed(self.items) if r["out"]), None)
+
+    def _open_item(self, *_):
+        rec = self._current()
+        if rec:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(rec["out"]))
+
+    def _show_folder(self):
+        rec = self._current()
+        if rec:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.dirname(rec["out"])))
 
 
 class ConvertThread(QThread):
@@ -11116,6 +11928,19 @@ class ConvertThread(QThread):
             self.done.emit(AI.pdf_to_docx(self.src, self.out, self.method), "")
         except Exception as e:
             self.done.emit("", str(e))
+
+
+class PillWatch(QObject):
+    """Держит плашку масштаба под страницей и обновляет на ней проценты."""
+
+    def __init__(self, win):
+        super().__init__(win)
+        self.win = win
+
+    def eventFilter(self, obj, ev):
+        if ev.type() in (QEvent.Resize, QEvent.Paint, QEvent.Show):
+            self.win._pill_place()
+        return False
 
 
 class TabScrollWatch(QObject):
@@ -11188,6 +12013,12 @@ class MainWindow(QMainWindow):
         QApplication.instance().setStyleSheet(style)
         self.view.set_theme(self.theme)
         self._retint_icons()
+        if hasattr(self, "tool_strip") and hasattr(self, "_strip_open"):
+            self._strip_apply()
+        if getattr(self, "_tools_dialog", None) is not None:
+            self._tools_dialog.retheme()
+        if getattr(self, "_conv_page", None) is not None:
+            self._conv_page.refresh()
         if hasattr(self, "act_dark"):
             self.act_dark.setChecked(self.theme == "dark")
 
@@ -11270,18 +12101,22 @@ class MainWindow(QMainWindow):
         self.btn_ai.setToolTip(self._ai_btn_tip)
         self.btn_ai.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self._build_ai_menu()                   # само меню — в строке меню «ИИ»; кнопка цельная, без стрелки
-        self.btn_ai.clicked.connect(self.ai_center)
-        tb.addWidget(self.btn_ai)
+        self.btn_ai.clicked.connect(self.ai_center)       # кнопка стоит в переключателе режимов, в строке меню
         self._themed_toolbtns = [(self.btn_ai, "ai")]
 
         self.act_meta = add("meta", "Метаданные PDF…", self.show_metadata, None,
                             "Посмотреть и очистить метаданные PDF", target=self)
 
-        tb.addSeparator()      # всё стоит плотно слева — вид панели не зависит от ширины окна
+        # редкие команды — под кнопкой «Ещё»; меню наполняется, когда готовы все действия
+        self.btn_more = QToolButton()
+        self.btn_more.setText("Ещё")
+        self.btn_more.setToolTip("Остальные команды: PDF в Word, метаданные, распознавание, настройки")
+        self.btn_more.setPopupMode(QToolButton.InstantPopup)
+        self.btn_more.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        tb.addWidget(self.btn_more)
         self.act_help = add("help", "Справка", self.show_guide, "F1",
-                            "Как пользоваться программой — с картинками")
-        tb.widgetForAction(self.act_help).setToolButtonStyle(Qt.ToolButtonIconOnly)
-        self.theme_action = add("moon", "", self.toggle_theme, None, "Светлая / тёмная тема")
+                            "Как пользоваться программой — с картинками", target=self)
+        self.theme_action = add("moon", "Тема", self.toggle_theme, None, "Светлая / тёмная тема", target=self)
 
         # Удаление выбранной печати — по Del
         self.act_delete = QAction("Удалить выбранную печать", self)
@@ -11486,6 +12321,9 @@ class MainWindow(QMainWindow):
         self.act_pdf2word = act("PDF в Word…", self.pdf_to_word, "Ctrl+Shift+D",
                                 "Превратить PDF в документ Word: текст, шрифты, таблицы и разметка сохраняются")
         m.addAction(self.act_pdf2word)
+        self.act_convert = act("Конвертер Word ⇄ PDF…", self.open_convert_page, "Ctrl+Shift+J",
+                               "Перетащите файл Word — получите PDF, перетащите PDF — получите Word; без метаданных")
+        m.addAction(self.act_convert)
         self.act_act = act("Акт осмотра…", self.open_act_page, "Ctrl+Shift+K",
                            "Акт осмотра автомобиля: оригинал на немецком и перевод, замеры ЛКП почерком мастера")
         m.addAction(self.act_act)
@@ -11566,10 +12404,12 @@ class MainWindow(QMainWindow):
         m.addSeparator()
         m.addAction(act("О программе", self.show_about))
         self._build_toolstrip()
+        self._build_modebar()
+        self._build_zoom_pill()
 
     def _build_toolstrip(self):
-        """Вертикальная панель инструментов у левого края, как в графических редакторах:
-        те же действия, что в меню «Правка», «Вид» и «ИИ», — одним щелчком."""
+        """Вертикальная панель инструментов у левого края: те же действия, что в меню, — одним щелчком.
+        Обычно узкая, одни значки; стрелки » сверху раскрывают её с подписями и названиями групп."""
         tb = QToolBar("Инструменты", self)
         tb.setObjectName("tools")
         tb.setMovable(False)
@@ -11578,19 +12418,33 @@ class MainWindow(QMainWindow):
         tb.setIconSize(QSize(18, 18))
         self.addToolBar(Qt.LeftToolBarArea, tb)
         self.tool_strip = tb
+        self.btn_strip = QToolButton()
+        self.btn_strip.setText("Свернуть")
+        self.btn_strip.setCursor(Qt.PointingHandCursor)
+        self.btn_strip.clicked.connect(self.toggle_strip)
+        tb.addWidget(self.btn_strip)
         known = {a: k for a, k in self._themed_actions}
+        short = {self.act_place: "Поставить печать", self.act_rot_l: "Повернуть влево",
+                 self.act_rot_r: "Повернуть вправо",
+                 self.act_ai_place: "Печать и подпись на место", self.act_delete: "Удалить печать",
+                 self.act_split: "Разрезать на две", self.act_ai_ocr: "Распознать текст",
+                 self.act_convert: "Конвертер Word ⇄ PDF"}
         groups = [
-            [(self.act_place, "stamp"), (self.act_pen, "pen"), (self.act_ai_place, "aim"), (self.act_delete, "trash")],
-            [(self.act_rot_l, "rot_left"), (self.act_rot_r, "rot_right"), (self.act_crop, "crop"),
-             (self.act_frame, "frame"), (self.act_split, "split")],
-            [(self.act_scanlook, "scanlook"), (self.act_sheet, "sheet"), (self.act_ai_ocr, "ocr")],
-            [(self.act_word, "word_edit"), (self.act_pdf2word, "word"), (self.act_act, "act"),
-             (self.act_tools, "tools")],
-            [(self.act_zoom_in, "zoom_in"), (self.act_zoom_out, "zoom_out"), (self.act_fit, "fit")],
+            ("Печать", [(self.act_place, "stamp"), (self.act_pen, "pen"), (self.act_ai_place, "aim"),
+                        (self.act_delete, "trash")]),
+            ("Страница", [(self.act_rot_l, "rot_left"), (self.act_rot_r, "rot_right"), (self.act_crop, "crop"),
+                          (self.act_frame, "frame"), (self.act_split, "split")]),
+            ("Скан", [(self.act_scanlook, "scanlook"), (self.act_sheet, "sheet"), (self.act_ai_ocr, "ocr")]),
+            ("Документы", [(self.act_word, "word_edit"), (self.act_pdf2word, "word"), (self.act_convert, "convert"),
+                           (self.act_act, "act"), (self.act_tools, "tools")]),
         ]
-        for n, group in enumerate(groups):
-            if n:
-                tb.addSeparator()
+        self._strip_caps, self._strip_seps = [], []
+        for title, group in groups:
+            self._strip_seps.append(tb.addSeparator())
+            cap = QLabel(title.upper())
+            cap.setObjectName("stripcap")
+            cap.setFixedHeight(12)
+            self._strip_caps.append(tb.addWidget(cap))
             for a, kind in group:
                 if a not in known:
                     self._themed_actions.append((a, kind))
@@ -11598,7 +12452,162 @@ class MainWindow(QMainWindow):
                 name = a.text().replace("…", "")
                 tip = a.statusTip() if a.statusTip() and a.statusTip() != name else ""
                 a.setToolTip(name + (f"  ({key})" if key else "") + (f"\n{tip}" if tip and name not in tip else ""))
+                a.setIconText(short.get(a, name))
                 tb.addAction(a)
+        self._strip_open = bool(settings_load().get("strip_open", False))
+        self._strip_apply()
+
+    def toggle_strip(self):
+        """Раскрыть боковую панель с подписями или свернуть до значков; состояние запоминается."""
+        self._strip_open = not self._strip_open
+        st = settings_load()
+        st["strip_open"] = self._strip_open
+        settings_save(st)
+        self._strip_apply()
+
+    def _strip_apply(self):
+        tb, on = self.tool_strip, self._strip_open
+        style = Qt.ToolButtonTextBesideIcon if on else Qt.ToolButtonIconOnly
+        tb.setProperty("open", "true" if on else "false")
+        tb.setToolButtonStyle(style)
+        for a in self._strip_caps:
+            a.setVisible(on)
+        for n, a in enumerate(self._strip_seps):
+            a.setVisible(not on)
+        b = self.btn_strip
+        b.setToolButtonStyle(style)
+        b.setIcon(draw_icon("chev2_left" if on else "chev2_right", self._icon_color()))
+        b.setToolTip("Свернуть панель до значков" if on else "Раскрыть панель: подписи к значкам и группы")
+        for w in [tb] + tb.findChildren(QToolButton):
+            w.style().unpolish(w)
+            w.style().polish(w)
+        tb.updateGeometry()
+
+    def _build_modebar(self):
+        """Справа в строке меню: в каком режиме окно — документ, Word, акт, конвертер, ИИ — и общие кнопки."""
+        box = QWidget()
+        h = QHBoxLayout(box)
+        h.setContentsMargins(0, 0, 6, 0)
+        h.setSpacing(6)
+        seg = QFrame()
+        seg.setObjectName("modebar")
+        sh = QHBoxLayout(seg)
+        sh.setContentsMargins(1, 1, 1, 1)
+        sh.setSpacing(1)
+        self.mode_btn = {}
+
+        def mode(key, text, slot, tip):
+            b = QToolButton()
+            b.setText(text)
+            b.setCheckable(True)
+            b.setCursor(Qt.PointingHandCursor)
+            b.setToolTip(tip)
+            b.clicked.connect(lambda _=False, fn=slot: (fn(), self._mode_sync()))
+            sh.addWidget(b)
+            self.mode_btn[key] = b
+
+        mode("doc", "Документ", lambda: self.ai_mode(False) if self._page_on() else None,
+             "Страница документа: печати, подписи, страницы  (Esc)")
+        mode("word", "Word", self.act_word_fill_run, "Редактор Word: заполнить шаблон  (Ctrl+Shift+W)")
+        mode("act", "Акт осмотра", self.open_act_page, "Акт осмотра автомобиля  (Ctrl+Shift+K)")
+        mode("conv", "Конвертер", self.open_convert_page, "Word в PDF и PDF в Word, без метаданных  (Ctrl+Shift+J)")
+        self.btn_ai.setCheckable(True)
+        self.btn_ai.setCursor(Qt.PointingHandCursor)
+        self.btn_ai.clicked.connect(lambda *_: self._mode_sync())
+        sh.addWidget(self.btn_ai)
+        self.mode_btn["ai"] = self.btn_ai
+        h.addWidget(seg)
+        self.act_tools.setIconText("Инструменты")
+        for a, style in ((self.act_tools, Qt.ToolButtonTextBesideIcon), (self.act_help, Qt.ToolButtonIconOnly),
+                         (self.theme_action, Qt.ToolButtonIconOnly)):
+            b = QToolButton()
+            b.setObjectName("corner")
+            b.setDefaultAction(a)
+            b.setToolButtonStyle(style)
+            b.setIconSize(QSize(14, 14))
+            b.setCursor(Qt.PointingHandCursor)
+            h.addWidget(b)
+        self._modebar = box                       # ссылка нужна: иначе виджет соберёт сборщик мусора
+        self.menuBar().setCornerWidget(box, Qt.TopRightCorner)
+        self.center_stack.currentChanged.connect(self._mode_sync)
+        more = QMenu(self.btn_more)
+        more.setToolTipsVisible(True)
+        for a in (self.act_pdf2word, self.act_convert, self.act_ai_ocr, self.act_meta, None, self.act_settings):
+            if a is None:
+                more.addSeparator()
+            else:
+                more.addAction(a)
+        self.btn_more.setMenu(more)
+        self._mode_sync()
+
+    def _mode_sync(self, *_):
+        """Подсветить в переключателе режим, который сейчас на экране."""
+        cur = self.center_stack.currentWidget()
+        key = "doc"
+        for k, attr in (("word", "_word_page"), ("act", "_act_page"), ("conv", "_conv_page"), ("ai", "_ai_center_dlg")):
+            if cur is not None and cur is getattr(self, attr, None):
+                key = k
+        for k, b in getattr(self, "mode_btn", {}).items():
+            b.setChecked(k == key)
+        self._pill_place()
+
+    def _build_zoom_pill(self):
+        """Масштаб и номер страницы — плашкой под страницей, а не в боковой панели."""
+        known = {a for a, _k in self._themed_actions}
+        for a, kind in ((self.act_zoom_in, "zoom_in"), (self.act_zoom_out, "zoom_out"), (self.act_fit, "fit")):
+            if a not in known:
+                self._themed_actions.append((a, kind))
+        pill = QFrame(self.view)
+        pill.setObjectName("zoompill")
+        h = QHBoxLayout(pill)
+        h.setContentsMargins(4, 3, 4, 3)
+        h.setSpacing(1)
+
+        def btn(a, style):
+            b = QToolButton()
+            b.setDefaultAction(a)
+            b.setToolButtonStyle(style)
+            b.setIconSize(QSize(16, 16))
+            b.setCursor(Qt.PointingHandCursor)
+            h.addWidget(b)
+
+        btn(self.act_zoom_out, Qt.ToolButtonIconOnly)
+        self.lbl_zoom = QLabel("100%")
+        self.lbl_zoom.setAlignment(Qt.AlignCenter)
+        self.lbl_zoom.setMinimumWidth(44)
+        h.addWidget(self.lbl_zoom)
+        btn(self.act_zoom_in, Qt.ToolButtonIconOnly)
+        btn(self.act_fit, Qt.ToolButtonTextBesideIcon)
+        self.lbl_pageno = QLabel("")
+        h.addWidget(self.lbl_pageno)
+        self.zoom_pill = pill
+        pill.hide()
+        self._pill_watch = PillWatch(self)
+        self.view.installEventFilter(self._pill_watch)
+        self.view.viewport().installEventFilter(self._pill_watch)
+
+    def _pill_place(self):
+        pill = getattr(self, "zoom_pill", None)
+        if pill is None:
+            return
+        if self.doc is None:
+            pill.hide()
+            return
+        zoom = f"{round(self.view.transform().m11() * 100)}%"
+        page = f"стр. {self.current_page + 1} / {self.doc.page_count}"
+        if self.lbl_zoom.text() != zoom:
+            self.lbl_zoom.setText(zoom)
+        if self.lbl_pageno.text() != page:
+            self.lbl_pageno.setText(page)
+        pill.adjustSize()
+        vp = self.view.viewport()
+        x = max(4, (vp.width() - pill.width()) // 2)
+        y = max(4, vp.height() - pill.height() - 12)
+        if pill.pos() != QPoint(x, y):
+            pill.move(x, y)
+        if not pill.isVisible():
+            pill.show()
+            pill.raise_()
 
     def _build_ai_menu(self):
         """Меню «ИИ»: пять помощников, галочка «автоматически», настройки."""
@@ -12227,17 +13236,152 @@ class MainWindow(QMainWindow):
         self._conv_thread.done.connect(finished)
         self._conv_thread.start()
 
-    def open_tools(self):
-        """Окно инструментов: регистр, валюты, сумма прописью, л.с.⇄кВт. Одно на программу."""
-        dlg = getattr(self, "_tools_dialog", None)
-        if dlg is None:
-            dlg = ToolsDialog(self)
-            self._tools_dialog = dlg
+    def _tools_make(self):
+        """Панель инструментов: одна на программу, стоит справа вкладкой рядом с «Печатью»."""
+        panel = getattr(self, "_tools_dialog", None)
+        if panel is None:
+            panel = ToolsPanel(self)
+            self._tools_dialog = panel
+            dock = QDockWidget("ИНСТРУМЕНТЫ", self)
+            dock.setFeatures(QDockWidget.NoDockWidgetFeatures)
+            dock.setTitleBarWidget(QWidget())
+            dock.setWidget(panel)
+            dock.setFixedWidth(372)
+            self.addDockWidget(Qt.RightDockWidgetArea, dock)
+            self.tabifyDockWidget(self.right_dock, dock)
+            self.setTabPosition(Qt.RightDockWidgetArea, QTabWidget.North)
+            dock.hide()
+            self.tools_dock = dock
+            QApplication.instance().focusChanged.connect(self._focus_track)
+        return panel
+
+    def tools_visible(self):
+        w = getattr(self, "_tools_window", None)
+        if w is not None and w.isVisible():
+            return True
+        d = getattr(self, "tools_dock", None)
+        return d is not None and d.isVisible() and not d.visibleRegion().isEmpty()
+
+    def show_tools(self):
+        """Показать инструменты: панелью справа или отдельным окном — как было в прошлый раз."""
+        panel = self._tools_make()
+        panel.retheme()
+        if settings_load().get("tools_detached"):
+            self.tools_detach(True)
         else:
-            dlg.setStyleSheet(_tools_qss(settings_load().get("theme") == "dark"))
-        dlg.show()
-        dlg.raise_()
-        dlg.activateWindow()
+            self.tools_detach(False)
+
+    def open_tools(self, *_):
+        """Инструменты по нажатию появляются сбоку, по второму нажатию убираются."""
+        if self.tools_visible():
+            self.tools_close()
+        else:
+            self.show_tools()
+
+    def tools_close(self):
+        w = getattr(self, "_tools_window", None)
+        if w is not None:
+            w.hide()
+        d = getattr(self, "tools_dock", None)
+        if d is not None:
+            d.hide()
+
+    def tools_detach(self, on=None, show=True):
+        """Открепить инструменты в отдельное окно или вернуть в панель."""
+        panel = self._tools_make()
+        on = (not getattr(panel, "_detached", False)) if on is None else bool(on)
+        st = settings_load()
+        if bool(st.get("tools_detached")) != on:
+            st["tools_detached"] = on
+            settings_save(st)
+        w = getattr(self, "_tools_window", None)
+        if on:
+            if w is None:
+                w = ToolsWindow(self)
+                self._tools_window = w
+            if panel.parentWidget() is not w:
+                self.tools_dock.setWidget(QWidget())
+                w.lay.addWidget(panel)
+            panel.set_detached(True)
+            panel.show()
+            self.tools_dock.hide()
+            if show:
+                w.show()
+                w.raise_()
+                w.activateWindow()
+        else:
+            if w is not None:
+                w.hide()
+            old = self.tools_dock.widget()
+            if old is not panel:
+                self.tools_dock.setWidget(panel)
+                if old is not None:
+                    old.deleteLater()
+            panel.set_detached(False)
+            panel.show()
+            if show:
+                self.tools_dock.show()
+                self.tools_dock.raise_()
+
+    def _focus_track(self, _old, new):
+        """Запомнить поле, где стоял курсор, — туда вставляются результаты из инструментов."""
+        try:
+            if isinstance(new, (QLineEdit, QTextEdit)) and _tools_owner(new) is None and new.window() is self:
+                self._last_text_focus = new
+        except RuntimeError:
+            pass
+
+    def tools_selected_text(self):
+        """Что выделено в редакторе Word (пусто, если редактор не открыт)."""
+        pg = getattr(self, "_word_page", None)
+        if pg is None or self.center_stack.currentWidget() is not pg:
+            return ""
+        c = pg.view.textCursor()
+        return c.selectedText() if c.hasSelection() else ""
+
+    def tools_insert(self, text):
+        """Вставить результат из инструментов туда, где стоял курсор: в документ Word или в поле."""
+        target = getattr(self, "_last_text_focus", None)
+        try:
+            if target is not None and not target.isVisible():
+                target = None
+        except RuntimeError:
+            target = None
+        pg = getattr(self, "_word_page", None)
+        if target is None and pg is not None and self.center_stack.currentWidget() is pg:
+            target = pg.view
+        try:
+            if isinstance(target, WordView):
+                md = QMimeData()
+                md.setText(text)
+                target.insertFromMimeData(md)
+            elif isinstance(target, QLineEdit) and not target.isReadOnly():
+                target.insert(text)
+            elif isinstance(target, QTextEdit) and not target.isReadOnly():
+                target.insertPlainText(text)
+            else:
+                return False
+            target.setFocus()
+        except RuntimeError:
+            return False
+        return True
+
+    def open_convert_page(self, files=None):
+        """Конвертер Word ⇄ PDF занимает середину окна, как редактор Word и акт."""
+        pg = getattr(self, "_conv_page", None)
+        if pg is None:
+            pg = ConvertPage(self)
+            self._conv_page = pg
+            self.center_stack.addWidget(pg)
+        else:
+            pg.refresh()
+        if self.view.pen_active():
+            self.pen_finish(commit=True)
+        self.right_dock.hide()
+        self.left_dock.show()
+        self.center_stack.setCurrentWidget(pg)
+        if files and not isinstance(files, bool):
+            pg.add_files(list(files))
 
     def open_act_page(self):
         """Акт осмотра занимает середину окна, как ИИ и редактор Word."""
@@ -15975,7 +17119,7 @@ def main():
             except Exception:
                 guide_n = 0
             f.write(f"OK {APP_VERSION} {EDITION} scanner={scanner_backend()} guide={guide_n} "
-                    f"ai={len(AI.PROVIDERS)} keys={len(AI.builtin_keys())} ocr={AI.selftest_ocr()} word={SW.selftest()} cloud={CLOUD.selftest()} act={'ok' if ACT.selftest() else 'fail'} license={'ok' if LIC.selftest() else 'fail'} tools={'ok' if TOOLS.selftest() else 'fail'} pdf2docx={AI.selftest_pdf2docx()}")
+                    f"ai={len(AI.PROVIDERS)} keys={len(AI.builtin_keys())} ocr={AI.selftest_ocr()} word={SW.selftest()} cloud={CLOUD.selftest()} act={'ok' if ACT.selftest() else 'fail'} license={'ok' if LIC.selftest() else 'fail'} tools={'ok' if TOOLS.selftest() else 'fail'} pdf2docx={AI.selftest_pdf2docx()} decline={DECL.selftest_text()} conv={AI.selftest_convert()}")
         sys.exit(0)
     if not license_gate():                       # без действующего ключа программа не открывается
         sys.exit(0)

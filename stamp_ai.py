@@ -888,6 +888,140 @@ def selftest_pdf2docx():
         return "fail:" + type(e).__name__ + ":" + str(e)[:60].replace(" ", "_")
 
 
+def strip_pdf_meta(data):
+    """PDF без метаданных: автор, программа, даты, название и XMP убираются."""
+    import fitz
+    doc = fitz.open(stream=data, filetype="pdf")
+    try:
+        doc.set_metadata({})
+        try:
+            doc.del_xml_metadata()
+        except Exception:
+            pass
+        return doc.tobytes(deflate=True, garbage=3)
+    finally:
+        doc.close()
+
+
+_CORE_EMPTY = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+               '<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" '
+               'xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" '
+               'xmlns:dcmitype="http://purl.org/dc/dcmitype/" '
+               'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"></cp:coreProperties>')
+_APP_EMPTY = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+              '<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" '
+              'xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"></Properties>')
+
+
+def strip_docx_meta(path):
+    """Документ Word без метаданных: автор, кто менял, организация, даты, название. Текст не трогается."""
+    import zipfile
+    tmp = path + ".nometa"
+    with zipfile.ZipFile(path) as zin, zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zout:
+        for item in zin.infolist():
+            data = zin.read(item.filename)
+            if item.filename == "docProps/core.xml":
+                data = _CORE_EMPTY.encode("utf-8")
+            elif item.filename == "docProps/app.xml":
+                data = _APP_EMPTY.encode("utf-8")
+            elif item.filename == "docProps/custom.xml":
+                data = (b'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Properties xmlns='
+                        b'"http://schemas.openxmlformats.org/officeDocument/2006/custom-properties" xmlns:vt='
+                        b'"http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"></Properties>')
+            zout.writestr(item, data)
+    os.replace(tmp, path)
+
+
+def docx_meta(path):
+    """Что записано в свойствах документа Word — для проверки: {автор, кто менял, название, организация}."""
+    import zipfile
+    out = {}
+    with zipfile.ZipFile(path) as z:
+        names = z.namelist()
+        core = z.read("docProps/core.xml").decode("utf-8", "replace") if "docProps/core.xml" in names else ""
+        app = z.read("docProps/app.xml").decode("utf-8", "replace") if "docProps/app.xml" in names else ""
+    for key, tag, src in (("author", "dc:creator", core), ("modified_by", "cp:lastModifiedBy", core),
+                          ("title", "dc:title", core), ("company", "Company", app), ("app", "Application", app)):
+        m = re.search(r"<%s[^>]*>([^<]*)</%s>" % (tag, tag), src)
+        if m and m.group(1).strip():
+            out[key] = m.group(1).strip()
+    return out
+
+
+CONVERT_EXT = (".docx", ".doc", ".rtf", ".odt", ".pdf")
+
+
+def free_name(path):
+    """Свободное имя рядом: «Договор.pdf», если занято — «Договор (2).pdf»."""
+    if not os.path.exists(path):
+        return path
+    base, ext = os.path.splitext(path)
+    n = 2
+    while os.path.exists(f"{base} ({n}){ext}"):
+        n += 1
+    return f"{base} ({n}){ext}"
+
+
+def convert_file(src, strip_meta=True, method="auto"):
+    """Word → PDF или PDF → Word, результат кладётся рядом с исходным файлом.
+    Возвращает (путь результата, чем сделано). Исходный файл не меняется."""
+    ext = os.path.splitext(src)[1].lower()
+    base = os.path.splitext(src)[0]
+    if ext == ".pdf":
+        with_text, _total = pdf_text_pages(src)
+        if with_text == 0:
+            raise RuntimeError("в этом PDF нет текста — это скан; сначала распознайте текст («ИИ → Распознать текст»)")
+        out = free_name(base + ".docx")
+        how = pdf_to_docx(src, out, method)
+        if strip_meta:
+            strip_docx_meta(out)
+        return out, how
+    if ext not in CONVERT_EXT:
+        raise RuntimeError("нужен файл Word (.docx, .doc, .rtf) или PDF")
+    data, how = office_to_pdf(src)
+    if strip_meta:
+        data = strip_pdf_meta(data)
+    out = free_name(base + ".pdf")
+    tmp = out + ".part"
+    with open(tmp, "wb") as f:
+        f.write(data)
+    os.replace(tmp, out)
+    return out, how
+
+
+def selftest_convert():
+    """Самопроверка чистки метаданных."""
+    try:
+        import fitz
+        d = fitz.open()
+        d.new_page()
+        d.set_metadata({"author": "Тест", "title": "Секрет", "producer": "X"})
+        clean = strip_pdf_meta(d.tobytes())
+        d.close()
+        d2 = fitz.open(stream=clean, filetype="pdf")
+        meta = {k: v for k, v in (d2.metadata or {}).items() if v and k not in ("format", "encryption")}
+        d2.close()
+        if meta:
+            return "meta:" + ",".join(meta)
+        import docx
+        import tempfile
+        tmp = os.path.join(tempfile.gettempdir(), "stampstudio_conv_test.docx")
+        doc = docx.Document()
+        doc.add_paragraph("проверка")
+        doc.core_properties.author = "Тест"
+        doc.core_properties.last_modified_by = "Тест"
+        doc.save(tmp)
+        strip_docx_meta(tmp)
+        left = docx_meta(tmp)
+        text = docx.Document(tmp).paragraphs[0].text
+        os.remove(tmp)
+        if left or text != "проверка":
+            return "docx:" + ",".join(left)
+        return "ok"
+    except Exception as e:
+        return "fail:" + type(e).__name__
+
+
 def office_to_pdf(path):
     """Документ Word → PDF в памяти. Возвращает (bytes, "word" | "simple"). Исходный файл не меняется."""
     err = ""
