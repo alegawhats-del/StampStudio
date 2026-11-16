@@ -593,7 +593,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.17.1"
+APP_VERSION = "6.17.2"
 EDITION = "canon"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -966,6 +966,7 @@ class ColumnGrid(QListWidget):
         self.min_cell = min_cell
         self.max_icon = 512         # потолок размера иконки
         self.min_rows = 0           # сколько рядов должно быть видно всегда
+        self.icon_pad = None        # поля вокруг значка в клетке; None — обычные
         self.setViewMode(QListWidget.IconMode)
         self.setResizeMode(QListWidget.Adjust)
         self.setMovement(QListWidget.Static)
@@ -980,11 +981,13 @@ class ColumnGrid(QListWidget):
         gap = self.spacing() * 2
         cell = max(self.min_cell, (vp - 4) // self.columns - gap)
         if self.gridSize().width() != cell:
-            icon = max(44, min(self.max_icon, cell - gap - 20))
+            pad = gap + 20 if self.icon_pad is None else self.icon_pad
+            icon = max(44, min(self.max_icon, cell - pad))
             self.setGridSize(QSize(cell, icon + 26))
             self.setIconSize(QSize(icon, icon))
             if self.min_rows:
-                self.setMinimumHeight(self.min_rows * (icon + 26) + 2 * self.spacing() + 4)
+                self.setMinimumHeight(max(getattr(self, "min_floor", 0),
+                                          self.min_rows * (icon + 26) + 2 * self.spacing() + 4))
 
     def sizeHint(self):
         # по умолчанию QListWidget просит 192px — из-за этого панель
@@ -8334,6 +8337,119 @@ class ClickLabel(QLabel):
         super().mousePressEvent(e)
 
 
+class ElideLabel(ClickLabel):
+    """Подпись в одну строку: если не помещается — аккуратно заканчивается многоточием, а не обрезается."""
+
+    def __init__(self, text="", parent=None):
+        super().__init__(parent)
+        self._full = ""
+        self.setText(text)
+
+    def setText(self, text):
+        self._full = str(text or "")
+        self.update()
+
+    def text(self):
+        return self._full
+
+    def minimumSizeHint(self):
+        return QSize(20, super().minimumSizeHint().height())
+
+    def paintEvent(self, _):
+        p = QPainter(self)
+        fm = self.fontMetrics()
+        p.setPen(self.palette().color(self.foregroundRole()))
+        p.setFont(self.font())
+        p.drawText(self.rect(), Qt.AlignLeft | Qt.AlignVCenter, fm.elidedText(self._full, Qt.ElideRight, max(0, self.width() - 2)))
+        p.end()
+
+
+def split_issued(text):
+    """«13.05.2022 ГУ МВД России по Московской области» → («13.05.2022», «ГУ МВД России по Московской области»)."""
+    text = " ".join(str(text or "").split())
+    m = re.search(r"\d{2}\.\d{2}\.\d{4}", text)
+    if not m:
+        return "", text
+    rest = (text[:m.start()] + " " + text[m.end():]).strip()
+    rest = re.sub(r"^(?:г\.?|года)\s*[,;]?\s*", "", rest)
+    rest = re.sub(r"[\s,;]+(?:г\.?|года)\s*$", "", rest).strip(" ,;")
+    return m.group(0), " ".join(rest.split())
+
+
+def join_issued(date, by):
+    """Дата выдачи и «кем выдан» одной строкой — как пишут в реквизитах."""
+    return " ".join(x for x in (str(date or "").strip(), str(by or "").strip()) if x)
+
+
+def phone_mask(text):
+    """Телефон по ходу набора: «89169751368» → «+7(916) 975-13-68»; белорусский «375291234567» → «+375(29) 123-45-67».
+    Если в тексте есть буквы, он не трогается."""
+    text = str(text or "")
+    if re.search(r"[^\d\s()+\-]", text):
+        return text
+    d = re.sub(r"\D", "", text)
+    if not d:
+        return ""
+    if d.startswith("375"):
+        code, rest, head = d[3:5], d[5:12], "+375"
+    else:
+        if d[0] in "78":
+            d = d[1:]
+        code, rest, head = d[:3], d[3:10], "+7"
+    out = head
+    if code:
+        out += "(" + code + (")" if len(code) == (2 if head == "+375" else 3) and rest else "")
+    if rest:
+        out += " " + rest[:3]
+        if len(rest) > 3:
+            out += "-" + rest[3:5]
+        if len(rest) > 5:
+            out += "-" + rest[5:7]
+    return out
+
+
+def unit_text(text, unit, group=True):
+    """Число с единицей: «39408» → «39 408 км», «1845» → «1845 кг». Не число — как есть."""
+    text = str(text or "")
+    body = re.sub(r"\s*%s\.?\s*$" % re.escape(unit), "", text.strip(), flags=re.I)
+    d = re.sub(r"\s", "", body)
+    if not d:
+        return ""
+    if not d.isdigit():
+        return text
+    return (ACT.group_digits(d) if group else d) + " " + unit
+
+
+def volume_text(text):
+    """Объём двигателя: «2.2 2151» → «2.2 л., 2 151 см³»; «2.2» → «2.2 л.»; «2151» → «2 151 см³»."""
+    t = " ".join(str(text or "").replace(",", ".").replace("см³", " ").replace("см3", " ").split())
+    t = re.sub(r"\bл\b\.?", " ", t)
+    nums = re.findall(r"\d+(?:\.\d+)?", re.sub(r"(?<=\d) (?=\d{3}\b)", "", t))
+    if not nums or re.search(r"[^\d.\s]", re.sub(r"[.,;]", " ", t).replace(" ", "") and re.sub(r"[\d.\s,;]", "", t)):
+        return str(text or "")
+    liters = next((n for n in nums if "." in n or (n.isdigit() and int(n) < 20)), "")
+    ccm = next((n for n in nums if n.isdigit() and int(n) >= 50), "")
+    parts = []
+    if liters:
+        parts.append(liters + " л.")
+    if ccm:
+        parts.append(ACT.group_digits(ccm) + " см³")
+    return ", ".join(parts) if parts else str(text or "")
+
+
+FIELD_CHOICES = {"gearbox": "gear", "body": "body", "color": "color", "engine_type": "fuel"}
+
+
+def date_dots(text):
+    """Дата набирается одними цифрами — точки встают сами: «13052022» → «13.05.2022».
+    Если в тексте есть что-то кроме цифр и точек («13 мая»), он не трогается."""
+    text = str(text or "")
+    if not re.fullmatch(r"[\d.]*", text):
+        return text
+    d = re.sub(r"\D", "", text)[:8]
+    return ".".join(x for x in (d[:2], d[2:4], d[4:8]) if x)
+
+
 class WordView(QTextEdit):
     """Документ Word на экране: шрифты, жирный, курсив, выравнивание и таблицы — как в файле.
     Текст правится прямо здесь; абзацы и таблицы нельзя склеить или разорвать, поэтому вёрстка цела."""
@@ -8952,6 +9068,7 @@ class WordFillPage(QDialog):
         self.ed_all_date.setPlaceholderText("дата во все даты")
         self.ed_all_date.setMinimumHeight(30)
         self.ed_all_date.setToolTip("ДД.ММ.ГГГГ — встанет во все пустые даты документа: «11» ноября 2026 г.")
+        self.ed_all_date.textEdited.connect(lambda t: self._date_typed(self.ed_all_date, t))
         self.ed_all_date.textChanged.connect(self._spread_date)
         drow.addWidget(self.ed_all_date, 1)
         b_today = QPushButton("Сегодня")
@@ -8985,7 +9102,7 @@ class WordFillPage(QDialog):
         side.addWidget(b_repl)
         sw = QWidget()
         sw.setLayout(side)
-        sw.setFixedWidth(320)
+        sw.setFixedWidth(350)
         body.addWidget(sw)
 
         foot = QHBoxLayout()
@@ -9208,7 +9325,16 @@ class WordFillPage(QDialog):
                                                                    for n, t, _c in self.wd.dummies)) else ""
             elif f.kind == "blank" and re.search(r"(?<!к )договор(?:ом|а|у)?\s*№\s*$", before.lower()):
                 key = "contract_no"
-            row = self._new_row(f.label, key, f.kind, [(a, b)], field=f)
+            label, hint = f.label, ""
+            low = before.lower()
+            if f.kind == "blank" and re.search(r"выдан\w*\W*\d{2}\.\d{2}\.\d{4}\W*$", low):
+                label, key, hint = "Паспорт: кем выдан", "passport_by", "кем выдан паспорт — как написано в паспорте"
+            elif f.kind == "date" and re.search(r"выдан\w*\W*$", low):
+                label, key = "Паспорт: дата выдачи", "passport_date"
+            elif f.kind == "date" and re.search(r"рожден\w*\W*$", low):
+                label, key = "Дата рождения", "birth"
+            row = self._new_row(label, key, f.kind, [(a, b)], field=f)
+            row["hint"] = hint
             row["table"] = f.meta.get("table", "")
             row["total"] = bool(f.kind == "sum" and SW.TOTAL_RE.search(ctx or ""))
             rows.append(row)
@@ -9218,8 +9344,21 @@ class WordFillPage(QDialog):
                 key = SW.DUMMY_KEYS.get(name, "")
                 if key == "contract_no" and not re.match(r"[А-ЯЁA-Z]", text):
                     key = "doc_no"                       # «000–2026» — собственный номер этого документа
-                rows.append(self._new_row(f"{name}: «{text}»" + (f" ×{len(spans)}" if len(spans) > 1 else ""),
+                title = name
+                if name == "Дата" and len(spans) == 1:    # дата-образец: по словам перед ней понятно, чья она
+                    c = QTextCursor(self.view.document())
+                    c.setPosition(max(0, spans[0][0] - 40))
+                    c.setPosition(spans[0][0], QTextCursor.KeepAnchor)
+                    prev = c.selectedText().lower()
+                    if re.search(r"выдан\w*\W*$", prev):
+                        title, key = "Паспорт: дата выдачи", "passport_date"
+                    elif re.search(r"рожден\w*\W*$", prev):
+                        title, key = "Дата рождения", "birth"
+                rows.append(self._new_row(f"{title}: «{text}»" + (f" ×{len(spans)}" if len(spans) > 1 else ""),
                                           key, "dummy", spans, dummy=name))
+        dspans = [(c.selectionStart(), c.selectionEnd()) for r in rows if r["kind"] == "dummy" for c in r["cursors"]]
+        rows = [r for r in rows if r["kind"] == "dummy" or not any(
+            a <= c.selectionStart() and c.selectionEnd() <= b for c in r["cursors"] for a, b in dspans)]
         taken = [(c.selectionStart(), c.selectionEnd()) for r in rows for c in r["cursors"]]
         for m in self._marks():
             spans = [s for s in self._find_all(m.get("text", "")) if not any(a < s[1] and s[0] < b for a, b in taken)]
@@ -9260,14 +9399,23 @@ class WordFillPage(QDialog):
     def _apply_card(self, only_empty=True):
         """Подставить данные клиента из карточки в папке и следующий номер документа."""
         self.card = SW.card_load(self.client_dir) if self.client_dir else {}
-        data = SW.derive(self.card)
+        data = dict(SW.derive(self.card))
+        if data.get("passport_issued"):                    # в карточке одной строкой — раскладываем по двум полям
+            d_, by_ = split_issued(data["passport_issued"])
+            data.setdefault("passport_date", d_)
+            data.setdefault("passport_by", by_)
         who = data.get("fio_short") or data.get("fio") or ""
         self.lbl_client.setText(("Клиент: " + who) if who else "Клиент: карточки нет")
         n = 0
+        phone_done = False
         for r in self.rows:
             if r["edit"] is None:
                 continue
             val = data.get(r["key"]) if r["key"] and r["key"] != "doc_no" else None
+            if r["key"] == "phone":                        # телефон из карточки — только в первое поле
+                if phone_done:
+                    val = None
+                phone_done = True
             if r.get("docnum"):
                 val = self.card.get(self._num_key()) or (val if r["key"] == "contract_no" else None)
                 if not val and self._num_mode() == "auto":
@@ -9365,7 +9513,7 @@ class WordFillPage(QDialog):
                 sep_done = True
             top = QHBoxLayout()
             top.setSpacing(4)
-            lab = ClickLabel(row["label"])
+            lab = ElideLabel(row["label"])
             lab.setObjectName("hint")
             lab.setCursor(Qt.PointingHandCursor)
             lab.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
@@ -9398,11 +9546,36 @@ class WordFillPage(QDialog):
             v.addLayout(top)
             ed = QLineEdit()
             ed.setMinimumHeight(28)
+            ed.setTextMargins(1, 0, 7, 0)                 # длинный текст не упирается в правую рамку
+            is_date = row["kind"] == "date" or (row["kind"] == "dummy" and row.get("dummy") == "Дата")
             ed.setPlaceholderText("первый номер впишите сами — дальше пойдёт сам" if row.get("docnum") else
-                                  tips.get(row["kind"], SW.KEY_TITLES.get(row["key"], "")))
+                                  row.get("hint") or ("ДД.ММ.ГГГГ — набирайте цифры, точки встанут сами" if is_date else
+                                                      tips.get(row["kind"], SW.KEY_TITLES.get(row["key"], ""))))
             if row["current"]:
                 ed.setText(row["current"])
-            ed.textEdited.connect(lambda t, r=row: self._typed(r, t))
+            unit = {"mileage": ("км", True), "weight": ("кг", False)}.get(row["key"])
+            if is_date:
+                ed.textEdited.connect(lambda t, r=row, e=ed: self._typed(r, self._date_typed(e, t)))
+            elif row["key"] == "phone":
+                ed.setPlaceholderText("набирайте цифры: +7(916) 975-13-68")
+                ed.textEdited.connect(lambda t, r=row, e=ed: self._typed(r, self._mask_typed(e, t, phone_mask(t), True)))
+            elif unit:
+                ed.setPlaceholderText("только число — «%s» допишется само" % unit[0])
+                ed.textEdited.connect(lambda t, r=row, e=ed, u=unit: self._typed(
+                    r, self._mask_typed(e, t, unit_text(t, u[0], u[1]), False, len(u[0]) + 1)))
+            elif row["key"] == "engine_volume":
+                ed.setPlaceholderText("например: 2.2 2151 — «л.» и «см³» допишутся сами")
+                ed.textEdited.connect(lambda t, r=row: self._typed(r, t))
+                ed.editingFinished.connect(lambda r=row, e=ed: self._volume_done(r, e))
+            else:
+                ed.textEdited.connect(lambda t, r=row: self._typed(r, t))
+            kind_ = FIELD_CHOICES.get(row["key"])
+            if kind_:                                     # готовые варианты + своё значение
+                act = ed.addAction(draw_icon("chev_down", self.win._icon_color()), QLineEdit.TrailingPosition)
+                act.setToolTip("Выбрать из готовых вариантов")
+                act.triggered.connect(lambda _=False, r=row, e=ed, k=kind_: self._choices(r, e, k))
+                ed.setPlaceholderText("выберите из списка ▾ или впишите своё")
+                row["choices"] = kind_
             row["edit"] = ed
             v.addWidget(ed)
             v.addSpacing(5)
@@ -9440,6 +9613,54 @@ class WordFillPage(QDialog):
         if row["edit"] is not None:
             row["edit"].setFocus()
 
+    @staticmethod
+    def _mask_typed(edit, text, new, to_end, tail=0):
+        """Поставить в поле отформатированный текст. Курсор — в конец (to_end) или перед единицей (tail знаков с конца)."""
+        if new != text:
+            edit.setText(new)
+        if new:
+            edit.setCursorPosition(len(new) if to_end else max(0, len(new) - tail))
+        return new
+
+    def _volume_done(self, row, edit):
+        new = volume_text(edit.text())
+        if new != edit.text():
+            edit.setText(new)
+            self._typed(row, new)
+
+    def _choices(self, row, edit, kind):
+        """Список готовых значений под полем (цвет, кузов, КПП, топливо); своё можно вписать руками."""
+        m = QMenu(edit)
+        for v in ACT.variants(kind, 1):
+            m.addAction(v, lambda val=v: (edit.setText(val), self._typed(row, val)))
+        m.addSeparator()
+        m.addAction("Своё значение — вписать в поле", lambda: (edit.setFocus(), edit.selectAll()))
+        m.setMinimumWidth(edit.width())
+        self._menu_show(m, edit.mapToGlobal(QPoint(0, edit.height() + 2)))
+
+    @staticmethod
+    def _menu_show(menu, pos):
+        menu.exec(pos)
+
+    @staticmethod
+    def _date_typed(edit, text):
+        """Поле даты: по ходу набора расставить точки и вернуть получившийся текст."""
+        new = date_dots(text)
+        if new != text:
+            at_end = edit.cursorPosition() >= len(text)
+            digits_left = len(re.sub(r"\D", "", text[:edit.cursorPosition()]))
+            edit.setText(new)
+            if at_end:
+                edit.setCursorPosition(len(new))
+            else:
+                pos = 0
+                while pos < len(new) and digits_left > 0:
+                    if new[pos].isdigit():
+                        digits_left -= 1
+                    pos += 1
+                edit.setCursorPosition(pos)
+        return new
+
     def _typed(self, row, text, spread=True):
         row["auto"] = False
         self._write(row, text)
@@ -9461,19 +9682,34 @@ class WordFillPage(QDialog):
             if r is skip or r["edit"] is None:
                 continue
             val = None
-            if r["key"] == key and key != "doc_no":
+            if r["key"] == key and key not in ("doc_no", "phone"):
                 val = text
             elif key == "fio" and r["key"] == "fio_short":
                 val = SW.initials(text)
+            elif key in ("passport_date", "passport_by") and r["key"] == "passport_issued":
+                val = self._issued_text() or None          # «Выдан:» в реквизитах — из даты и «кем выдан» выше
+            elif key == "passport_issued" and r["key"] in ("passport_date", "passport_by"):
+                d_, by_ = split_issued(text)
+                val = (d_ if r["key"] == "passport_date" else by_) or None
             if val is not None and (not r["edit"].text().strip() or r["auto"]):
                 r["edit"].setText(val)
                 r["auto"] = True
                 self._write(r, val)
 
+    def _issued_text(self):
+        """«Когда и кем выдан» одной строкой — из полей «дата выдачи» и «кем выдан»."""
+        got = {"passport_date": "", "passport_by": ""}
+        for r in self.rows:
+            if r["key"] in got and r["edit"] is not None and r["edit"].text().strip() and not got[r["key"]]:
+                got[r["key"]] = r["edit"].text().strip()
+        return join_issued(got["passport_date"], got["passport_by"])
+
     def _spread_date(self, text):
         if text.strip() and SW.parse_date(text) is None:
             return
         for r in self.rows:
+            if r["key"] in ("passport_date", "birth"):
+                continue                                  # дата паспорта и рождения — не «дата документа»
             if r["kind"] == "date" and r["edit"] is not None and (not r["edit"].text().strip() or r["auto"]):
                 r["edit"].setText(text.strip())
                 r["auto"] = True
@@ -9586,12 +9822,22 @@ class WordFillPage(QDialog):
         for r in self.rows:
             if r["key"] and r["edit"] is not None and r["edit"].text().strip() and r["key"] not in out:
                 out[r["key"]] = r["edit"].text().strip()
+        issued = join_issued(out.pop("passport_date", ""), out.pop("passport_by", ""))
+        if issued and not out.get("passport_issued"):
+            out["passport_issued"] = issued               # в карточке клиента — одной строкой
         return out
 
     # ---- сохранение
     def save(self):
         if not self.wd:
             return
+        for r in self.rows:                                # второго телефона нет — образец «+7(000) 000-00-00» убирается
+            if r["key"] == "phone" and r["kind"] == "dummy" and r["edit"] is not None and not r["edit"].text().strip():
+                self.view.blockSignals(True)
+                for k, c in enumerate(r["cursors"]):
+                    if c.selectedText() == r["orig"][k]:
+                        c.insertText("", r["fmts"][k])
+                self.view.blockSignals(False)
         edits = self.view.changed_paragraphs()
         if not edits:
             QMessageBox.information(self, "Редактор Word", "В документе пока ничего не изменено.")
@@ -16850,9 +17096,11 @@ class MainWindow(QMainWindow):
         ll.addLayout(hrow(cap("Категория:", 74), self.combo_cat))
 
         self.lib_list = ColumnGrid(columns=3, min_cell=84)
-        self.lib_list.setSpacing(3)
-        self.lib_list.max_icon = 48
-        self.lib_list.min_rows = 2              # два ряда печатей видны всегда
+        self.lib_list.icon_pad = 6                         # печати — во всю клетку, три в ряд
+        self.lib_list.setSpacing(2)
+        self.lib_list.max_icon = 512            # печати — крупно, во всю клетку
+        self.lib_list.min_rows = 1              # один ряд виден всегда; остальное место список берёт сам
+        self.lib_list.min_floor = 152           # не ниже прежней высоты: панель по-прежнему влезает в 768
         self.lib_list.setWordWrap(False)
         self.lib_list.setMinimumHeight(178)
         self.lib_list.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
@@ -17183,7 +17431,7 @@ class MainWindow(QMainWindow):
                     qp.setPen(Qt.NoPen)
                     qp.setBrush(QColor(233, 230, 223))
                     qp.drawRoundedRect(QRectF(1, 1, side - 2, side - 2), side * 0.14, side * 0.14)
-                k = 0.82 if dark_theme else 0.94
+                k = 0.86 if dark_theme else 0.98
                 inner = pm.scaled(int(side * k), int(side * k), Qt.KeepAspectRatio,
                                   Qt.SmoothTransformation)
                 qp.drawPixmap((side - inner.width()) // 2, (side - inner.height()) // 2, inner)
