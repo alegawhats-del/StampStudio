@@ -593,7 +593,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.17.0"
+APP_VERSION = "6.17.1"
 EDITION = "main"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -9921,6 +9921,18 @@ ACT_INKS = [("Синяя шариковая", (58, 74, 178)), ("Светло-с�
             ("Сине-фиолетовая", (70, 60, 170)), ("Фиолетовая", (88, 60, 160)), ("Чёрная", (28, 28, 32))]
 
 
+def stamp_is_cutout(pm):
+    """У картинки печати прозрачный фон (вырезанная печать), а не свой прямоугольник."""
+    if not pm.hasAlphaChannel():
+        return False
+    img = pm.toImage()
+    w, h = img.width(), img.height()
+    if w < 2 or h < 2:
+        return False
+    pts = [(0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1), (w // 2, 0), (0, h // 2), (w - 1, h // 2), (w // 2, h - 1)]
+    return sum(1 for x, y in pts if img.pixelColor(x, y).alpha() < 40) >= 5
+
+
 def ink_swatch(rgb, size=14):
     """Кружок цвета пасты — значок для списка."""
     pm = QPixmap(size, size)
@@ -13048,6 +13060,8 @@ class MainWindow(QMainWindow):
         self._retint_icons()
         if hasattr(self, "tool_strip") and hasattr(self, "_strip_open"):
             self._strip_apply()
+        if hasattr(self, "lib_list") and getattr(self, "_lib_theme", self.theme) != self.theme:
+            self.reload_library()                         # плитки печатей рисуются под тему
         QTimer.singleShot(0, lambda: dwm_tint(self, self.theme == "dark"))
         ch = getattr(QApplication.instance(), "_chrome", None)
         if ch is not None:
@@ -17132,6 +17146,8 @@ class MainWindow(QMainWindow):
         self.combo_cat.blockSignals(False)
 
     def reload_library(self):
+        dark_theme = getattr(self, "theme", settings_load().get("theme", "light")) == "dark"
+        self._lib_theme = "dark" if dark_theme else "light"
         self._refresh_categories()
         self.lib_list.fit_grid()
         self.lib_list.clear()
@@ -17161,10 +17177,15 @@ class MainWindow(QMainWindow):
                 qp = QPainter(chip)
                 qp.setRenderHint(QPainter.Antialiasing)
                 qp.setRenderHint(QPainter.SmoothPixmapTransform)
-                qp.setPen(QPen(QColor(0, 0, 0, 28), 1))
-                qp.setBrush(QColor(255, 255, 255))
-                qp.drawRoundedRect(QRectF(1, 1, side - 2, side - 2), side * 0.14, side * 0.14)
-                inner = pm.scaled(int(side * 0.82), int(side * 0.82), Qt.KeepAspectRatio,
+                # белой плитки под печатью нет: у печати без фона видна только она сама, а если у картинки
+                # свой фон — он и будет её прямоугольником. В тёмной теме прозрачной печати нужна светлая
+                # подложка, иначе синие чернила на тёмном не разглядеть.
+                if dark_theme and stamp_is_cutout(pm):
+                    qp.setPen(Qt.NoPen)
+                    qp.setBrush(QColor(233, 230, 223))
+                    qp.drawRoundedRect(QRectF(1, 1, side - 2, side - 2), side * 0.14, side * 0.14)
+                k = 0.82 if dark_theme else 0.94
+                inner = pm.scaled(int(side * k), int(side * k), Qt.KeepAspectRatio,
                                   Qt.SmoothTransformation)
                 qp.drawPixmap((side - inner.width()) // 2, (side - inner.height()) // 2, inner)
                 qp.end()
