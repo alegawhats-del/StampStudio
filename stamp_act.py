@@ -144,6 +144,57 @@ def volume_ru(liters, ccm):
 
 # ---------------------------------------------------------------- работа с .docx
 
+_WNS = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+
+
+def _tc_text(tc):
+    return "".join(t.text or "" for t in tc.iter(_WNS + "t")).strip()
+
+
+def _drop_pair(table, label):
+    """Убрать из строки таблицы пару ячеек «подпись — значение» вместе с их колонками. True, если убрали."""
+    tbl = table._tbl
+    for tr in tbl.iter(_WNS + "tr"):
+        tcs = [x for x in tr if x.tag == _WNS + "tc"]
+        idx = next((i for i, tc in enumerate(tcs) if _tc_text(tc).startswith(label)), None)
+        if idx is None or idx + 1 >= len(tcs):
+            continue
+        if any(len([x for x in other if x.tag == _WNS + "tc"]) != len(tcs)
+               for other in tbl.iter(_WNS + "tr") if other is not tr):
+            return False                              # в других строках другое число ячеек — колонки не трогаем
+        cut = 0
+        grid = tbl.find(_WNS + "tblGrid")
+        cols = [g for g in grid if g.tag == _WNS + "gridCol"] if grid is not None else []
+        for i in (idx + 1, idx):
+            tr.remove(tcs[i])
+            if len(cols) == len(tcs):
+                try:
+                    cut += int(cols[i].get(_WNS + "w") or 0)
+                except ValueError:
+                    pass
+                grid.remove(cols[i])
+        pr = tbl.find(_WNS + "tblPr")
+        tw = pr.find(_WNS + "tblW") if pr is not None else None
+        if tw is not None and tw.get(_WNS + "type") == "dxa" and cut:
+            try:
+                tw.set(_WNS + "w", str(max(0, int(tw.get(_WNS + "w")) - cut)))
+            except (TypeError, ValueError):
+                pass
+        return True
+    return False
+
+
+def _drop_row(table, label):
+    """Убрать строку таблицы, которая начинается с подписи label. True, если убрали."""
+    tbl = table._tbl
+    for tr in list(tbl.iter(_WNS + "tr")):
+        tcs = [x for x in tr if x.tag == _WNS + "tc"]
+        if tcs and _tc_text(tcs[0]).startswith(label):
+            tr.getparent().remove(tr)
+            return True
+    return False
+
+
 def _docx():
     import docx
     return docx
@@ -383,12 +434,15 @@ def fill_de(template, data, out_path):
             _set_cell(c, vin[i] if i < len(vin) else "")
     t = _find_table(d, "Kraftstoff")
     if t is not None:
+        hp = str(data.get("hp", "")).strip()
         for label, val in (("Kraftstoff", data.get("fuel_de", "")),
                            ("Hubraum", volume_de(data.get("liters"), data.get("ccm"))),
-                           ("Anzahl der PS.", str(data.get("hp", "")))):
+                           ("Anzahl der PS.", hp)):
             c = _value_after(t, label)
             if c is not None:
                 _set_cell(c, val)
+        if not hp:                                    # мощность не указана — графы в акте нет вовсе
+            _drop_pair(t, "Anzahl der PS")
     t = _find_table(d, "Reifen")
     if t is not None:
         _fill_tires(t.cell(0, 0), data.get("tires") or {})
@@ -450,6 +504,8 @@ def fill_ru(template, data, out_path, texts=None):
             c = _value_after(t, label)
             if c is not None:
                 _set_cell(c, str(val))
+        if not hp:                                    # мощность не указана — строки в переводе нет
+            _drop_row(t, "Мощность")
     pars = r.paragraphs
     for idx, text in (texts or {}).items():
         try:

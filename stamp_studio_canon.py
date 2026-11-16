@@ -579,7 +579,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.16.0"
+APP_VERSION = "6.16.1"
 EDITION = "canon"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -10277,6 +10277,7 @@ class ActPage(QDialog):
         row.addSpacing(12)
         row.addWidget(QLabel("мощность"))
         row.addWidget(line("hp", "265", 70))
+        self.ed["hp"].setToolTip("Мощность в л. с. Оставьте пустым — и графы мощности не будет ни в акте, ни в переводе")
         row.addWidget(QLabel("л. с."))
         row.addStretch(1)
         f.addRow("Двигатель:", row)
