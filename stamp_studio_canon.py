@@ -557,7 +557,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.14.0"
+APP_VERSION = "6.14.1"
 EDITION = "canon"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -11068,8 +11068,8 @@ class ToolsPanel(QWidget):
         g.setVerticalSpacing(3)
         self.cmb_src = QComboBox()
         self.cmb_src.addItem("Google — как в поиске", "google")
-        self.cmb_src.addItem("Нацбанк РБ — на дату", "nbrb")
-        self.cmb_src.setCurrentIndex(1 if settings_load().get("rates_source") == "nbrb" else 0)
+        self.cmb_src.addItem("Нацбанк РБ — официальный", "nbrb")
+        self.cmb_src.setCurrentIndex(0 if settings_load().get("rates_source") == "google" else 1)
         self.cmb_src.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
         self.cmb_src.setMinimumContentsLength(10)
         self.cmb_src.currentIndexChanged.connect(self._src_changed)
@@ -11173,7 +11173,7 @@ class ToolsPanel(QWidget):
         self.date.setVisible(nb)                    # Google показывает только сегодняшний курс
         self.lbl_date.setVisible(nb)
         st = settings_load()
-        if st.get("rates_source", "google") != self.cmb_src.currentData():
+        if st.get("rates_source", "nbrb") != self.cmb_src.currentData():
             st["rates_source"] = self.cmb_src.currentData()
             settings_save(st)
 
@@ -11194,10 +11194,10 @@ class ToolsPanel(QWidget):
             self.lbl_rates.setText("не получилось взять курс — впишите вручную")
             self.lbl_rates.setToolTip(err)
             return
-        # курс приводится к сотым — как его пишут в документах; расчёт идёт по показанному числу
-        self.rate["eur_byn"].setText(TOOLS.fmt_plain(rates["eur_byn"], 2))
-        self.rate["rub_byn"].setText(TOOLS.fmt_plain(rates["rub_byn"] * 100, 2))
-        self.rate["rub_eur"].setText(TOOLS.fmt_plain(rates["rub_eur"] * 100, 2))
+        # курс — до четырёх знаков, как в ТПО; расчёт идёт по показанному числу
+        self.rate["eur_byn"].setText(TOOLS.fmt_plain(rates["eur_byn"], 4))
+        self.rate["rub_byn"].setText(TOOLS.fmt_plain(rates["rub_byn"] * 100, 4))
+        self.rate["rub_eur"].setText(TOOLS.fmt_plain(rates["rub_eur"] * 100, 4))
         self.lbl_rates.setText(f"{rates['source']}, {rates['date']}")
         self.lbl_rates.setToolTip("")
         self._recalc_currency()
