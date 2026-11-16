@@ -579,7 +579,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.16.1"
+APP_VERSION = "6.16.2"
 EDITION = "main"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -9805,12 +9805,37 @@ def _strokes_image(strokes, w, h, color, scale=1.0):
                             img.bytesPerLine(), 1).copy()
 
 
-def hand_pil(text, glyphs, height_px, seed=0, color=None):
-    """Строка почерком мастера → прозрачная картинка (или None, если писать нечего)."""
-    strokes, w, h = ACT.hand_layout(text, glyphs, height_px, seed)
+ACT_INKS = [("Синяя шариковая", (58, 74, 178)), ("Светло-синяя", (92, 108, 204)), ("Тёмно-синяя", (22, 32, 104)),
+            ("Фиолетовая", (88, 60, 160)), ("Чёрная", (28, 28, 32))]
+
+
+def act_ink_style(st=None):
+    """Как пишутся замеры ЛКП от руки: (цвет, толщина ×, размер ×, насыщенность 0–1) — из настроек."""
+    st = settings_load() if st is None else st
+    name = st.get("act_ink") or ACT_INKS[0][0]
+    color = next((c for n, c in ACT_INKS if n == name), ACT_INKS[0][1])
+
+    def pct(key, default, lo, hi):
+        try:
+            return max(lo, min(hi, int(st.get(key, default)))) / 100.0
+        except (TypeError, ValueError):
+            return default / 100.0
+
+    return color, pct("act_pen", 60, 30, 160), pct("act_size", 100, 70, 140), pct("act_alpha", 85, 40, 100)
+
+
+def hand_pil(text, glyphs, height_px, seed=0, color=None, pen_k=1.0, alpha=1.0):
+    """Строка почерком мастера → прозрачная картинка (или None, если писать нечего).
+    pen_k — толщина линии относительно обычной, alpha — насыщенность пасты."""
+    pen = max(1.0, height_px * 0.062) * float(pen_k)
+    strokes, w, h = ACT.hand_layout(text, glyphs, height_px, seed, pen=max(0.8, pen))
     if not strokes:
         return None
-    return _strokes_image(strokes, w, h, color or PEN_INKS[0][1])
+    im = _strokes_image(strokes, w, h, color or PEN_INKS[0][1])
+    if alpha < 0.995:
+        a = im.getchannel("A").point(lambda v: int(v * alpha))
+        im.putalpha(a)
+    return im
 
 
 def sign_pil(strokes_norm, height_px, color=None):
@@ -10225,6 +10250,47 @@ class ActPage(QDialog):
         self.cmb_lkp.setCurrentIndex(1 if settings_load().get("act_lkp_style") == "print" else 0)
         self.cmb_lkp.currentIndexChanged.connect(self._lkp_style_changed)
         f.addRow("Замеры ЛКП:", self.cmb_lkp)
+        st_ = settings_load()
+        irow = QHBoxLayout()
+        irow.setSpacing(6)
+        self.cmb_ink = QComboBox()
+        for name, _c in ACT_INKS:
+            self.cmb_ink.addItem(name)
+        self.cmb_ink.setCurrentIndex(max(0, self.cmb_ink.findText(st_.get("act_ink") or ACT_INKS[0][0])))
+        self.cmb_ink.setToolTip("Цвет пасты, которой вписываются замеры")
+        self.cmb_ink.currentIndexChanged.connect(self._ink_changed)
+        irow.addWidget(self.cmb_ink)
+        self.lbl_ink = QLabel()
+        self.lbl_ink.setFixedSize(150, 40)
+        self.lbl_ink.setAlignment(Qt.AlignCenter)
+        self.lbl_ink.setStyleSheet("background: #ffffff; border: 1px solid #b9b9b9; border-radius: 4px;")
+        self.lbl_ink.setToolTip("Так замер будет выглядеть в окошке схемы")
+        irow.addWidget(self.lbl_ink)
+        irow.addStretch(1)
+        f.addRow("Паста:", irow)
+        srow = QHBoxLayout()
+        srow.setSpacing(6)
+        self.sl_ink = {}
+        for key, cap, lo, hi, default, tip in (
+                ("act_pen", "толщина", 30, 160, 60, "Толщина линии: левее — тоньше, как шариковая ручка"),
+                ("act_size", "размер", 70, 140, 100, "Размер цифр относительно окошка"),
+                ("act_alpha", "нажим", 40, 100, 85, "Насыщенность пасты: левее — бледнее")):
+            lab = QLabel(cap)
+            lab.setObjectName("hint")
+            srow.addWidget(lab)
+            sl = QSlider(Qt.Horizontal)
+            sl.setRange(lo, hi)
+            try:
+                sl.setValue(int(st_.get(key, default)))
+            except (TypeError, ValueError):
+                sl.setValue(default)
+            sl.setToolTip(tip)
+            sl.setMinimumWidth(60)
+            sl.valueChanged.connect(self._ink_changed)
+            srow.addWidget(sl, 1)
+            self.sl_ink[key] = sl
+        f.addRow("Линия:", srow)
+        self.cmb_master.currentIndexChanged.connect(lambda *_: self._ink_preview())
         fl.addWidget(box)
 
         box = QGroupBox("Автомобиль")
@@ -10427,6 +10493,7 @@ class ActPage(QDialog):
         self.btn_make.setEnabled(True)
         cur = self.cmb_master.currentText()
         self._fill_masters(cur)
+        self._ink_preview()
         self._dict_refresh()
         try:
             if int(re.sub(r"\D", "", self.ed_number.text()) or 0) < act_next_number():
@@ -10679,6 +10746,41 @@ class ActPage(QDialog):
         if st.get("act_lkp_style") != self.cmb_lkp.currentData():
             st["act_lkp_style"] = self.cmb_lkp.currentData()
             settings_save(st)
+        self._ink_preview()
+
+    def _ink_changed(self, *_):
+        """Цвет, толщина, размер, нажим — запомнить и показать на образце."""
+        st = settings_load()
+        new = {"act_ink": self.cmb_ink.currentText()}
+        new.update({k: sl.value() for k, sl in self.sl_ink.items()})
+        if any(st.get(k) != v for k, v in new.items()):
+            st.update(new)
+            settings_save(st)
+        self._ink_preview()
+
+    def _ink_preview(self):
+        """Образец: «123» рукой выбранного мастера нынешней пастой (или печатными цифрами)."""
+        if not hasattr(self, "lbl_ink"):
+            return
+        hand = self.cmb_lkp.currentData() != "print"
+        self.cmb_ink.setEnabled(hand)
+        for sl in self.sl_ink.values():
+            sl.setEnabled(hand)
+        if not hand:
+            self.lbl_ink.setPixmap(QPixmap())
+            self.lbl_ink.setText("123")
+            return
+        name = self.cmb_master.currentText()
+        m = next((x for x in act_masters_load() if x.get("name") == name), None)
+        color, pen_k, size_k, alpha = act_ink_style()
+        im = hand_pil("123", (m or {}).get("glyphs") or {}, int(26 * size_k), 7, color=color, pen_k=pen_k, alpha=alpha) if m else None
+        if im is None:
+            self.lbl_ink.setPixmap(QPixmap())
+            self.lbl_ink.setText("нет почерка")
+            return
+        self.lbl_ink.setText("")
+        im.thumbnail((146, 36))
+        self.lbl_ink.setPixmap(self.win._pixmap_from_pil(im))
 
     # ---------------------------------------------------------- перевод ИИ
     def translate_ai(self):
@@ -14259,6 +14361,7 @@ class MainWindow(QMainWindow):
             page = doc[pno]
             places = ACT.lkp_places(rect, d.get("kind", "car"))
             print_fs = None
+            ink_color, ink_pen, ink_size, ink_alpha = act_ink_style()
             for name, x0, y0, x1, y1 in places:
                 text = vals.get(name)
                 if not text:
@@ -14271,15 +14374,16 @@ class MainWindow(QMainWindow):
                     self._act_print_value(page, text.replace("%", "") if wheel else text, x0, y0, bw, bh, wheel,
                                           None if wheel else print_fs)
                     continue
-                h_pt = bh * (0.40 if wheel else 0.98)
-                im = hand_pil(text.replace("%", "") if wheel else text, glyphs, int(h_pt * 300 / 72), rnd.randrange(10 ** 6))
+                h_pt = bh * (0.40 if wheel else 0.98) * ink_size
+                im = hand_pil(text.replace("%", "") if wheel else text, glyphs, int(h_pt * 300 / 72), rnd.randrange(10 ** 6),
+                              color=ink_color, pen_k=ink_pen, alpha=ink_alpha)
                 if im is None:
                     continue
                 ang = rnd.uniform(-3.0, 3.0)
                 im = im.rotate(ang, expand=True, resample=Image.BICUBIC)
                 k = h_pt / (int(h_pt * 300 / 72) * 1.1)
                 w_pt, hh_pt = im.width * k, im.height * k
-                max_w = bw * (0.50 if wheel else 0.92)
+                max_w = bw * (0.50 if wheel else 0.92) * max(1.0, ink_size)
                 if w_pt > max_w:
                     hh_pt *= max_w / w_pt
                     w_pt = max_w
