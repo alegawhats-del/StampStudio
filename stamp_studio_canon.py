@@ -593,7 +593,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.17.2"
+APP_VERSION = "6.17.3"
 EDITION = "canon"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -1180,7 +1180,10 @@ class MascotOverlay(QLabel):
 #  Ручка: подпись рисуется мышью прямо на странице
 # ======================================================================
 
-PEN_INKS = [("Синяя", (27, 54, 168)), ("Тёмно-синяя", (22, 32, 104)), ("Чёрная", (28, 28, 32))]
+PEN_INKS = [("Синяя", (27, 54, 168)), ("Тёмно-синяя", (22, 32, 104)), ("Чёрная", (28, 28, 32)),
+            # новые оттенки добавляются в конец: сохранённые наборы помнят пасту по номеру
+            ("Синяя шариковая", (58, 74, 178)), ("Светло-синяя", (92, 108, 204)), ("Голубая", (64, 110, 200)),
+            ("Сине-фиолетовая", (70, 60, 170)), ("Фиолетовая", (88, 60, 160))]
 
 
 def pen_dense_points(pts):
@@ -1377,21 +1380,21 @@ class PenBar(QFrame):
 
         self.ink_index = int(st.get("ink", 0)) % len(PEN_INKS)
         self.ink_btns = []
-        inks = QHBoxLayout()
-        inks.setSpacing(6)
+        inks = QGridLayout()                      # два ряда кружков: палитра шире, панель — нет
+        inks.setSpacing(4)
         for i, (name, rgb) in enumerate(PEN_INKS):
             b = QPushButton()
             b.setCheckable(True)
-            b.setFixedSize(26, 26)
+            b.setFixedSize(20, 20)
             b.setToolTip(f"Цвет ручки: {name.lower()}")
             b.setCursor(Qt.PointingHandCursor)
             b.setStyleSheet(
                 "QPushButton { background: rgb(%d,%d,%d); border: 2px solid transparent; "
-                "border-radius: 13px; min-height: 0; padding: 0; }"
+                "border-radius: 10px; min-height: 0; padding: 0; }"
                 "QPushButton:checked { border: 2px solid #e8b04b; }" % rgb)
             b.clicked.connect(lambda _=False, i=i: self._pick_ink(i))
             self.ink_btns.append(b)
-            inks.addWidget(b)
+            inks.addWidget(b, i % 2, i // 2)
         lay.addLayout(inks)
         lay.addStretch(1)
 
@@ -8379,6 +8382,19 @@ def split_issued(text):
 def join_issued(date, by):
     """Дата выдачи и «кем выдан» одной строкой — как пишут в реквизитах."""
     return " ".join(x for x in (str(date or "").strip(), str(by or "").strip()) if x)
+
+
+def pages_label(pages):
+    """Номера страниц (с нуля) → «1-3,5»."""
+    nums = sorted(set(int(p) + 1 for p in pages))
+    out, i = [], 0
+    while i < len(nums):
+        j = i
+        while j + 1 < len(nums) and nums[j + 1] == nums[j] + 1:
+            j += 1
+        out.append(str(nums[i]) if i == j else f"{nums[i]}-{nums[j]}")
+        i = j + 1
+    return ",".join(out)
 
 
 def phone_mask(text):
@@ -15851,6 +15867,8 @@ class MainWindow(QMainWindow):
         lay.addWidget(cap_pages)
 
         self.page_list = PageGrid()
+        self.page_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.page_list.customContextMenuRequested.connect(self._page_menu)
         self.page_list.setViewMode(QListWidget.IconMode)
         self.page_list.setIconSize(QSize(104, 140))
         self.page_list.setGridSize(QSize(140, 170))
@@ -16597,9 +16615,10 @@ class MainWindow(QMainWindow):
         src.close()
         if o.get("target") == "new":
             keep = sorted(set(i for i in pages if 0 <= i < new.page_count))
-            if keep and len(keep) < new.page_count:
+            part = bool(keep) and len(keep) < new.page_count
+            if part:
                 new.select(keep)                      # в новый файл — только выбранные страницы
-            self._scan_look_save_new(new, len(keep) or len(pages))
+            self._scan_look_save_new(new, len(keep) or len(pages), pages=keep if part else None)
             return
         n = self.doc.page_count
         self.doc.insert_pdf(new)
@@ -16617,15 +16636,18 @@ class MainWindow(QMainWindow):
         self.show_toast(f"✔  Готово — страниц «как скан»: {len(pages)}. Сохраните (Ctrl+S)")
 
 
-    def _scan_look_save_new(self, new, n_pages, suffix="скан"):
-        """Сохранить «скан» отдельным файлом; открытый документ и печати не трогаем."""
+    def _scan_look_save_new(self, new, n_pages, suffix="скан", pages=None):
+        """Сохранить «скан» отдельным файлом; открытый документ и печати не трогаем.
+        pages — номера страниц (с нуля), если в файл ушла только часть: они встают в начало имени."""
         base = os.path.splitext(os.path.basename(str(self.doc_path or "документ")))[0]
         base = base.replace(" (из изображений)", "").replace(" (из Word)", "")
+        if pages:
+            base = f"стр. {pages_label(pages)} {base}"
         folder = self.current_dir()
         if self.doc_path and os.path.isfile(str(self.doc_path)):
             folder = os.path.dirname(str(self.doc_path))
         name = f"{base} {suffix}.pdf"
-        if act_doc_name(base) and not os.path.exists(os.path.join(folder, f"{base}.pdf")):
+        if not pages and act_doc_name(base) and not os.path.exists(os.path.join(folder, f"{base}.pdf")):
             name = f"{base}.pdf"                   # акт осмотра: имя то же, что у документа
         k = 2
         while os.path.exists(os.path.join(folder, name)):
@@ -17024,6 +17046,43 @@ class MainWindow(QMainWindow):
         order = [self.page_list.item(i).data(Qt.UserRole)
                  for i in range(self.page_list.count())]
         self.apply_page_order(order)
+
+    def move_page_to(self, row=None, target=None):
+        """Поставить страницу сразу на нужное место: номер вводится цифрой."""
+        if self.doc is None:
+            return
+        n = self.doc.page_count
+        i = self.page_list.currentRow() if row is None else row
+        if i < 0 or n < 2:
+            return
+        if target is None:
+            target, ok = QInputDialog.getInt(self, "Переместить страницу", f"Страница {i + 1}. На какое место поставить (1–{n})?",
+                                             i + 1, 1, n)
+            if not ok:
+                return
+        j = max(0, min(n - 1, int(target) - 1))
+        if j == i:
+            return
+        order = list(range(n))
+        order.insert(j, order.pop(i))
+        self.current_page = i
+        self.apply_page_order(order)
+        self.page_list.setCurrentRow(j)
+
+    def _page_menu(self, pos):
+        it = self.page_list.itemAt(pos)
+        if it is None or self.doc is None:
+            return
+        row = self.page_list.row(it)
+        self.page_list.setCurrentRow(row)
+        m = QMenu(self)
+        a = m.addAction("Переместить на место №…", lambda: self.move_page_to(row))
+        a.setEnabled(self.doc.page_count > 1)
+        m.addAction("Выше", lambda: self.move_page(-1)).setEnabled(row > 0)
+        m.addAction("Ниже", lambda: self.move_page(1)).setEnabled(row < self.doc.page_count - 1)
+        m.addSeparator()
+        m.addAction("Удалить страницу", self.delete_page)
+        m.exec(self.page_list.viewport().mapToGlobal(pos))
 
     def move_page(self, delta):
         if self.doc is None:
