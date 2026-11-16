@@ -560,7 +560,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.15.0"
+APP_VERSION = "6.15.1"
 EDITION = "canon"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -6414,6 +6414,25 @@ class SettingsDialog(QDialog):
             return b
 
         self._checks = []
+        self._combos = []
+
+        def combo(lay, label, key, options, default, tip=""):
+            """Выбор из списка: options — [(значение, подпись)]; сохраняется в настройках под key."""
+            row = QHBoxLayout()
+            row.addWidget(QLabel(label))
+            c = QComboBox()
+            for value, text in options:
+                c.addItem(text, value)
+            cur = st.get(key, default)
+            c.setCurrentIndex(max(0, next((i for i, (v, _t) in enumerate(options) if v == cur), 0)))
+            if tip:
+                c.setToolTip(tip)
+            row.addWidget(c)
+            row.addStretch(1)
+            lay.addLayout(row)
+            self._combos.append((c, key))
+            return c
+
         # ---- Общие
         l = page("Общие")
         self.rb_light = QRadioButton("Светлая тема")
@@ -6426,6 +6445,7 @@ class SettingsDialog(QDialog):
         l.addLayout(tr)
         l.addStretch(1)
         # ---- Обновления
+        l.insertWidget(l.count() - 1, self._strip_check(st))
         l = page("Обновления", f"Сейчас установлена версия {APP_VERSION}.")
         check(l, "Проверять обновления при запуске", "auto_update", True,
               "Программа сама спросит, когда выйдет новая версия")
@@ -6523,11 +6543,42 @@ class SettingsDialog(QDialog):
         nrow.addWidget(self.ed_act_next)
         nrow.addStretch(1)
         l.addLayout(nrow)
+        combo(l, "Замеры ЛКП на схеме:", "act_lkp_style", [("hand", "почерком мастера"), ("print", "печатными цифрами")],
+              "hand", "Как вписывать замеры в окошки схемы: рукой мастера или ровным печатным шрифтом")
         button(l, "Открыть акт осмотра", lambda: (self.reject(), win.open_act_page()),
                "Страница акта: мастера, бланки, схема ЛКП  (Ctrl+Shift+K)")
         l.addStretch(1)
         # ---- Инструменты
-        l = page("Инструменты", "Конвертеры валют, регистр, сумма прописью, л.с.⇄кВт, PDF в Word, факсимиле из фото.")
+        l = page("Инструменты", "Панель сбоку окна: валюты, регистр, падежи, сумма прописью, л.с.⇄кВт  (Ctrl+Shift+T).")
+        combo(l, "Курс валют брать:", "rates_source",
+              [("nbrb", "Нацбанк РБ — официальный, на дату"), ("google", "Google — как в поиске")], "nbrb",
+              "Откуда программа берёт курс евро и российского рубля. Запрос уходит на сайт выбранного источника.")
+        combo(l, "Знаков после запятой в курсе:", "rates_decimals", [(4, "4 — как в ТПО (3.3178)"), (2, "2 (3.32)")], 4,
+              "До скольких знаков приводить взятый курс. Расчёт идёт по показанному числу.")
+        check(l, "Брать курс самому при открытии панели", "rates_auto", True,
+              "Выключите, если запрос за курсом должен уходить только по вашему нажатию на значок обновления.")
+        combo(l, "Показывать инструменты:", "tools_detached", [(False, "панелью сбоку окна"), (True, "отдельным окном поверх")],
+              False, "То же переключает значок со стрелкой в шапке панели.")
+        combo(l, "Вкладка «Регистр»:", "case_view", [("list", "список — все варианты сразу"), ("pair", "две панели — текст и результат")],
+              "list")
+        check(l, "Брать выделенное в документе в открытую вкладку", "tools_take_selection", True,
+              "Выделили в редакторе Word число, ФИО или слово — оно само попадает в панель инструментов.")
+        frow = QHBoxLayout()
+        self.lbl_fixes = QLabel("")
+        self.lbl_fixes.setObjectName("plain")
+        frow.addWidget(self.lbl_fixes)
+        self.btn_fixes = QPushButton("Забыть")
+        self.btn_fixes.setToolTip("Удалить запомненные ручные исправления падежей")
+        self.btn_fixes.clicked.connect(self._forget_fixes)
+        frow.addWidget(self.btn_fixes)
+        frow.addStretch(1)
+        l.addLayout(frow)
+        self._fixes_label()
+        button(l, "Открыть инструменты", lambda: (self.reject(), win.show_tools()),
+               "Валюты, регистр, падежи, сумма прописью, л.с.⇄кВт  (Ctrl+Shift+T)")
+        l.addStretch(1)
+        # ---- Конвертер и PDF
+        l = page("Конвертер и PDF", "Конвертер Word ⇄ PDF (Ctrl+Shift+J), «PDF в Word» и факсимиле из фотографии.")
         prow = QHBoxLayout()
         prow.addWidget(QLabel("PDF в Word по умолчанию:"))
         self.cmb_p2w = QComboBox()
@@ -6537,11 +6588,35 @@ class SettingsDialog(QDialog):
         prow.addWidget(self.cmb_p2w)
         prow.addStretch(1)
         l.addLayout(prow)
+        check(l, "Конвертер: убирать метаданные из готового файла", "conv_strip_meta", True,
+              "Автор, организация, название, программа и даты не попадают в готовый PDF или Word.")
         check(l, "Снимок подписи сразу очищать как фотографию", "photo_auto", True,
               "Когда в «Мои печати» загружают фотографию, а не готовую картинку, галочка «подпись с фото»\n"
               "включается сама: бумага, тени и неровный свет убираются.")
-        button(l, "Открыть инструменты", lambda: (self.reject(), win.show_tools()),
-               "Валюты, регистр, сумма прописью, л.с.⇄кВт  (Ctrl+Shift+T)")
+        button(l, "Открыть конвертер", lambda: (self.reject(), win.open_convert_page()),
+               "Word в PDF и PDF в Word перетаскиванием  (Ctrl+Shift+J)")
+        l.addStretch(1)
+        # ---- Расчёт платежей
+        l = page("Расчёт платежей", "Предварительный расчёт таможенных платежей (Ctrl+Shift+U): суммы в российских рублях, "
+                                    "курс Нацбанка РБ.")
+        crow = QHBoxLayout()
+        crow.addWidget(QLabel("Таможенный сбор по умолчанию, Br:"))
+        self.ed_calc_fee = QLineEdit(str(st.get("calc_fee") or CUSTOMS.FEE_BYN))
+        self.ed_calc_fee.setMaximumWidth(110)
+        self.ed_calc_fee.setToolTip("Сбор за таможенные операции для легкового автомобиля. На странице расчёта его можно поменять на раз.")
+        crow.addWidget(self.ed_calc_fee)
+        crow.addStretch(1)
+        l.addLayout(crow)
+        rates = st.get("calc_rates") or {}
+        self.lbl_calc_rates = QLabel(f"Запомненные курсы: 1 EUR = {rates.get('eur')} Br, 100 RUB = {rates.get('rub')} Br"
+                                     if rates.get("eur") else "Запомненных курсов нет.")
+        self.lbl_calc_rates.setObjectName("plain")
+        l.addWidget(self.lbl_calc_rates)
+        self._calc_rates_drop = False
+        button(l, "Забыть запомненные курсы", self._forget_calc_rates,
+               "Поля курсов на странице расчёта станут пустыми до следующего «Взять курс»")
+        button(l, "Открыть расчёт", lambda: (self.reject(), win.open_calc_page()),
+               "Страница расчёта таможенных платежей  (Ctrl+Shift+U)")
         l.addStretch(1)
         # ---- Лицензия
         l = page("Лицензия", "Программа работает по ключу. Ключ хранится на этом компьютере и привязан к нему.")
@@ -6757,13 +6832,43 @@ class SettingsDialog(QDialog):
         settings_save(st)
         self._fill()
 
+    def _strip_check(self, st):
+        self.chk_strip = QCheckBox("Боковая панель значков раскрыта — с подписями и группами")
+        self.chk_strip.setChecked(bool(st.get("strip_open", False)))
+        self.chk_strip.setToolTip("То же делают стрелки » и « сверху боковой панели.")
+        return self.chk_strip
+
+    def _fixes_label(self):
+        n = len(settings_load().get("decline_fixes") or {})
+        self.lbl_fixes.setText(f"Ручных исправлений падежей запомнено: {n}")
+        self.btn_fixes.setEnabled(n > 0)
+
+    def _forget_fixes(self):
+        st = settings_load()
+        st.pop("decline_fixes", None)
+        settings_save(st)
+        self._fixes_label()
+
+    def _forget_calc_rates(self):
+        self._calc_rates_drop = True
+        self.lbl_calc_rates.setText("Запомненные курсы будут забыты после «Сохранить».")
+
     def _save(self):
         self._cloud_store()
         st = settings_load()
         for c, key in self._checks:
             st[key] = c.isChecked()
+        for c, key in self._combos:
+            st[key] = c.currentData()
         st["pdf2word_method"] = self.cmb_p2w.currentData()
+        st["strip_open"] = self.chk_strip.isChecked()
+        fee = CUSTOMS._d(self.ed_calc_fee.text())
+        if fee is not None and fee >= 0:
+            st["calc_fee"] = CUSTOMS.money(fee)
+        if self._calc_rates_drop:
+            st.pop("calc_rates", None)
         settings_save(st)
+        self.win.settings_applied()
         try:                                              # следующий номер акта — если его поправили
             n = int(re.sub(r"\D", "", self.ed_act_next.text()) or 0)
             if n and n != act_next_number():
@@ -11023,7 +11128,7 @@ class ToolsPanel(QWidget):
         self._sel_timer.start()
         if not getattr(self, "_rates_asked", False):     # курс берётся сам при первом открытии
             self._rates_asked = True
-            if not any(ed.text().strip() for ed in self.rate.values()):
+            if settings_load().get("rates_auto", True) and not any(ed.text().strip() for ed in self.rate.values()):
                 QTimer.singleShot(200, self.load_rates)
 
     def hideEvent(self, e):
@@ -11218,10 +11323,11 @@ class ToolsPanel(QWidget):
             self.lbl_rates.setText("не получилось взять курс — впишите вручную")
             self.lbl_rates.setToolTip(err)
             return
-        # курс — до четырёх знаков, как в ТПО; расчёт идёт по показанному числу
-        self.rate["eur_byn"].setText(TOOLS.fmt_plain(rates["eur_byn"], 4))
-        self.rate["rub_byn"].setText(TOOLS.fmt_plain(rates["rub_byn"] * 100, 4))
-        self.rate["rub_eur"].setText(TOOLS.fmt_plain(rates["rub_eur"] * 100, 4))
+        # курс — до четырёх знаков, как в ТПО (или до двух — в настройках); расчёт идёт по показанному числу
+        dec = 2 if settings_load().get("rates_decimals") == 2 else 4
+        self.rate["eur_byn"].setText(TOOLS.fmt_plain(rates["eur_byn"], dec))
+        self.rate["rub_byn"].setText(TOOLS.fmt_plain(rates["rub_byn"] * 100, dec))
+        self.rate["rub_eur"].setText(TOOLS.fmt_plain(rates["rub_eur"] * 100, dec))
         self.lbl_rates.setText(f"{rates['source']}, {rates['date']}")
         self.lbl_rates.setToolTip("")
         self._recalc_currency()
@@ -12032,7 +12138,7 @@ class CalcPage(QDialog):
         g.addWidget(self.ed_rub, 2, 1, 1, 2)
         g.addWidget(QLabel("Сбор, Br:"), 3, 0)
         self.ed_fee = money_edit(CUSTOMS.FEE_BYN)
-        self.ed_fee.setText(CUSTOMS.FEE_BYN)
+        self.ed_fee.setText(str(settings_load().get("calc_fee") or CUSTOMS.FEE_BYN))
         self.ed_fee.setToolTip("Сбор за таможенные операции для легкового автомобиля")
         g.addWidget(self.ed_fee, 3, 1, 1, 2)
         self.lbl_rates = QLabel("курс можно вписать вручную")
@@ -13632,6 +13738,35 @@ class MainWindow(QMainWindow):
         except RuntimeError:
             return False
         return True
+
+    def settings_applied(self):
+        """Настройки сохранены — привести открытые панели и страницы к новым значениям."""
+        st = settings_load()
+        if hasattr(self, "tool_strip") and bool(st.get("strip_open", False)) != self._strip_open:
+            self._strip_open = bool(st.get("strip_open", False))
+            self._strip_apply()
+        p = getattr(self, "_tools_dialog", None)
+        if p is not None:
+            p.cmb_src.setCurrentIndex(0 if st.get("rates_source") == "google" else 1)
+            p.chk_sel.setChecked(bool(st.get("tools_take_selection", True)))
+            if p.case_view != ("pair" if st.get("case_view") == "pair" else "list"):
+                p.set_case_view(st.get("case_view"))
+            if self.tools_visible() and bool(st.get("tools_detached")) != bool(getattr(p, "_detached", False)):
+                self.tools_detach(bool(st.get("tools_detached")))
+        pg = getattr(self, "_act_page", None)
+        if pg is not None:
+            pg.cmb_lkp.setCurrentIndex(1 if st.get("act_lkp_style") == "print" else 0)
+        pg = getattr(self, "_conv_page", None)
+        if pg is not None:
+            pg.chk_meta.setChecked(bool(st.get("conv_strip_meta", True)))
+            pg.cmb_method.setCurrentIndex(1 if st.get("pdf2word_method") == "builtin" else 0)
+        pg = getattr(self, "_calc_page", None)
+        if pg is not None:
+            pg.ed_fee.setText(str(st.get("calc_fee") or CUSTOMS.FEE_BYN))
+            rates = st.get("calc_rates") or {}
+            if not rates:
+                pg.ed_eur.clear()
+                pg.ed_rub.clear()
 
     def open_calc_page(self, *_):
         """Расчёт таможенных платежей занимает середину окна, как конвертер и акт."""
