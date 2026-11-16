@@ -562,6 +562,18 @@ def hand_layout(text, glyphs, height, seed=0, pen=None):
     return strokes, x + height * 0.05, height * 1.1
 
 
+PERCENT_BOXES = ("b1", "b4", "b14", "b15")        # окошки у колёс: износ дисков/колодок в процентах
+
+
+def percent_value(text):
+    """«20» → «20%» для окошек с процентами; прочерк, код и уже готовое значение не трогаются."""
+    t = " ".join(str(text or "").split())
+    if re.fullmatch(r"\d{1,3}", t):
+        return t + "%"
+    m = re.fullmatch(r"(\d{1,3})\s*%", t)
+    return m.group(1) + "%" if m else t
+
+
 def lkp_places(page_rect_of_diagram, kind):
     """Окошки и колёса на странице PDF: [(имя, x0, y0, x1, y1)] по прямоугольнику схемы (x0, y0, x1, y1)."""
     X0, Y0, X1, Y1 = page_rect_of_diagram
@@ -633,6 +645,8 @@ def selftest():
     finally:
         EXTRA.clear()
         EXTRA.update(keep)
+    assert percent_value("20") == "20%" and percent_value("20 %") == "20%" and percent_value("-/-") == "-/-" and percent_value("") == ""
+    assert percent_value("13A") == "13A" and all(n in [x[0] for x in lkp_places((0, 0, 1, 1), k)] for k, _t in KIND_TITLES for n in PERCENT_BOXES)
     assert group_digits("53997") == "53 997" and group_digits("1598") == "1 598" and group_digits("997") == "997"
     assert volume_de("1,6", "1598") == "1.6 (1 598 cm³)" and volume_ru("1.6", "1598") == "1.6 л"
     assert clean_vin("u5yp-v81g bpl097231") == "U5YPV81GBPL097231" and not vin_problem("U5YPV81GBPL097231")

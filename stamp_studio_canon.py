@@ -56,7 +56,7 @@ import stamp_license as LIC
 import stamp_tools as TOOLS
 import stamp_decline as DECL
 import stamp_customs as CUSTOMS
-from PySide6.QtWidgets import QSizeGrip, QLayout
+from PySide6.QtWidgets import QSizeGrip, QLayout, QStyledItemDelegate
 from PySide6.QtGui import QFont, QFontMetrics
 from PySide6.QtCore import QByteArray, QBuffer, QIODevice
 from PySide6.QtCore import QMimeData
@@ -150,9 +150,11 @@ QComboBox QAbstractItemView {{
     background: #232735; selection-background-color: #2c3145;
     selection-color: {GOLD}; border: 1px solid #2e3345; border-radius: 8px; padding: 4px; outline: none;
 }}
-QComboBox QAbstractItemView::item {{ padding: 5px 8px; border-radius: 5px; min-height: 20px; }}
+QComboBox QAbstractItemView::item {{ padding: 5px 8px; border-radius: 5px; min-height: 20px; border: 1px solid transparent; }}
+QComboBox QAbstractItemView::item:hover {{ background: #262b3a; }}
+QComboBox QAbstractItemView::item:selected {{ background: #3a321c; color: {GOLD}; border: 1px solid {GOLD}; }}
 QComboBox {{ combobox-popup: 0; }}
-QComboBoxPrivateContainer {{ background: transparent; border: none; }}
+QComboBoxPrivateContainer {{ background: #2e3345; border: none; }}
 QListWidget {{
     background: #171a22; border: 1px solid #262b38; border-radius: 10px; padding: 4px;
 }}
@@ -292,9 +294,11 @@ QComboBox QAbstractItemView {{
     background: #ffffff; selection-background-color: #f4e3c2;
     selection-color: #6b4a00; border: 1px solid #d8d2c4; border-radius: 8px; padding: 4px; outline: none;
 }}
-QComboBox QAbstractItemView::item {{ padding: 5px 8px; border-radius: 5px; min-height: 20px; }}
+QComboBox QAbstractItemView::item {{ padding: 5px 8px; border-radius: 5px; min-height: 20px; border: 1px solid transparent; }}
+QComboBox QAbstractItemView::item:hover {{ background: #f7efdf; }}
+QComboBox QAbstractItemView::item:selected {{ background: #f4e3c2; color: #6b4a00; border: 1px solid {GOLD_L}; }}
 QComboBox {{ combobox-popup: 0; }}
-QComboBoxPrivateContainer {{ background: transparent; border: none; }}
+QComboBoxPrivateContainer {{ background: #d8d2c4; border: none; }}
 QListWidget {{
     background: #faf8f4; border: 1px solid #e9e4d9; border-radius: 10px; padding: 4px;
 }}
@@ -439,12 +443,17 @@ QFrame#modebar QToolButton:hover { color: #e8b04b; }
 QFrame#modebar QToolButton:checked { background: #3a321c; color: #e8b04b; font-weight: bold; }
 QToolButton#corner { border: 1px solid #2e3345; border-radius: 7px; padding: 1px 9px; background: #1b1e27; color: #c9cddb; }
 QToolButton#corner:hover { border-color: #e8b04b; color: #e8b04b; }
-QDialog[chrome="true"] { background: transparent; }
+QDialog[chrome="true"] { background: #343a4c; }
 QFrame#chromeback { background: #14161c; border: 1px solid #343a4c; border-radius: 12px; }
 QWidget#chromebar { background: #1b1e27; border-top-left-radius: 11px; border-top-right-radius: 11px; border-bottom: 1px solid #262b39; }
 QLabel#chrometitle { color: #dcdfe8; font-weight: 600; background: transparent; }
 QToolButton#chromeclose { border: none; border-radius: 7px; background: transparent; }
 QToolButton#chromeclose:hover { background: #c73a3a; }
+QToolButton#tabtool { background: transparent; border: 1px solid transparent; border-radius: 8px; padding: 0; }
+QToolButton#tabtool:hover { background: #232735; border-color: #e8b04b; }
+QToolButton#tabadd { background: #1b1e27; border: 1px solid #2e3345; border-radius: 8px; padding: 0; }
+QToolButton#tabadd:hover { border-color: #e8b04b; background: #232735; }
+QToolButton#tabadd:pressed, QToolButton#tabtool:pressed { background: #3a321c; }
 QFrame#zoompill { background: #1b1e27; border: 1px solid #2e3345; border-radius: 11px; }
 QFrame#zoompill QToolButton { border: none; border-radius: 7px; padding: 3px 7px; background: transparent; color: #c9cddb; }
 QFrame#zoompill QToolButton:hover { background: #232735; }
@@ -532,12 +541,17 @@ QFrame#modebar QToolButton:hover { color: #96590c; }
 QFrame#modebar QToolButton:checked { background: #ffffff; color: #96590c; font-weight: bold; }
 QToolButton#corner { border: 1px solid #e4ddcf; border-radius: 7px; padding: 1px 9px; background: #ffffff; color: #2a251e; }
 QToolButton#corner:hover { border-color: #d69a33; }
-QDialog[chrome="true"] { background: transparent; }
+QDialog[chrome="true"] { background: #cfc7b6; }
 QFrame#chromeback { background: #f3f1ec; border: 1px solid #cfc7b6; border-radius: 12px; }
 QWidget#chromebar { background: #ece6d9; border-top-left-radius: 11px; border-top-right-radius: 11px; border-bottom: 1px solid #e0d9c9; }
 QLabel#chrometitle { color: #2a251e; font-weight: 600; background: transparent; }
 QToolButton#chromeclose { border: none; border-radius: 7px; background: transparent; }
 QToolButton#chromeclose:hover { background: #e06a5c; }
+QToolButton#tabtool { background: transparent; border: 1px solid transparent; border-radius: 8px; padding: 0; }
+QToolButton#tabtool:hover { background: #ffffff; border-color: #d69a33; }
+QToolButton#tabadd { background: #fbf9f4; border: 1px solid #e0d9c9; border-radius: 8px; padding: 0; }
+QToolButton#tabadd:hover { border-color: #d69a33; background: #ffffff; }
+QToolButton#tabadd:pressed, QToolButton#tabtool:pressed { background: #f4e3c2; }
 QFrame#zoompill { background: #ffffff; border: 1px solid #e4ddcf; border-radius: 11px; }
 QFrame#zoompill QToolButton { border: none; border-radius: 7px; padding: 3px 7px; background: transparent; color: #2a251e; }
 QFrame#zoompill QToolButton:hover { background: #f4ebda; }
@@ -579,7 +593,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.16.2"
+APP_VERSION = "6.16.3"
 EDITION = "canon"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -9804,8 +9818,40 @@ def _strokes_image(strokes, w, h, color, scale=1.0):
                             img.bytesPerLine(), 1).copy()
 
 
-ACT_INKS = [("Синяя шариковая", (58, 74, 178)), ("Светло-синяя", (92, 108, 204)), ("Тёмно-синяя", (22, 32, 104)),
-            ("Фиолетовая", (88, 60, 160)), ("Чёрная", (28, 28, 32))]
+ACT_INKS = [("Синяя шариковая", (58, 74, 178)), ("Светло-синяя", (92, 108, 204)), ("Голубая", (64, 110, 200)),
+            ("Синяя яркая", (27, 54, 168)), ("Синяя гелевая", (20, 40, 140)), ("Тёмно-синяя", (22, 32, 104)),
+            ("Сине-фиолетовая", (70, 60, 170)), ("Фиолетовая", (88, 60, 160)), ("Чёрная", (28, 28, 32))]
+
+
+def ink_swatch(rgb, size=14):
+    """Кружок цвета пасты — значок для списка."""
+    pm = QPixmap(size, size)
+    pm.fill(Qt.transparent)
+    qp = QPainter(pm)
+    qp.setRenderHint(QPainter.Antialiasing, True)
+    qp.setPen(Qt.NoPen)
+    qp.setBrush(QColor(*rgb))
+    qp.drawEllipse(1, 1, size - 2, size - 2)
+    qp.end()
+    return QIcon(pm)
+
+
+def ink_combo(current=None):
+    """Список паст с цветными кружками."""
+    c = QComboBox()
+    for name, rgb in ACT_INKS:
+        c.addItem(ink_swatch(rgb), name)
+    c.setCurrentIndex(max(0, c.findText(current or ACT_INKS[0][0])))
+    return c
+
+
+def act_smooth(st=None):
+    """Плавность линии при письме знаков: 0 — как ведёт рука, 1 — сильно сглаживать."""
+    st = settings_load() if st is None else st
+    try:
+        return max(0, min(100, int(st.get("act_smooth", 40)))) / 100.0
+    except (TypeError, ValueError):
+        return 0.4
 
 
 def act_ink_style(st=None):
@@ -9854,6 +9900,9 @@ def sign_pil(strokes_norm, height_px, color=None):
 class GlyphPad(QWidget):
     """Клетка, в которой мастер пишет знак (или подпись) своей рукой. Правая кнопка — стереть."""
     changed = Signal()
+    INK = PEN_INKS[0][1]             # цвет пасты, толщина (×) и плавность (0–1) — одни на все клетки
+    PEN_K = 1.0
+    SMOOTH = 0.0
 
     def __init__(self, hint="", w=58, h=72, parent=None):
         super().__init__(parent)
@@ -9893,6 +9942,8 @@ class GlyphPad(QWidget):
         H = self.height()
         x, y = e.position().x() / H, e.position().y() / H
         lx, ly = self._cur[-1]
+        k = 1.0 - 0.8 * float(self.SMOOTH)                  # плавность: линия идёт за рукой с лёгким отставанием
+        x, y = lx + (x - lx) * k, ly + (y - ly) * k
         if abs(x - lx) * H + abs(y - ly) * H >= 1.5:
             self._cur.append((x, y))
             self.update()
@@ -9916,9 +9967,9 @@ class GlyphPad(QWidget):
             p.setFont(f)
             p.setPen(QColor("#d9d4c6"))
             p.drawText(self.rect(), Qt.AlignCenter, self.hint)
-        pen = max(1.8, H * 0.036)
+        pen = max(1.0, H * 0.036 * float(self.PEN_K) / 0.6)
         items = [{"pts": [(x * H, y * H, pen) for x, y in st]} for st in self.strokes if st]
-        pen_paint_strokes(p, items, PEN_INKS[0][1])
+        pen_paint_strokes(p, items, self.INK)
         p.setPen(QPen(QColor("#cfc8b4"), 1))
         p.setBrush(Qt.NoBrush)
         p.drawRect(0, 0, W - 1, H - 1)
@@ -9948,6 +9999,35 @@ class ActMasterDialog(QDialog):
         hint.setWordWrap(True)
         root.addWidget(hint)
 
+        st_ = settings_load()
+        prow = QHBoxLayout()
+        prow.setSpacing(8)
+        prow.addWidget(QLabel("Ручка:"))
+        self.cmb_ink = ink_combo(st_.get("act_ink"))
+        self.cmb_ink.setToolTip("Цвет пасты: им пишутся знаки здесь и замеры в акте")
+        self.cmb_ink.currentIndexChanged.connect(self._pen_changed)
+        prow.addWidget(self.cmb_ink)
+        self.sl_pen = {}
+        for key, cap, lo, hi, default, tip in (
+                ("act_pen", "толщина", 30, 160, 60, "Толщина линии: левее — тоньше"),
+                ("act_smooth", "плавность", 0, 100, 40, "Сглаживание руки: правее — линия ровнее, но чуть отстаёт от мыши"),
+                ("act_alpha", "нажим", 40, 100, 85, "Насыщенность пасты в акте: левее — бледнее")):
+            lab = QLabel(cap)
+            lab.setObjectName("hint")
+            prow.addWidget(lab)
+            sl = QSlider(Qt.Horizontal)
+            sl.setRange(lo, hi)
+            try:
+                sl.setValue(int(st_.get(key, default)))
+            except (TypeError, ValueError):
+                sl.setValue(default)
+            sl.setToolTip(tip)
+            sl.setMinimumWidth(70)
+            sl.valueChanged.connect(self._pen_changed)
+            prow.addWidget(sl, 1)
+            self.sl_pen[key] = sl
+        root.addLayout(prow)
+
         self.pads = {}
         for title, chars in (("Цифры и знаки для замеров (обязательно)", ACT.GLYPHS_NEED),
                              ("Буквы повреждений, запятая, точка (по желанию)", ACT.GLYPHS_MORE)):
@@ -9975,6 +10055,7 @@ class ActMasterDialog(QDialog):
         hl = QHBoxLayout(box)
         hl.setSpacing(12)
         self.pad_sign = GlyphPad("подпись", 330, 96)
+        self._pen_apply()
         self.pad_sign.set_strokes(m.get("sign"))
         hl.addWidget(self.pad_sign)
         col = QVBoxLayout()
@@ -10031,11 +10112,29 @@ class ActMasterDialog(QDialog):
     def glyphs(self):
         return {ch: pad.data() for ch, pad in self.pads.items() if pad.data()}
 
+    def _pen_changed(self, *_):
+        """Цвет, толщина, плавность, нажим: запомнить, применить к клеткам и образцу."""
+        st = settings_load()
+        new = {"act_ink": self.cmb_ink.currentText()}
+        new.update({k: sl.value() for k, sl in self.sl_pen.items()})
+        if any(st.get(k) != v for k, v in new.items()):
+            st.update(new)
+            settings_save(st)
+        self._pen_apply()
+        self._preview()
+
+    def _pen_apply(self):
+        color, pen_k, _size, _alpha = act_ink_style()
+        GlyphPad.INK, GlyphPad.PEN_K, GlyphPad.SMOOTH = color, pen_k, act_smooth()
+        for pad in list(getattr(self, "pads", {}).values()) + ([self.pad_sign] if hasattr(self, "pad_sign") else []):
+            pad.update()
+
     def _preview(self):
         g = self.glyphs()
         text = "118 97 20% -/-"
         text = "".join(ch for ch in text if ch == " " or ch in g)
-        im = hand_pil(text, g, 34, seed=7) if text.strip() else None
+        color, pen_k, _size, alpha = act_ink_style()
+        im = hand_pil(text, g, 34, seed=7, color=color, pen_k=pen_k, alpha=alpha) if text.strip() else None
         if im is None:
             self.lbl_prev.setPixmap(QPixmap())
             self.lbl_prev.setText("  напишите цифры — здесь появится пример")
@@ -10096,6 +10195,10 @@ class LkpBoard(QWidget):
                             "padding: 0; font-weight: 600; } QLineEdit:focus { background: #fff6dc; }")
             e.setToolTip("Толщина ЛКП в микронах, код повреждения или «-/-»" if name.startswith("b")
                          else "Износ, %  (только число)")
+            if name in ACT.PERCENT_BOXES:                # окошко у колеса: сюда пишется износ в процентах
+                e.setPlaceholderText("%")
+                e.setToolTip("Износ диска и колодок, %. Впишите число — знак «%» добавится сам. Не меряли — «-/-»")
+                e.editingFinished.connect(lambda ed=e: ed.setText(ACT.percent_value(ed.text())))
             if old.get(name):
                 e.setText(old[name])
             e.show()
@@ -10143,11 +10246,13 @@ class LkpBoard(QWidget):
         p.end()
 
     def values(self):
-        return {k: e.text().strip() for k, e in self.edits.items() if e.text().strip()}
+        return {k: (ACT.percent_value(e.text()) if k in ACT.PERCENT_BOXES else e.text().strip())
+                for k, e in self.edits.items() if e.text().strip()}
 
     def set_values(self, vals):
         for k, e in self.edits.items():
-            e.setText(str((vals or {}).get(k, "")))
+            v = str((vals or {}).get(k, ""))
+            e.setText(ACT.percent_value(v) if k in ACT.PERCENT_BOXES else v)
 
     def fill_empty(self, text="-/-"):
         for k, e in self.edits.items():
@@ -10252,10 +10357,7 @@ class ActPage(QDialog):
         st_ = settings_load()
         irow = QHBoxLayout()
         irow.setSpacing(6)
-        self.cmb_ink = QComboBox()
-        for name, _c in ACT_INKS:
-            self.cmb_ink.addItem(name)
-        self.cmb_ink.setCurrentIndex(max(0, self.cmb_ink.findText(st_.get("act_ink") or ACT_INKS[0][0])))
+        self.cmb_ink = ink_combo(st_.get("act_ink"))
         self.cmb_ink.setToolTip("Цвет пасты, которой вписываются замеры")
         self.cmb_ink.currentIndexChanged.connect(self._ink_changed)
         irow.addWidget(self.cmb_ink)
@@ -10319,7 +10421,8 @@ class ActPage(QDialog):
         row.addStretch(1)
         f.addRow("Количество:", row)
         row = QHBoxLayout()
-        row.addWidget(line("mileage", "53997", 110))
+        row.addWidget(line("mileage", "53 997", 110))
+        self.ed["mileage"].textEdited.connect(lambda _t, e=self.ed["mileage"]: self._group_edit(e))
         row.addWidget(QLabel("км"))
         row.addStretch(1)
         f.addRow("Пробег:", row)
@@ -10338,7 +10441,8 @@ class ActPage(QDialog):
         row = QHBoxLayout()
         row.addWidget(line("liters", "1.6", 60))
         row.addWidget(QLabel("л"))
-        row.addWidget(line("ccm", "1598", 80))
+        row.addWidget(line("ccm", "1 598", 80))
+        self.ed["ccm"].textEdited.connect(lambda _t, e=self.ed["ccm"]: self._group_edit(e))
         row.addWidget(QLabel("см³"))
         row.addSpacing(12)
         row.addWidget(QLabel("мощность"))
@@ -10456,8 +10560,8 @@ class ActPage(QDialog):
         ll.addLayout(row)
         self.board = LkpBoard()
         ll.addWidget(self.board, 1)
-        note = QLabel("Впишите замеры в окошки (Tab — следующее). В акт они лягут почерком выбранного мастера; "
-                      "в колёсах пишется только число — знак «%» уже напечатан.")
+        note = QLabel("Впишите замеры в окошки (Tab — следующее). Четыре окошка со знаком «%» — износ у колёс: "
+                      "впишите число, знак добавится сам. В самих колёсах пишется только число — «%» там уже напечатан.")
         note.setObjectName("hint")
         note.setWordWrap(True)
         ll.addWidget(note)
@@ -10492,7 +10596,7 @@ class ActPage(QDialog):
         self.btn_make.setEnabled(True)
         cur = self.cmb_master.currentText()
         self._fill_masters(cur)
-        self._ink_preview()
+        self._ink_sync()
         self._dict_refresh()
         try:
             if int(re.sub(r"\D", "", self.ed_number.text()) or 0) < act_next_number():
@@ -10740,6 +10844,21 @@ class ActPage(QDialog):
             warn.append("схема ЛКП пустая")
         return err, warn
 
+    def _group_edit(self, e):
+        """Пробег и объём: «32526» по ходу набора становится «32 526»; курсор остаётся на своём месте."""
+        text = e.text()
+        digits_left = len(re.sub(r"\D", "", text[:e.cursorPosition()]))
+        new = ACT.group_digits(text) if re.sub(r"\D", "", text) else text
+        if new == text:
+            return
+        e.setText(new)
+        pos = 0
+        while pos < len(new) and digits_left > 0:
+            if new[pos].isdigit():
+                digits_left -= 1
+            pos += 1
+        e.setCursorPosition(pos)
+
     def _lkp_style_changed(self, *_):
         st = settings_load()
         if st.get("act_lkp_style") != self.cmb_lkp.currentData():
@@ -10755,6 +10874,22 @@ class ActPage(QDialog):
         if any(st.get(k) != v for k, v in new.items()):
             st.update(new)
             settings_save(st)
+        self._ink_preview()
+
+    def _ink_sync(self):
+        """Пасту могли поменять в окне мастера — подтянуть её сюда."""
+        st = settings_load()
+        for wdg in [self.cmb_ink] + list(self.sl_ink.values()):
+            wdg.blockSignals(True)
+        self.cmb_ink.setCurrentIndex(max(0, self.cmb_ink.findText(st.get("act_ink") or ACT_INKS[0][0])))
+        for key, sl in self.sl_ink.items():
+            try:
+                if key in st:
+                    sl.setValue(int(st[key]))
+            except (TypeError, ValueError):
+                pass
+        for wdg in [self.cmb_ink] + list(self.sl_ink.values()):
+            wdg.blockSignals(False)
         self._ink_preview()
 
     def _ink_preview(self):
@@ -12521,6 +12656,23 @@ def dwm_tint(widget, dark):
         pass
 
 
+STD_BUTTONS_RU = {"Yes": "Да", "No": "Нет", "Ok": "ОК", "Cancel": "Отмена", "Save": "Сохранить", "Close": "Закрыть",
+                  "Discard": "Не сохранять", "Apply": "Применить", "Retry": "Повторить", "Ignore": "Пропустить",
+                  "Abort": "Прервать", "Open": "Открыть", "YesToAll": "Да для всех", "NoToAll": "Нет для всех",
+                  "SaveAll": "Сохранить все", "Reset": "Сбросить", "Help": "Справка"}
+
+
+def russian_buttons(box):
+    """Стандартные кнопки окна сообщения — по-русски («Да», «Нет», «ОК», «Отмена»…)."""
+    try:
+        for b in box.buttons():
+            name = box.standardButton(b).name
+            if name in STD_BUTTONS_RU and b.text().replace("&", "") != STD_BUTTONS_RU[name]:
+                b.setText(STD_BUTTONS_RU[name])
+    except Exception:
+        pass
+
+
 class ChromeBar(QWidget):
     """Заголовок окна в стиле программы: значок, название, крестик. За него окно перетаскивается."""
 
@@ -12565,25 +12717,52 @@ class WindowChrome(QObject):
     """Даёт каждому диалогу программы свою рамку. Системные окна (выбор файла) и главное окно не трогает."""
 
     SKIP = (QFileDialog, QProgressDialog)
+    frames = True                    # свои рамки у диалогов и скругление меню; False — только оформление списков
 
     def eventFilter(self, obj, ev):
         t = ev.type()
         if t == QEvent.Polish:
             if isinstance(obj, QDialog) and not isinstance(obj, self.SKIP):
                 try:
-                    if obj.isWindow() and not obj.property("chrome") and obj.layout() is not None:
+                    if self.frames and obj.isWindow() and not obj.property("chrome") and obj.layout() is not None:
                         self.adopt(obj)
                 except Exception:
                     pass
+            if isinstance(obj, QMessageBox):
+                QTimer.singleShot(0, lambda box=obj: russian_buttons(box))
             elif isinstance(obj, (QMenu, QComboBox)):
                 try:
-                    self.soften(obj)
+                    if isinstance(obj, QComboBox) and not obj.property("styled_items"):
+                        obj.setProperty("styled_items", True)       # чтобы выбранный пункт рисовался по стилю программы
+                        obj.setItemDelegate(QStyledItemDelegate(obj))
+                    if self.frames:
+                        self.soften(obj)
                 except Exception:
                     pass
         elif t == QEvent.Resize or t == QEvent.WindowTitleChange:
-            if isinstance(obj, QDialog) and getattr(obj, "_chrome_bar", None) is not None:
+            if isinstance(obj, QDialog) and obj.property("chrome"):
                 self.place(obj)
+            elif t == QEvent.Resize and obj.isWidgetType() and obj.isWindow() and obj.property("chrome"):
+                self.shape(obj, 8)
+        elif t == QEvent.Show:
+            # список сам выставляет себе форму при открытии — возвращаем скругление сразу после показа
+            if obj.isWidgetType() and obj.isWindow() and not isinstance(obj, QDialog) and obj.property("chrome"):
+                QTimer.singleShot(0, lambda o=obj: self.shape(o, 8))
         return False
+
+    @staticmethod
+    def shape(widget, radius):
+        """Скруглить окно вырезом по форме. Прозрачность не нужна — на любом Windows углы чистые, без черноты."""
+        try:
+            w, h = widget.width(), widget.height()
+            if w < 2 * radius or h < 2 * radius:
+                widget.clearMask()
+                return
+            path = QPainterPath()
+            path.addRoundedRect(QRectF(0, 0, w, h), radius, radius)
+            widget.setMask(QRegion(path.toFillPolygon().toPolygon()))
+        except Exception:
+            pass
 
     def soften(self, obj):
         """Меню и выпадающие списки: скруглённые углы вместо прямоугольной системной рамки."""
@@ -12591,15 +12770,14 @@ class WindowChrome(QObject):
         if pop is None or pop is obj.window() and not isinstance(obj, QMenu) or pop.property("chrome"):
             return
         pop.setProperty("chrome", True)
-        pop.setAttribute(Qt.WA_TranslucentBackground, True)
         pop.setWindowFlags(pop.windowFlags() | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint)
+        self.shape(pop, 8)
 
     def adopt(self, dlg):
         b = 1
         dlg.setProperty("chrome", True)
         resized = dlg.testAttribute(Qt.WA_Resized)
         size = dlg.size()
-        dlg.setAttribute(Qt.WA_TranslucentBackground, True)
         dlg.setWindowFlags(dlg.windowFlags() | Qt.FramelessWindowHint)
         lay = dlg.layout()
         m = lay.contentsMargins()
@@ -12627,42 +12805,53 @@ class WindowChrome(QObject):
             mm = re.search(r"QDialog#%s\s*\{[^}]*?background(?:-color)?:\s*([^;}]+)" % re.escape(name), own)
             if mm:
                 back.setStyleSheet("QFrame#chromeback { background: %s; }" % mm.group(1).strip())
-                dlg.setStyleSheet(own + '\nQDialog#%s[chrome="true"] { background: transparent; }' % name)
-        dlg._chrome_back = back
-        dlg._chrome_grip = None
+                dlg.setStyleSheet(own + '\nQDialog#%s[chrome="true"] { background: %s; }' % (name, mm.group(1).strip()))
         if not fixed:
-            dlg._chrome_grip = QSizeGrip(dlg)
-        dlg._chrome_bar = ChromeBar(dlg)
+            QSizeGrip(dlg).setObjectName("chromegrip")
+        ChromeBar(dlg)
         self.place(dlg)
 
     def place(self, dlg):
-        bar = dlg._chrome_bar
+        # части рамки ищутся среди детей окна, а не хранятся на нём: у окон, созданных самой Qt
+        # (сообщения QMessageBox.question и т. п.), питоновские поля не живут
+        bar, back, g = self.parts(dlg)
+        if bar is None or back is None:
+            return
         w, h = dlg.width(), dlg.height()
-        dlg._chrome_back.setGeometry(0, 0, w, h)
-        dlg._chrome_back.lower()
+        back.setGeometry(0, 0, w, h)
+        back.lower()
+        self.shape(dlg, 12)
         bar.setGeometry(1, 1, max(0, w - 2), CHROME_H)
         bar.raise_()
         if bar.title.text() != dlg.windowTitle():
             bar.title.setText(dlg.windowTitle())
-        g = dlg._chrome_grip
         if g is not None:
             g.resize(14, 14)
             g.move(w - 17, h - 17)
             g.raise_()
 
+    @staticmethod
+    def parts(dlg):
+        """(заголовок, подложка, уголок) окна со своей рамкой; чего нет — None."""
+        direct = Qt.FindDirectChildrenOnly
+        return (dlg.findChild(ChromeBar, "chromebar", direct), dlg.findChild(QFrame, "chromeback", direct),
+                dlg.findChild(QSizeGrip, "chromegrip", direct))
+
     def retint(self):
         for w in QApplication.topLevelWidgets():
-            bar = getattr(w, "_chrome_bar", None)
-            if bar is not None:
-                bar.retint()
+            if isinstance(w, QDialog) and w.property("chrome"):
+                bar = self.parts(w)[0]
+                if bar is not None:
+                    bar.retint()
 
 
 def install_window_chrome(app):
     """Включить свои рамки окон (если не выключены в настройках)."""
-    if getattr(app, "_chrome", None) is None and chrome_wanted():
+    if getattr(app, "_chrome", None) is None:
         app._chrome = WindowChrome(app)
+        app._chrome.frames = chrome_wanted()
         app.installEventFilter(app._chrome)
-    return getattr(app, "_chrome", None)
+    return app._chrome
 
 
 class PillWatch(QObject):
@@ -15066,7 +15255,7 @@ class MainWindow(QMainWindow):
         holder = QWidget()
         row = QHBoxLayout(holder)
         row.setContentsMargins(8, 2, 8, 2)
-        row.setSpacing(8)
+        row.setSpacing(4)
 
         self.dir_tabs = QTabBar()
         self.dir_tabs.setTabsClosable(True)
@@ -15082,10 +15271,12 @@ class MainWindow(QMainWindow):
         # свои стрелки прокрутки вкладок: родные у Qt рисуются обрезанными
         self._tab_arrows = []
         for kind, tip in (("chev_left", "Предыдущие вкладки"), ("chev_right", "Следующие вкладки")):
-            b = QPushButton()
-            b.setFixedSize(22, 30)
+            b = QToolButton()
+            b.setObjectName("tabtool")
+            b.setFixedSize(24, 28)
+            b.setCursor(Qt.PointingHandCursor)
             b.setToolTip(tip)
-            b.setIconSize(QSize(12, 12))
+            b.setIconSize(QSize(14, 14))
             b.setAutoRepeat(True)
             b.setVisible(False)
             b.clicked.connect(lambda _=False, k=kind: self._tab_scroll(k))
@@ -15095,18 +15286,22 @@ class MainWindow(QMainWindow):
         self._tab_watch = TabScrollWatch(self)
         self.dir_tabs.installEventFilter(self._tab_watch)
 
-        b_newtab = QPushButton()
-        b_newtab.setFixedSize(30, 30)
+        b_newtab = QToolButton()
+        b_newtab.setObjectName("tabadd")
+        b_newtab.setFixedSize(28, 28)
+        b_newtab.setCursor(Qt.PointingHandCursor)
         b_newtab.setToolTip("Открыть ещё одну папку во вкладке")
-        b_newtab.setIconSize(QSize(13, 13))
+        b_newtab.setIconSize(QSize(15, 15))
         b_newtab.clicked.connect(self.add_dir_tab)
         self._themed_buttons.append((b_newtab, "plus", False))
         row.addWidget(b_newtab, 0)
 
-        b_up = QPushButton()
-        b_up.setFixedSize(30, 30)
+        b_up = QToolButton()
+        b_up.setObjectName("tabadd")
+        b_up.setFixedSize(28, 28)
+        b_up.setCursor(Qt.PointingHandCursor)
         b_up.setToolTip("Перейти в папку уровнем выше")
-        b_up.setIconSize(QSize(13, 13))
+        b_up.setIconSize(QSize(15, 15))
         b_up.clicked.connect(self.dir_go_up)
         self._themed_buttons.append((b_up, "up", False))
         row.addWidget(b_up, 0)
