@@ -55,6 +55,9 @@ import stamp_act as ACT
 import stamp_license as LIC
 import stamp_tools as TOOLS
 import stamp_decline as DECL
+import stamp_customs as CUSTOMS
+from PySide6.QtGui import QFont, QFontMetrics
+from PySide6.QtCore import QByteArray, QBuffer, QIODevice
 from PySide6.QtCore import QMimeData
 from PySide6.QtWidgets import QToolBar, QStackedWidget
 
@@ -557,7 +560,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.14.1"
+APP_VERSION = "6.15.0"
 EDITION = "canon"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -2155,6 +2158,13 @@ def draw_icon(kind: str, color: str, size: int = 64) -> QIcon:
         fl(3.8, 4.4, 7.4, 8, 3.8, 11.6); fl(8.6, 4.4, 12.2, 8, 8.6, 11.6)
     elif kind == "chev2_left":
         fl(12.2, 4.4, 8.6, 8, 12.2, 11.6); fl(7.4, 4.4, 3.8, 8, 7.4, 11.6)
+    elif kind == "duty":
+        p.drawEllipse(QPointF(8.0 * u, 8.0 * u), 5.8 * u, 5.8 * u)
+        line(5.6, 10.4, 10.4, 5.6)
+        p.setBrush(c)
+        p.drawEllipse(QPointF(5.9 * u, 6.0 * u), 0.9 * u, 0.9 * u)
+        p.drawEllipse(QPointF(10.1 * u, 10.0 * u), 0.9 * u, 0.9 * u)
+        p.setBrush(Qt.NoBrush)
     elif kind == "convert":
         line(2.6, 5.4, 13.0, 5.4); fl(10.4, 2.8, 13.0, 5.4, 10.4, 8.0)
         line(13.4, 10.6, 3.0, 10.6); fl(5.6, 8.0, 3.0, 10.6, 5.6, 13.2)
@@ -10013,6 +10023,13 @@ class ActPage(QDialog):
             b.clicked.connect(slot)
             row.addWidget(b)
         f.addRow("Мастер:", row)
+        self.cmb_lkp = QComboBox()
+        self.cmb_lkp.addItem("почерком мастера", "hand")
+        self.cmb_lkp.addItem("печатными цифрами", "print")
+        self.cmb_lkp.setToolTip("Как вписать замеры на схему: рукой мастера (его цифрами) или ровным печатным шрифтом")
+        self.cmb_lkp.setCurrentIndex(1 if settings_load().get("act_lkp_style") == "print" else 0)
+        self.cmb_lkp.currentIndexChanged.connect(self._lkp_style_changed)
+        f.addRow("Замеры ЛКП:", self.cmb_lkp)
         fl.addWidget(box)
 
         box = QGroupBox("Автомобиль")
@@ -10413,6 +10430,7 @@ class ActPage(QDialog):
         d["number"] = self.ed_number.text().strip()
         d["date"] = self.ed_date.text().strip()
         d["master"] = self.cmb_master.currentText().strip()
+        d["lkp_style"] = self.cmb_lkp.currentData()
         d["kind"] = self.cmb_kind.currentData()
         for key, _cap in self.PAIRS:
             cd, cr = self.pair[key]
@@ -10451,7 +10469,7 @@ class ActPage(QDialog):
                 warn.append(f"не заполнено: {cap.split(' · ')[0]}")
         if d["comment_ru"] and not d["comment_de"]:
             err.append("комментарий не переведён на немецкий — нажмите «Перевести ИИ»")
-        if m is not None:
+        if m is not None and d.get("lkp_style") != "print":
             miss = ACT.glyphs_missing("".join(d["lkp"].values()), m.get("glyphs") or {})
             if miss:
                 err.append("в почерке мастера нет знаков: " + "  ".join(miss) +
@@ -10459,6 +10477,12 @@ class ActPage(QDialog):
         if not d["lkp"]:
             warn.append("схема ЛКП пустая")
         return err, warn
+
+    def _lkp_style_changed(self, *_):
+        st = settings_load()
+        if st.get("act_lkp_style") != self.cmb_lkp.currentData():
+            st["act_lkp_style"] = self.cmb_lkp.currentData()
+            settings_save(st)
 
     # ---------------------------------------------------------- перевод ИИ
     def translate_ai(self):
@@ -11914,6 +11938,243 @@ class ConvertPage(QDialog):
             QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.dirname(rec["out"])))
 
 
+# ======================================================================
+#  Расчёт таможенных платежей: предварительная оценка, суммы вводятся в российских рублях
+# ======================================================================
+
+class CalcPage(QDialog):
+    """Калькулятор внутри главного окна: стоимость авто в рублях → евро и бел. рубли по курсу Нацбанка РБ,
+    возраст и объём двигателя → ставка, пошлина, сбор, итог. Ничего не оформляет — только считает."""
+
+    def __init__(self, win):
+        super().__init__(win)
+        self.win = win
+        self.setWindowFlags(Qt.Widget)
+        self.setObjectName("aipage")
+        self._thread = None
+        self.res = {"error": "нет данных"}
+        root = QVBoxLayout(self)
+        root.setContentsMargins(16, 10, 16, 10)
+        root.setSpacing(10)
+        head = QHBoxLayout()
+        head.setSpacing(10)
+        b_back = QPushButton(" К документу")
+        b_back.setIcon(draw_icon("back", win._icon_color()))
+        b_back.setIconSize(QSize(16, 16))
+        b_back.setCursor(Qt.PointingHandCursor)
+        b_back.setToolTip("Вернуться к странице документа (Esc). Введённое здесь останется.")
+        b_back.clicked.connect(lambda: win.ai_mode(False))
+        win._themed_buttons.append((b_back, "back", False))
+        head.addWidget(b_back)
+        ttl = QLabel("РАСЧЁТ ТАМОЖЕННЫХ ПЛАТЕЖЕЙ")
+        ttl.setObjectName("paneltitle")
+        head.addWidget(ttl)
+        note = QLabel("предварительный — точную сумму определяет таможня")
+        note.setObjectName("hint")
+        head.addWidget(note, 1)
+        root.addLayout(head)
+
+        body = QHBoxLayout()
+        body.setSpacing(14)
+        left = QVBoxLayout()
+        left.setSpacing(10)
+
+        def money_edit(ph):
+            e = QLineEdit()
+            e.setPlaceholderText(ph)
+            e.textChanged.connect(self.recalc)
+            return e
+
+        def date_edit(d):
+            e = QDateEdit()
+            e.setCalendarPopup(True)
+            e.setDisplayFormat("dd.MM.yyyy")
+            e.setDate(d)
+            e.dateChanged.connect(self.recalc)
+            return e
+
+        box = QGroupBox("Автомобиль")
+        f = QFormLayout(box)
+        f.setVerticalSpacing(7)
+        self.d_made = date_edit(QDate.currentDate().addYears(-4))
+        self.d_made.setToolTip("Дата выпуска или первой регистрации — от неё зависит ставка")
+        f.addRow("Дата выпуска:", self.d_made)
+        self.ed_volume = money_edit("1968")
+        f.addRow("Объём двигателя, см³:", self.ed_volume)
+        left.addWidget(box)
+
+        box = QGroupBox("Суммы в российских рублях")
+        f = QFormLayout(box)
+        f.setVerticalSpacing(7)
+        self.ed_price = money_edit("1036268")
+        f.addRow("Стоимость автомобиля, ₽:", self.ed_price)
+        self.ed_paid = money_edit("необязательно")
+        self.ed_paid.setToolTip("Сколько отдано за таможню в рублях — программа сверит с расчётом по тарифу")
+        f.addRow("Уплачено за таможню, ₽:", self.ed_paid)
+        left.addWidget(box)
+
+        box = QGroupBox("Курсы Нацбанка РБ")
+        g = QGridLayout(box)
+        g.setHorizontalSpacing(8)
+        g.setVerticalSpacing(7)
+        g.addWidget(QLabel("Дата расчёта:"), 0, 0)
+        self.d_on = date_edit(QDate.currentDate())
+        g.addWidget(self.d_on, 0, 1)
+        self.btn_rates = QPushButton("Взять курс")
+        self.btn_rates.setToolTip("Официальный курс Нацбанка РБ на дату расчёта (запрос на сайт nbrb.by)")
+        self.btn_rates.clicked.connect(self.load_rates)
+        g.addWidget(self.btn_rates, 0, 2)
+        g.addWidget(QLabel("1 EUR, Br:"), 1, 0)
+        self.ed_eur = money_edit("3.3178")
+        g.addWidget(self.ed_eur, 1, 1, 1, 2)
+        g.addWidget(QLabel("100 RUB, Br:"), 2, 0)
+        self.ed_rub = money_edit("3.6179")
+        g.addWidget(self.ed_rub, 2, 1, 1, 2)
+        g.addWidget(QLabel("Сбор, Br:"), 3, 0)
+        self.ed_fee = money_edit(CUSTOMS.FEE_BYN)
+        self.ed_fee.setText(CUSTOMS.FEE_BYN)
+        self.ed_fee.setToolTip("Сбор за таможенные операции для легкового автомобиля")
+        g.addWidget(self.ed_fee, 3, 1, 1, 2)
+        self.lbl_rates = QLabel("курс можно вписать вручную")
+        self.lbl_rates.setObjectName("hint")
+        self.lbl_rates.setWordWrap(True)
+        g.addWidget(self.lbl_rates, 4, 0, 1, 3)
+        g.setColumnStretch(1, 1)
+        left.addWidget(box)
+        left.addStretch(1)
+        lw = QWidget()
+        lw.setLayout(left)
+        lw.setFixedWidth(360)
+        body.addWidget(lw)
+
+        right = QVBoxLayout()
+        right.setSpacing(8)
+        box = QGroupBox("Результат")
+        g = QGridLayout(box)
+        g.setHorizontalSpacing(10)
+        g.setVerticalSpacing(6)
+        self.out = {}
+        rows = (("age", "Возраст автомобиля"), ("rate", "Ставка пошлины"),
+                ("price_eur", "Стоимость, EUR"), ("price_byn", "Стоимость, BYN"),
+                ("duty_eur", "Пошлина, EUR"), ("duty_byn", "Пошлина, BYN"), ("duty_rub", "Пошлина, RUB"),
+                ("fee_byn", "Таможенный сбор, BYN"),
+                ("total_byn", "Итого, BYN"), ("total_rub", "Итого, RUB"))
+        for n, (key, cap) in enumerate(rows):
+            lab = QLabel(cap + ":")
+            g.addWidget(lab, n, 0)
+            e = QLineEdit()
+            e.setReadOnly(True)
+            e.setObjectName("calcresult")
+            g.addWidget(e, n, 1)
+            b = QToolButton()
+            b.setObjectName("ghost")
+            b.setIconSize(QSize(16, 16))
+            b.setCursor(Qt.PointingHandCursor)
+            b.setToolTip("Скопировать")
+            b.clicked.connect(lambda _=False, k=key: self._copy(self.out[k][0].text()))
+            g.addWidget(b, n, 2)
+            self.out[key] = (e, b)
+        g.setColumnStretch(1, 1)
+        right.addWidget(box)
+        self.lbl_check = QLabel("")
+        self.lbl_check.setWordWrap(True)
+        self.lbl_check.setTextFormat(Qt.PlainText)
+        right.addWidget(self.lbl_check)
+        row = QHBoxLayout()
+        self.btn_copy = QPushButton("Скопировать весь расчёт")
+        self.btn_copy.setObjectName("accent")
+        self.btn_copy.setMinimumHeight(34)
+        self.btn_copy.setCursor(Qt.PointingHandCursor)
+        self.btn_copy.setToolTip("Весь расчёт текстом — вставить в сообщение клиенту или в заметки")
+        self.btn_copy.clicked.connect(lambda: self._copy(CUSTOMS.summary(self.res, self.d_on.date().toString("dd.MM.yyyy"))))
+        row.addWidget(self.btn_copy)
+        self.btn_reset = QPushButton("Очистить")
+        self.btn_reset.clicked.connect(self.reset)
+        row.addWidget(self.btn_reset)
+        row.addStretch(1)
+        right.addLayout(row)
+        right.addStretch(1)
+        body.addLayout(right, 1)
+        root.addLayout(body, 1)
+        st = settings_load().get("calc_rates") or {}
+        self.ed_eur.setText(str(st.get("eur", "")))
+        self.ed_rub.setText(str(st.get("rub", "")))
+        self.refresh()
+        self.recalc()
+
+    def refresh(self):
+        col = self.win._icon_color()
+        for _e, b in self.out.values():
+            b.setIcon(draw_icon("copy", col))
+
+    def _copy(self, text):
+        if text:
+            QApplication.clipboard().setText(text)
+            self.win.show_toast("✔  Скопировано", 1500)
+
+    def reset(self):
+        for e in (self.ed_volume, self.ed_price, self.ed_paid):
+            e.clear()
+
+    def load_rates(self):
+        if self._thread is not None and self._thread.isRunning():
+            return
+        self.btn_rates.setEnabled(False)
+        self.lbl_rates.setText("загружаю…")
+        d = self.d_on.date()
+        self._thread = RatesThread(datetime.date(d.year(), d.month(), d.day()), "nbrb", self)
+        self._thread.done.connect(self._rates_done)
+        self._thread.start()
+
+    def _rates_done(self, rates, err):
+        self.btn_rates.setEnabled(True)
+        if rates is None:
+            self.lbl_rates.setText("не получилось взять курс — впишите вручную")
+            self.lbl_rates.setToolTip(err)
+            return
+        self.ed_eur.setText(TOOLS.fmt_plain(rates["eur_byn"], 4))
+        self.ed_rub.setText(TOOLS.fmt_plain(rates["rub_byn"] * 100, 4))
+        self.lbl_rates.setText(f"{rates['source']}, {rates['date']}")
+        self.lbl_rates.setToolTip("")
+        st = settings_load()
+        st["calc_rates"] = {"eur": self.ed_eur.text(), "rub": self.ed_rub.text()}
+        settings_save(st)
+
+    def recalc(self, *_):
+        if not hasattr(self, "lbl_check"):
+            return
+        qd = lambda w: datetime.date(w.date().year(), w.date().month(), w.date().day())
+        made, on = qd(self.d_made), qd(self.d_on)
+        r = CUSTOMS.calculate(self.ed_price.text(), self.ed_volume.text(), made, on, self.ed_eur.text(),
+                              self.ed_rub.text(), self.ed_paid.text(), self.ed_fee.text() or "0")
+        self.res = r
+        cat, years, months = CUSTOMS.age_of(made, on)
+        vals = {k: "" for k in self.out}
+        if cat:
+            vals["age"] = f"{CUSTOMS.age_text(years, months)} — {CUSTOMS.AGE_TITLES[cat]}"
+        if not r["error"]:
+            vals["rate"] = r["rate_text"]
+            for k in ("price_eur", "price_byn", "duty_eur", "duty_byn", "duty_rub", "fee_byn", "total_byn", "total_rub"):
+                vals[k] = CUSTOMS.money(r[k])
+        for k, (e, b) in self.out.items():
+            e.setText(vals[k])
+            b.setEnabled(bool(vals[k]))
+        self.btn_copy.setEnabled(not r["error"])
+        if r["error"]:
+            self.lbl_check.setText("Чтобы посчитать: " + r["error"] + ".")
+        elif "paid_rub" in r:
+            if r["diff_byn"] == 0:
+                self.lbl_check.setText("Сверка: уплаченная сумма совпадает с пошлиной по тарифу.")
+            else:
+                sign = "больше" if r["diff_byn"] > 0 else "меньше"
+                self.lbl_check.setText(
+                    f"Сверка: уплачено {CUSTOMS.money(r['paid_rub'])} RUB = {CUSTOMS.money(r['paid_byn'])} BYN, "
+                    f"пошлина по тарифу {CUSTOMS.money(r['duty_byn'])} BYN ({CUSTOMS.money(r['duty_rub'])} RUB). "
+                    f"Уплачено на {CUSTOMS.money(abs(r['diff_byn']))} BYN ({CUSTOMS.money(abs(r['diff_rub']))} RUB) {sign}.")
+        else:
+            self.lbl_check.setText(f"База расчёта пошлины — {r['basis']}.")
+
+
 class ConvertThread(QThread):
     """PDF → Word в фоне, чтобы окно не замирало."""
     done = Signal(str, str)              # (чем получилось, ошибка)
@@ -11960,7 +12221,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle(f"{APP_TITLE} {APP_VERSION}")
         self.resize(1400, 860)
-        self.setMinimumSize(1180, 680)
+        self.setMinimumSize(1180, 710)
 
         self.doc = None
         self.doc_path = None
@@ -12018,6 +12279,8 @@ class MainWindow(QMainWindow):
             self._tools_dialog.retheme()
         if getattr(self, "_conv_page", None) is not None:
             self._conv_page.refresh()
+        if getattr(self, "_calc_page", None) is not None:
+            self._calc_page.refresh()
         if hasattr(self, "act_dark"):
             self.act_dark.setChecked(self.theme == "dark")
 
@@ -12323,6 +12586,9 @@ class MainWindow(QMainWindow):
         self.act_convert = act("Конвертер Word ⇄ PDF…", self.open_convert_page, "Ctrl+Shift+J",
                                "Перетащите файл Word — получите PDF, перетащите PDF — получите Word; без метаданных")
         m.addAction(self.act_convert)
+        self.act_calc = act("Расчёт таможенных платежей…", self.open_calc_page, "Ctrl+Shift+U",
+                            "Предварительный расчёт пошлины и сбора: суммы в рублях, курс Нацбанка РБ")
+        m.addAction(self.act_calc)
         self.act_act = act("Акт осмотра…", self.open_act_page, "Ctrl+Shift+K",
                            "Акт осмотра автомобиля: оригинал на немецком и перевод, замеры ЛКП почерком мастера")
         m.addAction(self.act_act)
@@ -12427,7 +12693,7 @@ class MainWindow(QMainWindow):
                  self.act_rot_r: "Повернуть вправо",
                  self.act_ai_place: "Печать и подпись на место", self.act_delete: "Удалить печать",
                  self.act_split: "Разрезать на две", self.act_ai_ocr: "Распознать текст",
-                 self.act_convert: "Конвертер Word ⇄ PDF"}
+                 self.act_convert: "Конвертер Word ⇄ PDF", self.act_calc: "Расчёт платежей"}
         groups = [
             ("Печать", [(self.act_place, "stamp"), (self.act_pen, "pen"), (self.act_ai_place, "aim"),
                         (self.act_delete, "trash")]),
@@ -12435,7 +12701,7 @@ class MainWindow(QMainWindow):
                           (self.act_frame, "frame"), (self.act_split, "split")]),
             ("Скан", [(self.act_scanlook, "scanlook"), (self.act_sheet, "sheet"), (self.act_ai_ocr, "ocr")]),
             ("Документы", [(self.act_word, "word_edit"), (self.act_pdf2word, "word"), (self.act_convert, "convert"),
-                           (self.act_act, "act"), (self.act_tools, "tools")]),
+                           (self.act_act, "act"), (self.act_calc, "duty"), (self.act_tools, "tools")]),
         ]
         self._strip_caps, self._strip_seps = [], []
         for title, group in groups:
@@ -12510,6 +12776,7 @@ class MainWindow(QMainWindow):
         mode("word", "Word", self.act_word_fill_run, "Редактор Word: заполнить шаблон  (Ctrl+Shift+W)")
         mode("act", "Акт осмотра", self.open_act_page, "Акт осмотра автомобиля  (Ctrl+Shift+K)")
         mode("conv", "Конвертер", self.open_convert_page, "Word в PDF и PDF в Word, без метаданных  (Ctrl+Shift+J)")
+        mode("calc", "Расчёт", self.open_calc_page, "Предварительный расчёт таможенных платежей  (Ctrl+Shift+U)")
         self.btn_ai.setCheckable(True)
         self.btn_ai.setCursor(Qt.PointingHandCursor)
         self.btn_ai.clicked.connect(lambda *_: self._mode_sync())
@@ -12543,7 +12810,8 @@ class MainWindow(QMainWindow):
         """Подсветить в переключателе режим, который сейчас на экране."""
         cur = self.center_stack.currentWidget()
         key = "doc"
-        for k, attr in (("word", "_word_page"), ("act", "_act_page"), ("conv", "_conv_page"), ("ai", "_ai_center_dlg")):
+        for k, attr in (("word", "_word_page"), ("act", "_act_page"), ("conv", "_conv_page"), ("calc", "_calc_page"),
+                        ("ai", "_ai_center_dlg")):
             if cur is not None and cur is getattr(self, attr, None):
                 key = k
         for k, b in getattr(self, "mode_btn", {}).items():
@@ -13365,6 +13633,21 @@ class MainWindow(QMainWindow):
             return False
         return True
 
+    def open_calc_page(self, *_):
+        """Расчёт таможенных платежей занимает середину окна, как конвертер и акт."""
+        pg = getattr(self, "_calc_page", None)
+        if pg is None:
+            pg = CalcPage(self)
+            self._calc_page = pg
+            self.center_stack.addWidget(pg)
+        else:
+            pg.refresh()
+        if self.view.pen_active():
+            self.pen_finish(commit=True)
+        self.right_dock.hide()
+        self.left_dock.show()
+        self.center_stack.setCurrentWidget(pg)
+
     def open_convert_page(self, files=None):
         """Конвертер Word ⇄ PDF занимает середину окна, как редактор Word и акт."""
         pg = getattr(self, "_conv_page", None)
@@ -13466,6 +13749,49 @@ class MainWindow(QMainWindow):
         if changed:
             act_masters_save(items)
 
+    def _act_print_value(self, page, text, x0, y0, bw, bh, wheel, size=None):
+        """Вписать замер печатными цифрами: ровно по центру окошка, чёрным, шрифт подбирается по размеру."""
+        text = " ".join(str(text).split())
+        if not text:
+            return
+        fs = size or bh * (0.30 if wheel else 0.62)
+        max_w = bw * (0.50 if wheel else 0.90)
+        cx = x0 + bw * (0.36 if wheel else 0.5)
+        cy = y0 + bh * 0.5
+        if all(ord(ch) < 256 for ch in text):
+            tw = fitz.get_text_length(text, fontname="helv", fontsize=fs)
+            if tw > max_w:
+                fs *= max_w / tw
+                tw = max_w
+            page.insert_text(fitz.Point(cx - tw / 2, cy + fs * 0.36), text, fontname="helv", fontsize=fs,
+                             color=(0, 0, 0), overlay=True)
+            return
+        # буквы не из латиницы — рисуем тем же ровным шрифтом картинкой
+        px = max(12, int(fs * 300 / 72))
+        font = QFont("Arial")
+        font.setPixelSize(px)
+        fm = QFontMetrics(font)
+        w, h = fm.horizontalAdvance(text) + 8, fm.height() + 4
+        img = QImage(w, h, QImage.Format_ARGB32)
+        img.fill(Qt.transparent)
+        qp = QPainter(img)
+        qp.setRenderHint(QPainter.TextAntialiasing)
+        qp.setFont(font)
+        qp.setPen(QColor(0, 0, 0))
+        qp.drawText(QRect(0, 0, w, h), Qt.AlignCenter, text)
+        qp.end()
+        ba = QByteArray()
+        qb = QBuffer(ba)
+        qb.open(QIODevice.WriteOnly)
+        img.save(qb, "PNG")
+        k = 72 / 300.0
+        w_pt, h_pt = w * k, h * k
+        if w_pt > max_w:
+            h_pt *= max_w / w_pt
+            w_pt = max_w
+        page.insert_image(fitz.Rect(cx - w_pt / 2, cy - h_pt / 2, cx + w_pt / 2, cy + h_pt / 2),
+                          stream=bytes(ba), keep_proportion=False, overlay=True)
+
     def act_finish(self, d, master):
         """Оригинал акта уже открыт: вписать замеры почерком мастера, положить его подпись и печать.
         Возвращает короткую подсказку, что делать дальше."""
@@ -13483,12 +13809,20 @@ class MainWindow(QMainWindow):
         elif vals:
             pno, rect = where
             page = doc[pno]
-            for name, x0, y0, x1, y1 in ACT.lkp_places(rect, d.get("kind", "car")):
+            places = ACT.lkp_places(rect, d.get("kind", "car"))
+            print_fs = None
+            for name, x0, y0, x1, y1 in places:
                 text = vals.get(name)
                 if not text:
                     continue
                 bw, bh = x1 - x0, y1 - y0
                 wheel = name.startswith("w")
+                if d.get("lkp_style") == "print":
+                    if print_fs is None:                 # один размер на все окошки — по самому низкому
+                        print_fs = 0.62 * min(b[4] - b[2] for b in places if b[0].startswith("b"))
+                    self._act_print_value(page, text.replace("%", "") if wheel else text, x0, y0, bw, bh, wheel,
+                                          None if wheel else print_fs)
+                    continue
                 h_pt = bh * (0.40 if wheel else 0.98)
                 im = hand_pil(text.replace("%", "") if wheel else text, glyphs, int(h_pt * 300 / 72), rnd.randrange(10 ** 6))
                 if im is None:
@@ -17119,7 +17453,7 @@ def main():
             except Exception:
                 guide_n = 0
             f.write(f"OK {APP_VERSION} {EDITION} scanner={scanner_backend()} guide={guide_n} "
-                    f"ai={len(AI.PROVIDERS)} keys={len(AI.builtin_keys())} ocr={AI.selftest_ocr()} word={SW.selftest()} cloud={CLOUD.selftest()} act={'ok' if ACT.selftest() else 'fail'} license={'ok' if LIC.selftest() else 'fail'} tools={'ok' if TOOLS.selftest() else 'fail'} pdf2docx={AI.selftest_pdf2docx()} decline={DECL.selftest_text()} conv={AI.selftest_convert()}")
+                    f"ai={len(AI.PROVIDERS)} keys={len(AI.builtin_keys())} ocr={AI.selftest_ocr()} word={SW.selftest()} cloud={CLOUD.selftest()} act={'ok' if ACT.selftest() else 'fail'} license={'ok' if LIC.selftest() else 'fail'} tools={'ok' if TOOLS.selftest() else 'fail'} pdf2docx={AI.selftest_pdf2docx()} decline={DECL.selftest_text()} calc={'ok' if CUSTOMS.selftest() else 'fail'} conv={AI.selftest_convert()}")
         sys.exit(0)
     if not license_gate():                       # без действующего ключа программа не открывается
         sys.exit(0)
