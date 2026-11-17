@@ -211,7 +211,7 @@ QProgressBar::chunk {{ background: #e8b04b; border-radius: 6px; }}
 QStatusBar {{ background: #1b1e27; color: #8a8fa3; border-top: 1px solid #2e3345; }}
 QStatusBar::item {{ border: none; }}
 QLineEdit:focus, QComboBox:focus, QDoubleSpinBox:focus, QSpinBox:focus {{
-    border: 2px solid #e8b04b;
+    border: 2px solid #e8b04b; padding: 4px 7px;
 }}
 
 QToolBar#dirbar {{
@@ -358,7 +358,7 @@ QStatusBar {{ background: #efece5; color: #6b6553; border-top: 1px solid #e2ddd2
 QStatusBar::item {{ border: none; }}
 QDockWidget::title {{ border-right: 1px solid #e2ddd2; }}
 QLineEdit:focus, QComboBox:focus, QDoubleSpinBox:focus, QSpinBox:focus {{
-    border: 2px solid #c07f16;
+    border: 2px solid #c07f16; padding: 4px 7px;
 }}
 
 QToolBar#dirbar {{
@@ -594,7 +594,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.20.6"
+APP_VERSION = "6.20.7"
 EDITION = "main"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -774,8 +774,22 @@ def tpl_seed() -> int:
         return 0
     st = settings_load()
     done, n = list(st.get("tpl_seeded") or []), 0
+    olds = getattr(stamp_tpl_kit, "OLD", {})
     for name, *chunks in stamp_tpl_kit.TEMPLATES:
         if name in done:
+            # шаблон из прежнего выпуска, который не правили, — заменить исправленным
+            try:
+                import hashlib
+                dst = os.path.join(TPL_DIR, name + ".docx")
+                if olds.get(name) and os.path.exists(dst):
+                    with open(dst, "rb") as f:
+                        if hashlib.sha1(f.read()).hexdigest() in olds[name]:
+                            data = base64.b64decode("".join(chunks))
+                            with open(dst, "wb") as f2:
+                                f2.write(data)
+                            n += 1
+            except Exception:
+                pass
             continue
         try:
             os.makedirs(TPL_DIR, exist_ok=True)
@@ -9468,8 +9482,9 @@ class WordFillPage(QDialog):
         self.lst_tpl.setWrapping(True)
         self.lst_tpl.setSpacing(6)
         self.lst_tpl.setIconSize(QSize(34, 34))
-        self.lst_tpl.setGridSize(QSize(148, 92))
+        self.lst_tpl.setGridSize(QSize(204, 128))      # три строки названия помещаются целиком
         self.lst_tpl.setWordWrap(True)
+        self.lst_tpl.setTextElideMode(Qt.ElideNone)
         self.lst_tpl.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.lst_tpl.setToolTip("Щелчок — открыть чистый бланк. Правая кнопка — переименовать, заменить файл, удалить")
         self.lst_tpl.itemClicked.connect(lambda it: self.win.word_fill(it.data(Qt.UserRole)))
@@ -9785,6 +9800,8 @@ class WordFillPage(QDialog):
             row = self._new_row(label, key, f.kind, [(a, b)], field=f)
             row["hint"] = hint
             row["table"] = f.meta.get("table", "")
+            if f.meta.get("twin"):
+                row["twin"] = True                       # повторяет номер договора, вписанный в начале
             row["total"] = bool(f.kind == "sum" and SW.TOTAL_RE.search(ctx or ""))
             rows.append(row)
         for name, text, cnt in self.wd.dummies:
@@ -9801,6 +9818,11 @@ class WordFillPage(QDialog):
                     prev = c.selectedText().lower()
                     if re.search(r"выдан\w*\W*$", prev):
                         title, key = "Паспорт: дата выдачи", "passport_date"
+                        c2 = QTextCursor(self.view.document())
+                        c2.setPosition(spans[0][1])
+                        c2.movePosition(QTextCursor.EndOfBlock, QTextCursor.KeepAnchor)
+                        if not c2.selectedText().strip():   # «Выдан: 00.00.0000» в конце строки — сюда и дата, и кем выдан
+                            title, key, name = "Паспорт: когда и кем выдан", "passport_issued", "Выдан"
                     elif re.search(r"рожден\w*\W*$", prev):
                         title, key = "Дата рождения", "birth"
                 rows.append(self._new_row(f"{title}: «{text}»" + (f" ×{len(spans)}" if len(spans) > 1 else ""),
@@ -9986,6 +10008,8 @@ class WordFillPage(QDialog):
             d_, by_ = split_issued(data["passport_issued"])
             data.setdefault("passport_date", d_)
             data.setdefault("passport_by", by_)
+            if d_ and by_:
+                data["passport_issued"] = join_issued(d_, by_)      # всегда «дата, затем кем выдан»
         if data.get("fio"):                                # «ФИО, паспорт, адрес» одной строкой — для счёта
             data.setdefault("buyer_line", ", ".join(x for x in (data.get("fio"), re.sub(r"\s+", "", data.get("passport", "")),
                                                                  data.get("address")) if x))
@@ -10163,10 +10187,10 @@ class WordFillPage(QDialog):
                 il.setSpacing(3)
                 first0, month0, on0 = getattr(self, "_inst_data", ("", "", False))
                 self.ed_inst_first = QLineEdit(first0)
-                self.ed_inst_first.setMinimumHeight(28)
+                self.ed_inst_first.setMinimumHeight(34)
                 self.ed_inst_first.setPlaceholderText("первоначальный взнос — если есть")
                 self.ed_inst_month = QLineEdit(month0)
-                self.ed_inst_month.setMinimumHeight(28)
+                self.ed_inst_month.setMinimumHeight(34)
                 self.ed_inst_month.setPlaceholderText("ежемесячный платёж")
                 il.addWidget(self.ed_inst_first)
                 mrow = QHBoxLayout()
@@ -10223,7 +10247,7 @@ class WordFillPage(QDialog):
                 top.addWidget(x)
             v.addLayout(top)
             ed = QLineEdit()
-            ed.setMinimumHeight(28)
+            ed.setMinimumHeight(34)
             ed.setTextMargins(1, 0, 7, 0)                 # длинный текст не упирается в правую рамку
             is_date = row["kind"] == "date" or (row["kind"] == "dummy" and row.get("dummy") == "Дата") \
                 or row.get("hl") in ("date", "date_words")
@@ -10283,11 +10307,11 @@ class WordFillPage(QDialog):
         h.setContentsMargins(0, 0, 0, 0)
         h.setSpacing(4)
         e_name = QLineEdit(name)
-        e_name.setMinimumHeight(28)
+        e_name.setMinimumHeight(34)
         e_name.setPlaceholderText("услуга ▾ или своё название")
         act = e_name.addAction(draw_icon("chev_down", self.win._icon_color()), QLineEdit.TrailingPosition)
         e_sum = QLineEdit(amount)
-        e_sum.setMinimumHeight(28)
+        e_sum.setMinimumHeight(34)
         e_sum.setFixedWidth(104)
         e_sum.setPlaceholderText("сумма")
         x = QToolButton()
@@ -10650,12 +10674,18 @@ class WordFillPage(QDialog):
         for r in self.rows:
             if r["kind"] == "dummy" and r["edit"] is not None and r["edit"].text().strip():
                 name = name.replace(r["orig"][0], r["edit"].text().strip())
-        if name == base:
+        who_short = vals.get("fio_short") or SW.initials(vals.get("fio", "")) or ""
+        own_ = next((r for r in self.rows if r.get("docnum") and r["edit"] is not None), None)
+        num_ = own_["edit"].text().strip() if own_ is not None else ""
+        if base.lower().startswith("договор") and num_:      # «Договор №БМ-629 Орешкина Т. В.»
+            name = " ".join(x for x in (f"Договор №{num_}", who_short) if x)
+        elif name == base:
             who = vals.get("fio_short") or vals.get("fio") or ""
             name = f"{base} — {who}" if who else f"{base} (заполнен)"
         out, _ = QFileDialog.getSaveFileName(self, "Сохранить документ Word",
-                                             os.path.join(folder, AI.clean_filename(name) + ".docx"),
-                                             "Документ Word (*.docx)")
+                                             os.path.join(folder, AI.clean_filename(name)
+                                                          + ("." if name.rstrip().endswith(".") else "") + ".docx"),
+                                             "Документ Word (*.docx)")   # «…Орешкина Т. В..docx»: точка инициала остаётся
         if not out:
             return
         if not out.lower().endswith(".docx"):
@@ -16379,9 +16409,23 @@ class MainWindow(QMainWindow):
             dock.hide()
             self.tools_dock = dock
             dock.visibilityChanged.connect(lambda *_: self._print_title.setVisible(self.tools_dock.isHidden()))
+            dock.visibilityChanged.connect(lambda *_: QTimer.singleShot(0, self._dock_tabs_fit))
+            QTimer.singleShot(0, self._dock_tabs_fit)
             dock.visibilityChanged.connect(lambda on: QTimer.singleShot(200, panel._rates_first) if on else None)
             QApplication.instance().focusChanged.connect(self._focus_track)
         return panel
+
+    def _dock_tabs_fit(self):
+        """Вкладки боковых панелей: выбранная пишется жирным, поэтому место под текст считается по жирному шрифту."""
+        try:
+            for bar in self.findChildren(QTabBar):
+                if bar.parent() is self and not bar.property("boldfit"):
+                    bar.setProperty("boldfit", True)
+                    bar.setElideMode(Qt.ElideNone)
+                    bar.setStyleSheet("QTabBar { font-weight: bold; } QTabBar::tab { padding: 0 12px; max-width: 240px; } "
+                                      "QTabBar::tab:!selected { font-weight: normal; }")
+        except RuntimeError:
+            pass
 
     def tools_visible(self):
         w = getattr(self, "_tools_window", None)

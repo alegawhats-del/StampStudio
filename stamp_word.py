@@ -443,6 +443,10 @@ class WordDoc:
                     whole = "".join(t.text or "" for t in cell.iter(T)).strip()
                     if first is p and not whole and (n == 2 or re.match(r"^\d+\.?\s", ctx + " ")):
                         out.append(Field("cell", i, 0, 0, re.sub(r"^\d+\.?\s+", "", ctx)))
+                    elif first is p and not whole and re.fullmatch(r"№\s*Наименование", ctx.strip()):
+                        # шапка таблицы приложения «№ | Наименование | …» — в третьей ячейке стоит номер договора
+                        out.append(Field("cell", i, 0, 0, "Номер договора — в шапке таблицы",
+                                         meta={"key": "contract_no", "twin": True}))
                 continue
             taken = []
             for m in RE_DATE.finditer(text):
@@ -698,8 +702,20 @@ class WordDoc:
         if services and total_par is not None:
             self._add_service_rows(total_par, services)
         self._line_breaks()
+        self._phone_gap()
         if align:
             self._align_signatures()
+
+    def _phone_gap(self):
+        """Номера телефонов идут сразу под «Моб. телефон:», без пустой строки."""
+        txt = lambda x: "".join(t.text or "" for t in x.iter(T)).strip()
+        for tc in list(self.doc.element.body.iter(TC)):
+            ps = [x for x in tc if x.tag == P]
+            for i in range(len(ps) - 2):
+                if re.fullmatch(r"(?:моб\.?\s*)?тел\w*\.?:", txt(ps[i]).lower()) and not txt(ps[i + 1]) \
+                        and re.match(r"\+?\d[\d() \-]{6,}", txt(ps[i + 2])):
+                    tc.remove(ps[i + 1])
+                    break
 
     def _line_breaks(self):
         for t in list(self.doc.element.body.iter(T)):
@@ -819,12 +835,18 @@ class WordDoc:
                         gap += 1
                     plan.append((c, ps, start, gap, last))
                 keep = min(2, min(g for _c, _ps, _s, g, _l in plan))   # пустые строки над подписью — поровну у обеих сторон
+                tail_gap = any(len(ps) > last + 1 for _c, ps, _s, _g, last in plan)    # под линией была пустая строка
                 for (c, ps, start, gap, last), nc in zip(plan, [c for c in new if c.tag == TC]):
                     for x in ps[start - gap:start - keep] + ps[last + 1:]:
                         c.remove(x)
                     for x in ps[start - keep:last + 1]:
                         c.remove(x)
                         nc.append(x)
+                    if tail_gap:                             # один отступ после линии — у обеих сторон одинаково
+                        blank = copy.deepcopy(ps[last])
+                        for r_ in [x for x in blank if x.tag != PPR]:
+                            blank.remove(r_)
+                        nc.append(blank)
                 for c in [c for c in tr if c.tag == TC]:
                     self._tc_prop(c, "tcBorders", edge=("bottom", "nil"))      # без черты между текстом и подписью
                 for c in [c for c in new if c.tag == TC]:
