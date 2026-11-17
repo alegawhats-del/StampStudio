@@ -593,7 +593,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.18.3"
+APP_VERSION = "6.19.0"
 EDITION = "canon"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -6755,6 +6755,11 @@ class SettingsDialog(QDialog):
         check(l, "Вкладка «Инструменты» справа, рядом с «Печатью»", "tools_tab", True,
               "Инструменты под рукой у документа и в редакторе Word. Раздел «Инструменты» сверху открывает их\n"
               "на весь экран и работает независимо от этой галочки.")
+        check(l, "Редактор Word: проверять документ перед сохранением", "word_check", True,
+              "Перед сохранением программа покажет, что не сходится: пустые поля, оставшиеся образцы,\n"
+              "неверный VIN, расхождение с карточкой клиента. Сохранить можно и так.")
+        check(l, "Редактор Word: класть PDF рядом с сохранённым документом", "word_save_pdf", False,
+              "То же, что галочка «и PDF рядом» у кнопки сохранения.")
         check(l, "Брать выделенное в документе в открытую вкладку", "tools_take_selection", True,
               "Выделили в редакторе Word число, ФИО или слово — оно само попадает в панель инструментов.")
         frow = QHBoxLayout()
@@ -8804,7 +8809,7 @@ class WordView(QTextEdit):
             v = b.blockFormat().property(WORD_PAR)
             if v is not None and v not in seen:
                 seen.add(v)
-                text = b.text().replace("\t", "").replace(" ", "")
+                text = b.text().replace("\t", "")          # перенос строки (Shift+Enter) остаётся: в файле это разрыв строки
                 if text != self.wd.text(int(v)):
                     out[int(v)] = text
             b = b.next()
@@ -9227,6 +9232,12 @@ class WordFillPage(QDialog):
         self.lbl_info.setObjectName("hint")
         self.lbl_info.setWordWrap(True)
         foot.addWidget(self.lbl_info, 1)
+        self.chk_pdf = QCheckBox("и PDF рядом")
+        self.chk_pdf.setToolTip("Вместе с файлом Word положить рядом его PDF — без метаданных.\n"
+                                "Нужен установленный Microsoft Word: без него вид документа упрощённый, и PDF не создаётся.")
+        self.chk_pdf.setChecked(bool(settings_load().get("word_save_pdf", False)))
+        self.chk_pdf.toggled.connect(lambda on: self._save_opt("word_save_pdf", bool(on)))
+        foot.addWidget(self.chk_pdf)
         self.b_save = QPushButton("Сохранить как Word…")
         self.b_save.setObjectName("primary")
         self.b_save.setMinimumHeight(36)
@@ -9434,7 +9445,7 @@ class WordFillPage(QDialog):
         on = bool(on)
         self.empty.setVisible(on)
         self.body_w.setVisible(not on)
-        for wdg in (self.b_save, self.lbl_client, self.b_card, self.b_dir, self.b_tpl):
+        for wdg in (self.b_save, self.chk_pdf, self.lbl_client, self.b_card, self.b_dir, self.b_tpl):
             wdg.setVisible(not on)
         if on:
             self.tpl_reload()
@@ -9528,10 +9539,12 @@ class WordFillPage(QDialog):
         return value
 
     def _write(self, row, value):
+        if row.get("virtual"):
+            return                                       # своё место в документе у такого поля — через главное поле
         new = self._render(row, value)
         self.view.blockSignals(True)
         for k, c in enumerate(row["cursors"]):
-            text = row["orig"][k] if new is None else new
+            text = row["orig"][k] if new is None else new + (row.get("extra") or {}).get(k, "")
             if c.selectedText() == text:
                 continue
             c.beginEditBlock()
@@ -9579,6 +9592,7 @@ class WordFillPage(QDialog):
             elif f.kind == "blank" and re.search(r"(?<!к )договор(?:ом|а|у)?\s*№\s*$", before.lower()):
                 key = "contract_no"
             label, hint = f.label, ""
+            key = f.meta.get("key") or key
             low = before.lower()
             if f.kind == "blank" and re.search(r"выдан\w*\W*\d{2}\.\d{2}\.\d{4}\W*$", low):
                 label, key, hint = "Паспорт: кем выдан", "passport_by", "кем выдан паспорт — как написано в паспорте"
@@ -9620,6 +9634,14 @@ class WordFillPage(QDialog):
                 rows.append(self._new_row(f"{title}: «{m['text'][:40]}»" + (f" ×{len(spans)}" if len(spans) > 1 else ""),
                                           m.get("key", ""), "mark", spans, mark=m))
                 taken += spans
+        ph = next((r for r in rows if r["kind"] == "dummy" and r["key"] == "phone"), None)
+        if ph is not None:                               # «Моб. телефон:» — подпись, номера идут строками под ней
+            rows = [r for r in rows if not (r["kind"] == "tail" and r["key"] == "phone")]
+            end = ph["cursors"][0].selectionEnd()
+            two = self._new_row("Второй телефон — если есть", "phone2", "virtual", [(end, end)])
+            two["virtual"], two["main"] = "phone2", ph
+            two["hint"] = "встанет строкой под первым номером"
+            rows.append(two)
         rows += self._highlight_rows(taken)
         if self.wd.highlights:                           # в шаблоне поля помечены жёлтым — догадки о подписях не нужны
             rows = [r for r in rows if r["kind"] not in ("tail", "cell")]
@@ -9694,6 +9716,17 @@ class WordFillPage(QDialog):
             row = self._new_row(f"{title}: «{text[:40]}»" + (f" ×{len(items)}" if len(items) > 1 else ""),
                                 key, "hl", [s_ for _h, s_ in items])
             row["hl"], row["sample"] = kind, text
+            if german:
+                lab_ = ((labels[0] if labels else "") + " ").lower()
+                if re.search(r"kw\s*\(\s*$", low):
+                    row["calc"] = "ps"
+                elif "leistung" in lab_:
+                    row["calc"] = "kw"
+                elif "restbetrag" in lab_:
+                    row["calc"] = "rest"
+                    row["label"] = "Restbetrag (считается сам)"
+                elif re.search(r"autopreis|coe-wert|kaufpreis", lab_):
+                    row["calc"] = "price"
             if de_kind:
                 row["de"], row["before"] = de_kind, low
                 if not kind:
@@ -9806,6 +9839,7 @@ class WordFillPage(QDialog):
                     r["edit"].setText(val)
                     r["auto"] = True
                     self._write(r, val)
+        self._phone_sync()
         self._recalc()
         self._count()
         return n
@@ -9848,6 +9882,8 @@ class WordFillPage(QDialog):
                      and r.get("table") and r.get("table") == tot.get("table") and r["edit"] is not None]
             nums = [SW.parse_number(r["edit"].text()) for r in parts if r["edit"].text().strip()]
             nums = [x for x in nums if x is not None]     # «Бесплатно» в сумму не идёт
+            if tot is getattr(self, "_extras_tot", None):
+                nums += [x for x in (SW.parse_number(a) for _n, a in self.extras()) if x is not None]
             if not nums and tot["auto"] and tot["edit"].text().strip():
                 tot["edit"].clear()                  # слагаемые стёрли — итог тоже пустой
                 self._write(tot, "")
@@ -9860,6 +9896,17 @@ class WordFillPage(QDialog):
                 tot["edit"].setText(text)
                 tot["auto"] = True
                 self._write(tot, text)
+        rest = next((r for r in self.rows if r.get("calc") == "rest" and r["edit"] is not None), None)
+        price = next((r for r in self.rows if r.get("calc") == "price" and r["edit"] is not None), None)
+        if rest is not None and price is not None and (not rest["edit"].text().strip() or rest["auto"]):
+            n = SW.parse_number(price["edit"].text())     # ДКП: остаток = цена + прочее («Sonstiges»)
+            m = re.search(r"Sonstiges:\s*([\d \u00a0]+)", self.view.toPlainText())
+            add = SW.parse_number(m.group(1)) if m else None
+            text = str(n[0] + (add[0] if add else 0)) if n else ""
+            if rest["edit"].text().strip() != text:
+                rest["edit"].setText(text)
+                rest["auto"] = True
+                self._write(rest, text)
         for r in self.rows:
             src = r.get("words_of")
             if src is None or r["edit"] is None or src["edit"] is None or not (not r["edit"].text().strip() or r["auto"]):
@@ -9891,6 +9938,8 @@ class WordFillPage(QDialog):
         tips = {"date": "ДД.ММ.ГГГГ", "sum": "число — пропись подставится; или словом: Бесплатно",
                 "hl": "впишите своё — образец в документе заменится"}
         sep_done = False
+        extras_done = False
+        self._extras, self._extras_tot, self._extras_lay = [], None, None
         for row in self.rows:
             if row["current"] and not sep_done:
                 sep = QLabel("УЖЕ ЗАПОЛНЕНО В ШАБЛОНЕ")
@@ -9898,6 +9947,27 @@ class WordFillPage(QDialog):
                 v.addSpacing(6)
                 v.addWidget(sep)
                 sep_done = True
+            if row.get("total") and not extras_done:      # доп. услуги — перед итогом
+                extras_done = True
+                self._extras_tot = row
+                box = QWidget()
+                self._extras_lay = QVBoxLayout(box)
+                self._extras_lay.setContentsMargins(0, 0, 0, 0)
+                self._extras_lay.setSpacing(3)
+                v.addWidget(box)
+                b = QPushButton(" Доп. услуга")
+                b.setIcon(draw_icon("plus", self.win._icon_color()))
+                b.setIconSize(QSize(13, 13))
+                b.setCursor(Qt.PointingHandCursor)
+                b.setToolTip("Добавить строку в таблицу: Русификация, ГЛОНАСС и т. п.\n"
+                             "Строки встанут перед «Общей стоимостью», нумерация продолжится, сумма войдёт в итог.\n"
+                             "В документе они появятся при сохранении.")
+                b.clicked.connect(lambda: self._extra_add())
+                v.addWidget(b)
+                v.addSpacing(6)
+                data, self._extras = list(getattr(self, "_extras_data", [])), []
+                for name, amount in data:
+                    self._extra_add(name, amount, focus=False)
             top = QHBoxLayout()
             top.setSpacing(4)
             lab = ElideLabel(row["label"])
@@ -9946,8 +10016,9 @@ class WordFillPage(QDialog):
             unit = {"mileage": ("км", True), "weight": ("кг", False)}.get(row["key"])
             if is_date:
                 ed.textEdited.connect(lambda t, r=row, e=ed: self._typed(r, self._date_typed(e, t)))
-            elif row["key"] == "phone":
-                ed.setPlaceholderText("набирайте цифры: +7(916) 975-13-68")
+            elif row["key"] in ("phone", "phone2"):
+                ed.setPlaceholderText("набирайте цифры: +7(916) 975-13-68" if row["key"] == "phone" else
+                                      "второй номер — если есть")
                 ed.textEdited.connect(lambda t, r=row, e=ed: self._typed(r, self._mask_typed(e, t, phone_mask(t), True)))
             elif unit:
                 ed.setPlaceholderText("только число — «%s» допишется само" % unit[0])
@@ -9980,6 +10051,66 @@ class WordFillPage(QDialog):
         v.addStretch(1)
         self.sc.setWidget(holder)
         self._count()
+
+    EXTRA_NAMES = ("Русификация", "ГЛОНАСС", "Сертификация", "Зимняя резина", "Доставка до двери", "Страхование")
+
+    def _extra_add(self, name="", amount="", focus=True):
+        if self._extras_lay is None:
+            return
+        w = QWidget()
+        h = QHBoxLayout(w)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.setSpacing(4)
+        e_name = QLineEdit(name)
+        e_name.setMinimumHeight(28)
+        e_name.setPlaceholderText("услуга ▾ или своё название")
+        act = e_name.addAction(draw_icon("chev_down", self.win._icon_color()), QLineEdit.TrailingPosition)
+        e_sum = QLineEdit(amount)
+        e_sum.setMinimumHeight(28)
+        e_sum.setFixedWidth(104)
+        e_sum.setPlaceholderText("сумма")
+        x = QToolButton()
+        x.setObjectName("ghost")
+        x.setAutoRaise(True)
+        x.setFixedSize(20, 20)
+        x.setIcon(draw_icon("close", self.win._icon_color()))
+        x.setIconSize(QSize(10, 10))
+        x.setToolTip("Убрать эту услугу")
+        h.addWidget(e_name, 1)
+        h.addWidget(e_sum)
+        h.addWidget(x)
+        item = {"w": w, "name": e_name, "sum": e_sum}
+        self._extras.append(item)
+        self._extras_lay.addWidget(w)
+
+        def pick():
+            m = QMenu(e_name)
+            for n_ in self.EXTRA_NAMES:
+                m.addAction(n_, lambda val=n_: (e_name.setText(val), self._extras_changed(), e_sum.setFocus()))
+            m.setMinimumWidth(e_name.width())
+            self._menu_show(m, e_name.mapToGlobal(QPoint(0, e_name.height() + 2)))
+        act.triggered.connect(lambda *_: pick())
+        e_name.textEdited.connect(lambda *_: self._extras_changed())
+        e_sum.textEdited.connect(lambda *_: self._extras_changed())
+        x.clicked.connect(lambda *_: self._extra_drop(item))
+        if focus:
+            e_name.setFocus()
+        self._extras_changed()
+
+    def _extra_drop(self, item):
+        if item in self._extras:
+            self._extras.remove(item)
+            item["w"].setParent(None)
+            item["w"].deleteLater()
+        self._extras_changed()
+
+    def _extras_changed(self):
+        self._extras_data = [(e["name"].text().strip(), e["sum"].text().strip()) for e in self._extras]
+        self._recalc()
+
+    def extras(self):
+        """[(название, сумма)] — заполненные строки доп. услуг."""
+        return [(n, a) for n, a in getattr(self, "_extras_data", []) if n and a]
 
     def _num_mode_changed(self, row, mode):
         self._set_counter(mode=mode)
@@ -10052,9 +10183,43 @@ class WordFillPage(QDialog):
                 edit.setCursorPosition(pos)
         return new
 
+    def _phone_sync(self):
+        """Второй телефон — строкой под первым, в реквизитах (первое место, где стоит номер)."""
+        two = next((r for r in self.rows if r.get("virtual") == "phone2"), None)
+        if two is None or two["edit"] is None or two["main"]["edit"] is None:
+            return
+        main, p2 = two["main"], two["edit"].text().strip()
+        main["extra"] = {0: SW.LINE_BREAK + p2} if p2 and main["edit"].text().strip() else {}
+        self._write(main, main["edit"].text())
+
+    KW_PER_PS = 0.73549875
+
+    def _power_sync(self, row):
+        """ДКП: кВт и л. с. считаются друг из друга."""
+        other = next((r for r in self.rows if r.get("calc") == ("ps" if row["calc"] == "kw" else "kw")), None)
+        if other is None or other["edit"] is None:
+            return
+        n = SW.parse_number(row["edit"].text())
+        if not n or not (not other["edit"].text().strip() or other["auto"] or True):
+            return
+        val = n[0] / self.KW_PER_PS if row["calc"] == "kw" else n[0] * self.KW_PER_PS
+        text = str(int(val + 0.5))
+        if other["edit"].text().strip() != text:
+            other["edit"].setText(text)
+            other["auto"] = True
+            self._write(other, text)
+
     def _typed(self, row, text, spread=True):
         row["auto"] = False
+        if row.get("virtual") == "phone2" or (row["kind"] == "dummy" and row["key"] == "phone"):
+            self._write(row, text)
+            self._phone_sync()
+            self._recalc()
+            self._count()
+            return
         self._write(row, text)
+        if row.get("calc") in ("kw", "ps"):
+            self._power_sync(row)
         if spread and row["key"]:
             self._spread_key(row["key"], text, skip=row)
         if row.get("docnum"):
@@ -10233,6 +10398,8 @@ class WordFillPage(QDialog):
         if not edits:
             QMessageBox.information(self, "Редактор Word", "В документе пока ничего не изменено.")
             return
+        if not self.check_before_save():
+            return
         folder = self.client_dir or os.path.dirname(self.path)
         base = os.path.splitext(os.path.basename(self.path))[0]
         vals = self.client_values()
@@ -10277,7 +10444,12 @@ class WordFillPage(QDialog):
                 self._say(f"Номер {wanted} уже занят на другом компьютере — поставлен {got}")
         try:
             fresh = SW.WordDoc(self.path)
-            n = fresh.save(out, edits=edits)
+            tot_ = getattr(self, "_extras_tot", None)
+            services = []
+            if tot_ is not None and tot_["field"] is not None:
+                services = [(name, tot_["field"].render(amount) or amount) for name, amount in self.extras()]
+            n = fresh.save(out, edits=edits, services=services,
+                           total_par=tot_["field"].par if services else None)
         except PermissionError:
             QMessageBox.warning(self, "Редактор Word", "Не удалось записать файл — он открыт в Word. "
                                                        "Закройте его там и повторите.")
@@ -10312,8 +10484,128 @@ class WordFillPage(QDialog):
         self.win.reload_files()
         self.win.ai_mode(False)
         self.win.open_word(out, quiet=True)
+        pdf_note = ""
+        if self.chk_pdf.isChecked():
+            pdf_note = self._pdf_beside(out)
         self.win.show_toast(f"✔  Сохранено: {os.path.basename(out)} — изменено абзацев: {n}. "
-                            + ("Карточка клиента обновлена" if saved else "Карточку клиента записать не удалось"), 5200)
+                            + ("Карточка клиента обновлена" if saved else "Карточку клиента записать не удалось")
+                            + pdf_note, 5200)
+
+    def _save_opt(self, key, value):
+        st = settings_load()
+        st[key] = value
+        settings_save(st)
+
+    def _pdf_beside(self, out):
+        """Положить рядом с сохранённым Word его PDF. Возвращает приписку для сообщения."""
+        w = self.win
+        try:
+            if w.doc is None or str(w.doc_path or "") != out + " (из Word)":
+                return ". PDF не создан: документ не открылся"
+            if getattr(w, "_word_how", "") != "word":
+                return ". PDF не создан: нужен Microsoft Word, без него вид документа упрощённый"
+            dst = os.path.splitext(out)[0] + ".pdf"
+            data = AI.strip_pdf_meta(w.doc.tobytes(deflate=True, garbage=3))
+            with open(dst, "wb") as f:
+                f.write(data)
+            w.reload_files()
+            return f". Рядом — {os.path.basename(dst)}"
+        except PermissionError:
+            return ". PDF не записан: файл с таким именем открыт в другой программе"
+        except Exception as e:
+            return f". PDF не создан: {e}"
+
+    # ---- проверка перед сохранением
+    def problems(self):
+        """[(что не так, строка-поле или None)] — то, на что стоит взглянуть до сохранения."""
+        out = []
+        txt = lambda r: r["edit"].text().strip() if r["edit"] is not None else ""
+        card = dict(self.card or {})
+        seen_keys = set()
+        for r in self.rows:
+            if r["edit"] is None or r.get("virtual") or r["current"] and not txt(r):
+                continue
+            t = txt(r)
+            name = r["label"].split(": «")[0].split("  →  ")[-1].strip(" :…")[:48]
+            if not t:
+                if r["kind"] == "dummy" and r["key"] != "phone":
+                    out.append((f"в документе остался образец «{r['orig'][0]}» — поле «{name}» не заполнено", r))
+                elif r.get("hl") and not r.get("fixed") and r.get("hl") != "words":
+                    out.append((f"в документе остался образец «{r['sample'][:30]}» — поле «{name}» не заполнено", r))
+                elif r.get("fixed"):
+                    out.append((f"не вписан постоянный реквизит «{name}»", r))
+                elif r["kind"] in ("blank", "date", "sum", "cell") and not r.get("total"):
+                    out.append((f"пустое поле «{name}»", r))
+                continue
+            if r["key"] == "vin":
+                bad = ACT.vin_problem(t)
+                if bad:
+                    out.append((f"VIN «{t}»: {bad}", r))
+            if r["key"] == "passport" and re.fullmatch(r"[\d\s]+", t) and len(re.sub(r"\s", "", t)) != 10:
+                out.append((f"паспорт «{t}»: цифр {len(re.sub(chr(92) + 's', '', t))}, в российском паспорте их 10", r))
+            if (r["kind"] == "date" or r.get("hl") in ("date", "date_words") or r.get("dummy") == "Дата") and not SW.parse_date(t):
+                out.append((f"дата «{t}» — нужна в виде ДД.ММ.ГГГГ", r))
+            if r["kind"] == "sum" and SW.parse_number(t) is None and re.search(r"\d", t):
+                out.append((f"сумма «{t}» не читается как число — пропись не подставилась", r))
+            if r.get("hl") == "words" and r.get("words_of") is not None and not r["auto"]:
+                n = SW.parse_number(txt(r["words_of"]))
+                if n and SW.money_words(n[0], r["sample"]).lower().split(" руб")[0] != t.lower().split(" руб")[0]:
+                    out.append((f"сумма прописью не совпадает с суммой цифрами ({txt(r['words_of'])})", r))
+            k = r["key"]                                  # расхождение с карточкой клиента в этой папке
+            if k in ("vin", "passport", "fio", "contract_no") and k not in seen_keys and not r.get("de") and card.get(k):
+                seen_keys.add(k)
+                norm = lambda x: re.sub(r"[\s\u00a0]+", "", str(x)).lower().replace("ё", "е")
+                if norm(card[k]) != norm(t):
+                    out.append((f"{SW.KEY_TITLES.get(k, k)}: в документе «{t}», а в карточке клиента «{card[k]}»", r))
+            elif k == "vin" and r.get("de") and card.get("vin") and re.sub(r"\s", "", card["vin"]).upper() != re.sub(r"\s", "", t).upper():
+                out.append((f"VIN: в документе «{t}», а в карточке клиента «{card['vin']}»", r))
+        for nm, am in getattr(self, "_extras_data", []):
+            if bool(nm) != bool(am):
+                out.append((f"доп. услуга «{nm or am}»: нужны и название, и сумма — иначе строка не попадёт в документ", None))
+            elif am and SW.parse_number(am) is None:
+                out.append((f"доп. услуга «{nm}»: сумма «{am}» — не число, в итог не войдёт", None))
+        uniq, seen = [], set()
+        for t, r in out:                                  # одно и то же из двух мест документа — один раз
+            if t not in seen:
+                seen.add(t)
+                uniq.append((t, r))
+        return uniq
+
+    def check_before_save(self):
+        """Показать, что не сходится. True — сохранять."""
+        if not settings_load().get("word_check", True):
+            return True
+        found = self.problems()
+        if not found:
+            return True
+        box = QMessageBox(self)
+        box.setWindowTitle("Проверка перед сохранением")
+        box.setIcon(QMessageBox.Warning)
+        box.setText(f"Стоит взглянуть: {len(found)}")
+        empty = [t[len("пустое поле «"):-1] for t, _r in found if t.startswith("пустое поле «")]
+        main = [t for t, _r in found if not t.startswith("пустое поле «")]
+        lines = [f"•  {t}" for t in main[:12]]
+        if len(main) > 12:
+            lines.append(f"…и ещё {len(main) - 12}")
+        if empty:
+            names = ", ".join(e.split(":")[0][:28] for e in empty[:6]) + (" и другие" if len(empty) > 6 else "")
+            lines.append(f"•  не заполнено полей: {len(empty)} — {names}")
+        box.setInformativeText("\n".join(lines))
+        b_fix = box.addButton("Вернуться и исправить", QMessageBox.RejectRole)
+        b_go = box.addButton("Сохранить как есть", QMessageBox.AcceptRole)
+        box.setDefaultButton(b_fix)
+        self._check_box_run(box)
+        if box.clickedButton() is b_go:
+            return True
+        found.sort(key=lambda x: x[0].startswith("пустое поле «"))
+        first = next((r for _t, r in found if r is not None), None)
+        if first is not None:
+            self._jump(first)
+        return False
+
+    @staticmethod
+    def _check_box_run(box):
+        box.exec()
 
 
 class AiPlaceDialog(QDialog):
@@ -17004,6 +17296,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Word", "Не удалось открыть документ:\n" + box.get("err", "неизвестная ошибка"))
             return
         data, how = box["res"]
+        self._word_how = how
         try:
             doc = fitz.open("pdf", data)
         except Exception as e:

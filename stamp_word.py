@@ -295,6 +295,9 @@ RE_DATE = re.compile(r"«\s*[_0]{1,4}\s*»\s*[_]{2,}(?:\s*(\d{4}))?(?:\s*(г\.|�
 RE_SUM = re.compile(r"(?<![\d,.])(\d[\d  ]*?)(,\d{2})?\s*\(\s*([^()\d]{0,160}?)\s*\)")
 RE_SUM_UNIT = re.compile(r"\s*(?:(?:российск\w*|белорусск\w*)\s+)?руб\w*\.?(?:\s*\d{2}\s*коп\w*\.?)?\s*", re.I)
 RE_BLANK = re.compile(r"_{3,}")
+RE_CITY = re.compile(r"пригон\w*\s+транспортного\s+средства\s+в\s+г\.\s*([А-ЯЁ][А-ЯЁа-яё\- ]{1,40}?),\s*Российск")
+RE_DATE_LINE = re.compile(r"^(г\.\s*\S.*?\S)(\s{8,})(«[^»]{1,4}»\s+\S+\s+\d{4}\s+года)(\s*)$")
+LINE_BREAK = " "                                  # перенос строки внутри абзаца (в файле — <w:br/>)
 RE_INITIALS = re.compile(r"[А-ЯЁ][а-яё]+\s+[А-ЯЁ]\.\s?[А-ЯЁ]\.")
 DUMMY_PATTERNS = (
     ("ФИО", r"Иванов(?:а)? Иван(?:а)? Иванович(?:а)?"),
@@ -457,6 +460,11 @@ class WordDoc:
                                  meta={"decimals": bool(m.group(2)), "capital": blank or words.strip()[:1].isupper(),
                                        "sep": " " if " " in m.group(1) else " ", "unit": unit}))
                 taken.append((m.start(), end))
+            m = RE_CITY.search(text)
+            if m:
+                out.append(Field("cell", i, m.start(1), m.end(1), "Город пригона (в тексте договора)",
+                                 current=m.group(1), meta={"key": "city"}))
+                taken.append(m.span(1))
             ctx, idx, n, cell_pars = self._cell_ctx(p)
             for m in RE_BLANK.finditer(text):
                 if any(a <= m.start() < b for a, b in taken):
@@ -466,6 +474,9 @@ class WordDoc:
                     continue                           # «/ ________ /» — место для подписи
                 if not before and not after and cell_pars:
                     k = cell_pars.index(p)
+                    rest_txt = "".join("".join(t.text or "" for t in x.iter(T)) for x in cell_pars[k + 1:]).strip()
+                    if k >= 2 and not rest_txt and len(cell_pars) >= 4:
+                        continue                       # линия под реквизитами стороны — место для подписи
                     prev_t = "".join(t.text or "" for t in cell_pars[k - 1].iter(T)) if k else ""
                     if RE_INITIALS.search(prev_t) or "подпис" in prev_t.lower() or "/" in prev_t:
                         continue                       # строка под фамилией — тоже подпись
@@ -638,7 +649,198 @@ class WordDoc:
         b = 0
         while b < min(len(old), len(new)) - a and old[len(old) - 1 - b] == new[len(new) - 1 - b]:
             b += 1
-        self._replace_span(i, a, len(old) - b, new[a:len(new) - b])
+        mid_old, mid_new = old[a:len(old) - b], new[a:len(new) - b]
+        if len(self._texts[i]) < 2 or not mid_old or len(mid_old) * len(mid_new) > 4_000_000:
+            self._replace_span(i, a, len(old) - b, mid_new)
+            return
+        # несколько правок в одном абзаце: каждая попадает в свой кусок, жирное остаётся жирным, обычное — обычным
+        import difflib
+        ops = difflib.SequenceMatcher(None, mid_old, mid_new, autojunk=False).get_opcodes()
+        ops = [(tag, i1, i2, j1, j2) for tag, i1, i2, j1, j2 in ops
+               if tag != "equal" or i2 - i1 >= 3 or not mid_old[i1:i2].strip() == ""]
+        merged = []                                   # короткие совпадения в пару букв не дробят правку
+        for tag, i1, i2, j1, j2 in ops:
+            small = tag == "equal" and i2 - i1 < 3
+            if merged and (small or merged[-1][0] != "equal") and (tag != "equal" or small):
+                m = merged[-1]
+                merged[-1] = ("replace", m[1], i2, m[3], j2)
+            else:
+                merged.append(("replace" if small else tag, i1, i2, j1, j2))
+        for tag, i1, i2, j1, j2 in reversed(merged):
+            if tag != "equal":
+                self._replace_span(i, a + i1, a + i2, mid_new[j1:j2])
+
+    @staticmethod
+    def _date_line(old, new):
+        mo, mn = RE_DATE_LINE.match(old), RE_DATE_LINE.match(new)
+        if not mo or not mn:
+            return new
+        grow = len(mn.group(3)) - len(mo.group(3))
+        gap = mn.group(2)
+        if grow > 0:                                   # буква шире пробела примерно вдвое
+            gap = gap[:max(6, len(gap) - 2 * grow)]
+        return mn.group(1) + gap + mn.group(3).replace(" ", " ")
+
+    # ---- доводка готового документа: то, что нельзя сделать заменой текста
+    def finish(self, services=None, total_par=None):
+        """services: [(название, текст значения)] — строки доп. услуг перед строкой итога (абзац total_par)."""
+        if services and total_par is not None:
+            self._add_service_rows(total_par, services)
+        self._line_breaks()
+        self._align_signatures()
+
+    def _line_breaks(self):
+        for t in list(self.doc.element.body.iter(T)):
+            if t.text and LINE_BREAK in t.text:
+                parts = t.text.split(LINE_BREAK)
+                t.text = parts[0]
+                at = t
+                for part in parts[1:]:
+                    br = t.makeelement(f"{{{W}}}br", {})
+                    at.addnext(br)
+                    nt = t.makeelement(T, {f"{{{XML}}}space": "preserve"})
+                    nt.text = part
+                    br.addnext(nt)
+                    at = nt
+
+    @staticmethod
+    def _cell_set(tc, text):
+        """Текст ячейки одной строкой, с оформлением её первого куска."""
+        ps = [x for x in tc if x.tag == P]
+        for extra in ps[1:]:
+            tc.remove(extra)
+        ts = [t for t in ps[0].iter(T)] if ps else []
+        if ts:
+            ts[0].text = text
+            ts[0].set(f"{{{XML}}}space", "preserve")
+            for t in ts[1:]:
+                t.text = ""
+        elif ps:
+            r = ps[0].makeelement(R, {})
+            ppr = ps[0].find(PPR)
+            if ppr is not None and ppr.find(RPR) is not None:
+                r.append(copy.deepcopy(ppr.find(RPR)))
+            t = ps[0].makeelement(T, {f"{{{XML}}}space": "preserve"})
+            t.text = text
+            r.append(t)
+            ps[0].append(r)
+
+    def _add_service_rows(self, total_par, services):
+        p = self.pars[total_par]
+        tr = p.getparent()
+        while tr is not None and tr.tag != TR:
+            tr = tr.getparent()
+        if tr is None:
+            return 0
+        rows = [x for x in tr.getparent() if x.tag == TR]
+        k = rows.index(tr)
+        if k < 1:
+            return 0
+        src = rows[k - 1]                              # образец оформления — строка над итогом
+        cells_of = lambda row: [c for c in row if c.tag == TC]
+        num = lambda row: re.match(r"\s*(\d+)", "".join(t.text or "" for t in cells_of(row)[0].iter(T)))
+        base = num(src)
+        n0 = int(base.group(1)) if base else k - 1
+        dot = "." if base and "." in "".join(t.text or "" for t in cells_of(src)[0].iter(T)) else ""
+        for j, (name, value) in enumerate(services, 1):
+            new = copy.deepcopy(src)
+            cs = cells_of(new)
+            if len(cs) < 3:
+                return 0
+            self._cell_set(cs[0], f"{n0 + j}{dot}")
+            self._cell_set(cs[1], name)
+            self._cell_set(cs[-1], value)
+            tr.addprevious(new)
+        if num(tr):
+            self._cell_set(cells_of(tr)[0], f"{n0 + len(services) + 1}{dot}")
+        return len(services)
+
+    def _align_signatures(self):
+        """Линии для подписей сторон стоят на одной высоте: они переносятся в отдельную строку таблицы."""
+        made = 0
+        txt_of = lambda x: "".join(t.text or "" for t in x.iter(T)).strip()
+        for tbl in list(self.doc.element.body.iter(TBL)):
+            for tr in [x for x in tbl if x.tag == TR]:
+                cells = [c for c in tr if c.tag == TC]
+                if len(cells) != 2:
+                    continue
+                tails = []
+                for c in cells:
+                    ps = [x for x in c if x.tag == P]
+                    txt = [txt_of(x) for x in ps]
+                    last = max((n for n, t_ in enumerate(txt) if t_), default=-1)
+                    if last < 2 or not re.fullmatch(r"_{6,}", txt[last]):
+                        tails = []
+                        break
+                    named = bool(RE_INITIALS.search(txt[last - 1])) and len(txt[last - 1]) <= 60
+                    tails.append([c, ps, txt, last, named])
+                if len(tails) != 2:
+                    continue
+                both = all(t_[4] for t_ in tails)
+                new = copy.deepcopy(tr)
+                for el in list(new):
+                    if el.tag == TC:
+                        for x in [x for x in el if x.tag in (P, TBL)]:
+                            el.remove(x)
+                    elif el.tag == f"{{{W}}}trPr":
+                        for h in el.findall(f"{{{W}}}trHeight"):
+                            el.remove(h)
+                plan = []
+                for c, ps, txt, last, _named in tails:
+                    start = last - 1 if both else last      # «Директор Иванов И. И.» остаётся над своей линией
+                    gap = 0
+                    while start - gap - 1 >= 1 and not txt[start - gap - 1]:
+                        gap += 1
+                    plan.append((c, ps, start, gap, last))
+                keep = min(2, min(g for _c, _ps, _s, g, _l in plan))   # пустые строки над подписью — поровну у обеих сторон
+                for (c, ps, start, gap, last), nc in zip(plan, [c for c in new if c.tag == TC]):
+                    for x in ps[start - gap:start - keep] + ps[last + 1:]:
+                        c.remove(x)
+                    for x in ps[start - keep:last + 1]:
+                        c.remove(x)
+                        nc.append(x)
+                for c in [c for c in tr if c.tag == TC]:
+                    self._tc_prop(c, "tcBorders", edge=("bottom", "nil"))      # без черты между текстом и подписью
+                for c in [c for c in new if c.tag == TC]:
+                    self._tc_prop(c, "tcBorders", edge=("top", "nil"))
+                    self._tc_prop(c, "vAlign", val="bottom")                   # линии — на одной высоте, по низу строки
+                tr.addnext(new)
+                made += 1
+        return made
+
+    _TCPR_ORDER = ("tcW", "gridSpan", "hMerge", "vMerge", "tcBorders", "shd", "noWrap", "tcMar", "textDirection",
+                   "tcFitText", "vAlign", "hideMark")
+    _BORDER_ORDER = ("top", "start", "left", "bottom", "end", "right", "insideH", "insideV", "tl2br", "tr2bl")
+
+    @classmethod
+    def _child(cls, parent, name, order):
+        q = lambda n: f"{{{W}}}{n}"
+        el = parent.find(q(name))
+        if el is None:
+            el = parent.makeelement(q(name), {})
+            later = [parent.find(q(n)) for n in order[order.index(name) + 1:]]
+            nxt = next((x for x in later if x is not None), None)
+            if nxt is not None:
+                nxt.addprevious(el)
+            else:
+                parent.append(el)
+        return el
+
+    @classmethod
+    def _tc_prop(cls, tc, name, val=None, edge=None):
+        q = lambda n: f"{{{W}}}{n}"
+        pr = tc.find(q("tcPr"))
+        if pr is None:
+            pr = tc.makeelement(q("tcPr"), {})
+            tc.insert(0, pr)
+        el = cls._child(pr, name, cls._TCPR_ORDER)
+        if val is not None:
+            el.set(q("val"), val)
+        if edge is not None:
+            e = cls._child(el, edge[0], cls._BORDER_ORDER)
+            for k in list(e.attrib):
+                del e.attrib[k]
+            e.set(q("val"), edge[1])
 
     def apply(self, values=None, replaces=None, edits=None):
         """values: {номер поля: текст}; replaces: [(что, на что)]; edits: {номер абзаца: новый текст}."""
@@ -654,7 +856,7 @@ class WordDoc:
                 self._replace_span(i, start, end, new)
                 done += 1
         for i, new in edits.items():
-            self._set_text(i, new)
+            self._set_text(i, self._date_line(self.text(i), new))
             done += 1
         for old, new in replaces:
             if not old or new is None or old == new or not str(new).strip():
@@ -669,8 +871,9 @@ class WordDoc:
                     done += 1
         return done
 
-    def save(self, out_path, values=None, replaces=None, edits=None, keep_highlight=False):
+    def save(self, out_path, values=None, replaces=None, edits=None, keep_highlight=False, services=None, total_par=None):
         n = self.apply(values, replaces, edits)
+        self.finish(services, total_par)
         if not keep_highlight:
             self.strip_highlights()
         self.doc.save(out_path)
@@ -705,7 +908,7 @@ def selftest():
 # ----------------------------------------------------------------------------- данные клиента
 KEYS = (("fio", "ФИО клиента"), ("fio_short", "Фамилия И. О."), ("passport", "Паспорт: серия и номер"),
         ("passport_issued", "Паспорт: кем и когда выдан"), ("address", "Адрес регистрации"),
-        ("birth", "Дата рождения"), ("phone", "Телефон"), ("email", "E-mail"), ("city", "Город"),
+        ("birth", "Дата рождения"), ("phone", "Телефон"), ("phone2", "Второй телефон"), ("email", "E-mail"), ("city", "Город"),
         ("contract_no", "Номер договора"), ("contract_date", "Дата договора"),
         ("car", "Марка и модель"), ("year", "Год выпуска"), ("mileage", "Пробег, тыс. км"),
         ("engine_volume", "Объём двигателя"), ("engine_type", "Тип двигателя"), ("gearbox", "Тип КПП"),
@@ -717,7 +920,7 @@ KEYS = (("fio", "ФИО клиента"), ("fio_short", "Фамилия И. О."
         ("doc_no", "Номер этого документа"))
 KEY_TITLES = dict(KEYS)
 KEY_TITLES["engine_combo"] = "Объём / тип двигателя"
-CARD_GROUPS = (("Клиент", ("fio", "passport", "passport_issued", "address", "birth", "phone", "email", "city")),
+CARD_GROUPS = (("Клиент", ("fio", "passport", "passport_issued", "address", "birth", "phone", "phone2", "email", "city")),
                ("Договор", ("contract_no", "contract_date")),
                ("Автомобиль", ("car", "year", "mileage", "engine_volume", "engine_type", "gearbox", "body", "color",
                                "interior", "vin", "weight")),
