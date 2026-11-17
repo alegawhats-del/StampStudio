@@ -594,7 +594,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.20.5"
+APP_VERSION = "6.20.6"
 EDITION = "canon"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -3609,12 +3609,18 @@ class PageOrganizer(QDialog):
         tools.addSpacing(12)
         tool("Выше", "up", lambda: self.shift(-1), "Сдвинуть выбранные выше")
         tool("Ниже", "down", lambda: self.shift(1), "Сдвинуть выбранные ниже")
+        tool("На место №…", "pages", lambda: self.move_to_number(),
+             "Поставить выбранные страницы сразу на нужное место — номер вводится цифрой.\n"
+             "То же по правой кнопке мыши на странице.")
         tool("Удалить", "trash", self.remove, "Удалить выбранные страницы")
         tools.addStretch()
         lay.addLayout(tools)
 
-        hint = QLabel("Перетаскивайте страницы мышкой. Выделите несколько "
-                      "(Ctrl или Shift) — они переедут вместе.")
+        self.list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.list.customContextMenuRequested.connect(self._menu)
+        hint = QLabel("Перетаскивайте страницы мышкой. Выделите несколько (Ctrl или Shift) — они переедут вместе. "
+                      "Правая кнопка по странице — поставить её на место по номеру.")
+        hint.setWordWrap(True)
         hint.setObjectName("hint")
         lay.addWidget(hint)
 
@@ -3649,6 +3655,55 @@ class PageOrganizer(QDialog):
                         return True
                 self._drag_from = -1
         return super().eventFilter(obj, event)
+
+    def _menu(self, pos):
+        row = self.list.indexAt(pos).row()
+        if row < 0:
+            return
+        if row not in self._selected_rows():
+            self.list.clearSelection()
+            self.list.item(row).setSelected(True)
+            self.list.setCurrentRow(row)
+        rows = self._selected_rows()
+        m = QMenu(self)
+        what = f"стр. {rows[0] + 1}" if len(rows) == 1 else f"страниц: {len(rows)}"
+        m.addAction(f"Переместить на место №…  ({what})", lambda: self.move_to_number()).setEnabled(len(self.items) > 1)
+        m.addAction("В начало", lambda: self.move_to_number(1)).setEnabled(rows[0] > 0)
+        m.addAction("В конец", lambda: self.move_to_number(len(self.items))).setEnabled(rows[-1] < len(self.items) - 1)
+        m.addSeparator()
+        m.addAction("Выше", lambda: self.shift(-1)).setEnabled(rows[0] > 0)
+        m.addAction("Ниже", lambda: self.shift(1)).setEnabled(rows[-1] < len(self.items) - 1)
+        m.addSeparator()
+        m.addAction("Удалить", self.remove)
+        self._menu_show(m, self.list.viewport().mapToGlobal(pos))
+
+    @staticmethod
+    def _menu_show(menu, pos):
+        menu.exec(pos)
+
+    def move_to_number(self, target=None):
+        """Поставить выбранные страницы на место с этим номером (первая из них получит этот номер)."""
+        rows = self._selected_rows()
+        n = len(self.items)
+        if not rows or n < 2:
+            if not rows:
+                QMessageBox.information(self, "Ничего не выбрано", "Выделите страницу, которую нужно переставить.")
+            return
+        if target is None:
+            what = f"Страница {rows[0] + 1}" if len(rows) == 1 else f"Выбрано страниц: {len(rows)}"
+            target, ok = QInputDialog.getInt(self, "Переместить страницу",
+                                             f"{what}. На какое место поставить?  (1–{n})", rows[0] + 1, 1, n)
+            if not ok:
+                return
+        target = max(1, min(n, int(target)))
+        moving = [self.items[r] for r in rows]
+        rest = [it for i, it in enumerate(self.items) if i not in rows]
+        pos = max(0, min(len(rest), target - 1))
+        new = rest[:pos] + moving + rest[pos:]
+        if new == self.items:
+            return
+        self.items = new
+        self.reload(keep=list(range(pos, pos + len(moving))))
 
     def move_selection_to(self, grabbed_row, target_row):
         rows = self._selected_rows()
