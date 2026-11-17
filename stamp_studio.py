@@ -593,7 +593,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.18.2"
+APP_VERSION = "6.18.3"
 EDITION = "main"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -9652,6 +9652,9 @@ class WordFillPage(QDialog):
             groups.setdefault((h["text"], h.get("fixed", False)), []).append((h, (a, b)))
         rows = []
         memo = (settings_load().get("tpl_fixed") or {}).get(self._tpl_id(), {})
+        body = self.view.toPlainText()
+        lat, cyr = len(re.findall(r"[A-Za-zÄÖÜäöüß]", body)), len(re.findall(r"[А-Яа-яЁё]", body))
+        german = lat > 200 and lat > 4 * cyr
         for (text, fixed), items in groups.items():
             hs = [h for h, _s in items]
             labels = sorted((h["label"] for h in hs if h["label"]), key=len)
@@ -9675,12 +9678,27 @@ class WordFillPage(QDialog):
                 kind = "date"
             elif re.fullmatch(r"\d{1,3}(?:[ \u00a0]\d{3})+|\d{4,9}", text) and not re.search(r"vin|инн|кпп|бик|сч\.|паспорт|№\s*$", (low + " " + " ".join(labels)).lower()):
                 kind = "num"
-            title = SW.KEY_TITLES.get(key) if key and key != "doc_no" else None
+            de_kind = None
+            if german:                                   # документ на немецком: что вписано по-русски — переводится
+                lab = ((labels[0] if labels else "") + " " + low).lower()
+                de_kind = "text"
+                for pat, k_, dk in ((r"\bname\b", "fio", "name"), (r"nric|pass|ausweis", "passport", "text"),
+                                    (r"adresse|anschrift", "address", "addr"), (r"marke|modell", "car", "text"),
+                                    (r"\bvin\b|fahrgestell", "vin", "text"), (r"farbe", "color", "color"),
+                                    (r"kraftstoff", "engine_type", "fuel"), (r"getriebe", "gearbox", "gear")):
+                    if re.search(pat, lab):
+                        key, de_kind = k_, dk
+                        break
+            title = SW.KEY_TITLES.get(key) if key and key != "doc_no" and not german else None
             title = title or (labels[0] if labels else "") or "Поле"
             title = title[:1].upper() + title[1:]
             row = self._new_row(f"{title}: «{text[:40]}»" + (f" ×{len(items)}" if len(items) > 1 else ""),
                                 key, "hl", [s_ for _h, s_ in items])
             row["hl"], row["sample"] = kind, text
+            if de_kind:
+                row["de"], row["before"] = de_kind, low
+                if not kind:
+                    row["hint"] = "можно по-русски — переведётся на немецкий"
             if fixed:                                    # постоянный реквизит: вписали один раз — дальше подставляется сам
                 row["fixed"] = True
                 row["key"] = ""
@@ -9698,6 +9716,39 @@ class WordFillPage(QDialog):
                     w_["hl"], w_["words_of"] = "words", r
                     w_["label"] = "Сумма прописью (считается сама)"
         return rows
+
+    DE_WORDS = {"автомат": "Automatik", "автоматическая": "Automatik", "акпп": "Automatik", "механика": "Schaltgetriebe",
+                "механическая": "Schaltgetriebe", "мкпп": "Schaltgetriebe", "робот": "Doppelkupplungsgetriebe",
+                "вариатор": "CVT", "бензин": "Benzin", "бензиновый": "Benzin", "дизель": "Diesel", "дизельный": "Diesel",
+                "гибрид": "Hybrid", "электро": "Elektro", "электрический": "Elektro", "газ": "Gas (LPG)"}
+
+    def _de_text(self, row, value):
+        """Значение для немецкого документа: русский текст — в немецкий (словарь, адрес, транслитерация)."""
+        value = str(value or "").strip()
+        if not SW.has_cyrillic(value):
+            return value
+        k = row.get("de")
+        if k == "name":
+            return SW.translit_name(value)
+        if k == "addr":
+            res = SW.address_de(value)
+            m = re.match(r"^(Russland|Belarus|Kasachstan), ", res)
+            if m and m.group(1).lower() + "," in row.get("before", ""):
+                res = res[m.end():]                          # страна уже напечатана в бланке перед полем
+            return res
+        if k in ("color", "fuel", "gear"):
+            v = ACT.translate(k, value, "de") or self.DE_WORDS.get(value.lower())
+            if v:
+                return v
+        return self.DE_WORDS.get(value.lower()) or SW.translit_de(value)
+
+    def _de_done(self, row, edit):
+        text = edit.text()
+        if SW.has_cyrillic(text):
+            new = self._de_text(row, text)
+            edit.setText(new)
+            edit.setCursorPosition(0)
+            self._typed(row, new)
 
     # ---- карточка клиента и номер документа
     def _counter(self):
@@ -9741,6 +9792,8 @@ class WordFillPage(QDialog):
                 if not val and self._num_mode() == "auto":
                     cnt = self._counter()
                     val = SW.next_number(cnt.get("last", ""), AI.today().year, cnt.get("reset", True))
+            if val and r.get("de"):
+                val = self._de_text(r, val)
             if val and (not r["edit"].text().strip() or r["auto"] or (not only_empty)):
                 r["edit"].setText(val)
                 r["auto"] = True
@@ -9889,6 +9942,8 @@ class WordFillPage(QDialog):
                                                       tips.get(row["kind"], SW.KEY_TITLES.get(row["key"], ""))))
             if row["current"]:
                 ed.setText(row["current"])
+            if row.get("de"):
+                ed.editingFinished.connect(lambda r=row, e=ed: self._de_done(r, e))
             unit = {"mileage": ("км", True), "weight": ("кг", False)}.get(row["key"])
             if is_date:
                 ed.textEdited.connect(lambda t, r=row, e=ed: self._typed(r, self._date_typed(e, t)))
@@ -9968,7 +10023,8 @@ class WordFillPage(QDialog):
         """Список готовых значений под полем (цвет, кузов, КПП, топливо); своё можно вписать руками."""
         m = QMenu(edit)
         for v in ACT.variants(kind, 1):
-            m.addAction(v, lambda val=v: (edit.setText(val), self._typed(row, val)))
+            m.addAction(v, lambda val=v: (edit.setText(val), self._typed(row, val),
+                                          self._de_done(row, edit) if row.get("de") else None))
         m.addSeparator()
         m.addAction("Своё значение — вписать в поле", lambda: (edit.setFocus(), edit.selectAll()))
         m.setMinimumWidth(edit.width())
@@ -10156,8 +10212,8 @@ class WordFillPage(QDialog):
     def client_values(self):
         out = {}
         for r in self.rows:
-            if r["key"] and r["edit"] is not None and r["edit"].text().strip() and r["key"] not in out:
-                out[r["key"]] = r["edit"].text().strip()
+            if r["key"] and r["edit"] is not None and r["edit"].text().strip() and r["key"] not in out and not r.get("de"):
+                out[r["key"]] = r["edit"].text().strip()     # переведённое на немецкий в карточку клиента не идёт
         issued = join_issued(out.pop("passport_date", ""), out.pop("passport_by", ""))
         if issued and not out.get("passport_issued"):
             out["passport_issued"] = issued               # в карточке клиента — одной строкой

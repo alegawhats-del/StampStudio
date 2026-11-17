@@ -48,6 +48,148 @@ def money_words(whole, sample=""):
     return out + _plural(int(whole), ("рубль", "рубля", "рублей")) + m.group(2)
 
 
+# ----------------------------------------------------------------------------- русский → латиница / немецкий
+_ICAO = dict(zip("абвгдеёжзийклмнопрстуфхцчшщъыьэюя",
+                 ("a", "b", "v", "g", "d", "e", "e", "zh", "z", "i", "i", "k", "l", "m", "n", "o", "p", "r", "s", "t", "u",
+                  "f", "kh", "ts", "ch", "sh", "shch", "ie", "y", "", "e", "iu", "ia")))
+_DE = dict(zip("абвгдеёжзийклмнопрстуфхцчшщъыьэюя",
+               ("a", "b", "w", "g", "d", "e", "jo", "sch", "s", "i", "i", "k", "l", "m", "n", "o", "p", "r", "s", "t", "u",
+                "f", "ch", "z", "tsch", "sch", "schtsch", "", "y", "", "e", "ju", "ja")))
+
+
+def has_cyrillic(text):
+    return bool(re.search(r"[А-Яа-яЁё]", str(text or "")))
+
+
+def _translit(text, table, de=False):
+    out = []
+    s = str(text or "")
+    for i, ch in enumerate(s):
+        low = ch.lower()
+        if low not in table:
+            out.append(ch)
+            continue
+        t = table[low]
+        if de:
+            prev = s[i - 1].lower() if i else ""
+            nxt = s[i + 1].lower() if i + 1 < len(s) else ""
+            if low == "е" and (not prev.isalpha() or prev in "аеёиоуыэюяъь"):
+                t = "je"
+            elif low == "с" and prev in "аеёиоуыэюя" and nxt in "аеёиоуыэюя" and prev and nxt:
+                t = "ss"
+            elif low == "й" and prev in "иы":
+                t = ""                                       # -ий, -ый → -i, -y
+        if ch.isupper():
+            t = t[:1].upper() + t[1:] if not (i + 1 < len(s) and s[i + 1].isupper()) else t.upper()
+        out.append(t)
+    return "".join(out)
+
+
+def translit_name(text):
+    """ФИО латиницей, как в загранпаспорте: «Воробьев Владимир Николаевич» → «Vorobev Vladimir Nikolaevich»."""
+    return _translit(text, _ICAO)
+
+
+def translit_de(text):
+    """Русское слово в немецкой записи: «Чайковский» → «Tschaikowski», «Воронеж» → «Woronesch»."""
+    return _translit(text, _DE, de=True)
+
+
+_ADDR_WORDS = (
+    (r"(?:область|обл\.?)", "Region"), (r"(?:район|р-н)", "Bezirk"), (r"(?:республика|респ\.?)", "Republik"),
+    (r"(?:край)", "Region"), (r"(?:город|г\.?)", "Stadt"), (r"(?:посёлок|поселок|пгт\.?|пос\.?|п\.)", "Siedlung"),
+    (r"(?:село|деревня|дер\.?|с\.)", "Dorf"), (r"(?:улица|ул\.?)", "Straße"), (r"(?:проспект|просп\.?|пр-т)", "Prospekt"),
+    (r"(?:переулок|пер\.?)", "Gasse"), (r"(?:проезд|пр-д)", "Durchfahrt"), (r"(?:шоссе|ш\.)", "Chaussee"),
+    (r"(?:бульвар|б-р)", "Boulevard"), (r"(?:площадь|пл\.?)", "Platz"), (r"(?:микрорайон|мкр\.?)", "Mikrobezirk"),
+    (r"(?:дом|д\.)", "Haus"), (r"(?:корпус|корп\.?|к\.)", "Gebäude"), (r"(?:строение|стр\.?)", "Bau"),
+    (r"(?:квартира|кв\.?)", "Wohnung"), (r"(?:комната|ком\.?)", "Zimmer"))
+_COUNTRIES = {"россия": "Russland", "рф": "Russland", "российская федерация": "Russland", "беларусь": "Belarus",
+              "республика беларусь": "Belarus", "казахстан": "Kasachstan", "германия": "Deutschland"}
+
+
+_REGIONS = {k + "ая": v for k, v in (
+    ("московск", "Moskau"), ("ленинградск", "Leningrad"), ("воронежск", "Woronesch"), ("смоленск", "Smolensk"),
+    ("брянск", "Brjansk"), ("курск", "Kursk"), ("белгородск", "Belgorod"), ("орловск", "Orjol"), ("тульск", "Tula"),
+    ("калужск", "Kaluga"), ("тверск", "Twer"), ("псковск", "Pskow"), ("новгородск", "Nowgorod"), ("рязанск", "Rjasan"),
+    ("владимирск", "Wladimir"), ("ивановск", "Iwanowo"), ("ярославск", "Jaroslawl"), ("костромск", "Kostroma"),
+    ("липецк", "Lipezk"), ("тамбовск", "Tambow"), ("ростовск", "Rostow"), ("волгоградск", "Wolgograd"),
+    ("саратовск", "Saratow"), ("самарск", "Samara"), ("пензенск", "Pensa"), ("ульяновск", "Uljanowsk"),
+    ("нижегородск", "Nischni Nowgorod"), ("кировск", "Kirow"), ("оренбургск", "Orenburg"), ("челябинск", "Tscheljabinsk"),
+    ("свердловск", "Swerdlowsk"), ("тюменск", "Tjumen"), ("омск", "Omsk"), ("новосибирск", "Nowosibirsk"),
+    ("томск", "Tomsk"), ("кемеровск", "Kemerowo"), ("иркутск", "Irkutsk"), ("астраханск", "Astrachan"),
+    ("калининградск", "Kaliningrad"), ("мурманск", "Murmansk"), ("архангельск", "Archangelsk"), ("вологодск", "Wologda"),
+    ("курганск", "Kurgan"), ("амурск", "Amur"), ("сахалинск", "Sachalin"), ("минск", "Minsk"), ("брестск", "Brest"),
+    ("гродненск", "Grodno"), ("гомельск", "Gomel"), ("витебск", "Witebsk"), ("могилёвск", "Mogiljow"), ("могилевск", "Mogiljow"))}
+_REGIONS.update({"краснодарский": "Krasnodar", "ставропольский": "Stawropol", "красноярский": "Krasnojarsk", "пермский": "Perm",
+                 "алтайский": "Altai", "приморский": "Primorje", "хабаровский": "Chabarowsk"})
+_CITIES = {"москва": "Moskau", "санкт-петербург": "Sankt Petersburg", "минск": "Minsk", "нижний новгород": "Nischni Nowgorod",
+           "ростов-на-дону": "Rostow am Don"}
+
+
+def _nominative(word):
+    """«Чайковского» → «Чайковский» (если есть словарь); иначе как было."""
+    try:
+        import stamp_decline as D
+        m = D._analyzer()
+        if m is None:
+            return word
+        ps = m.parse(word)[:6]
+        for p_ in ps:                                        # «Гагарина», «Чайковского» — улица имени человека
+            if "Surn" in p_.tag and "masc" in p_.tag and "gent" in p_.tag and "sing" in p_.tag:
+                f = p_.inflect({"nomn"})
+                if f is not None:
+                    return f.word[:1].upper() + f.word[1:] if word[:1].isupper() else f.word
+        if any("nomn" in p_.tag for p_ in ps):
+            return word                                      # «Заводской», «Советская» — уже в начальной форме
+        for p_ in ps:
+            if "Surn" in p_.tag or p_.tag.POS == "ADJF":
+                f = p_.inflect({"nomn"}) if "plur" not in p_.tag else None
+                if f is not None:
+                    return f.word[:1].upper() + f.word[1:] if word[:1].isupper() else f.word
+        return word
+    except Exception:
+        return word
+
+
+def address_de(text):
+    """Российский адрес по-немецки: «обл. Воронежская, г. Бутурлиновка, ул. Чайковского, д. 11» →
+    «Region Woronesch, Stadt Buturlinowka, Tschaikowski-Straße, Haus 11». Набросок: проверьте глазами."""
+    parts = []
+    for part in [x.strip() for x in str(text or "").split(",") if x.strip()]:
+        low = part.lower()
+        if low in _COUNTRIES:
+            parts.append(_COUNTRIES[low])
+            continue
+        if re.fullmatch(r"\d{6}", part) or not has_cyrillic(part):
+            parts.append(part)
+            continue
+        kind, rest = "", part
+        for pat, de in _ADDR_WORDS:
+            m = re.match(rf"^{pat}\s*(?=[А-ЯЁа-яё\d«\"])(.+)$", part, re.I) or re.match(rf"^(.+?)\s+{pat}$", part, re.I)
+            if m and (m.group(1)[:1].isupper() or m.group(1)[:1].isdigit()):
+                kind, rest = de, m.group(1).strip()
+                if kind == "Haus" and not rest[:1].isdigit():
+                    kind = "Dorf"                            # «д. Ивановка» — деревня, «д. 11» — дом
+                break
+        if rest.lower() in _CITIES and kind in ("Stadt", ""):
+            parts.append(("Stadt " if kind else "") + _CITIES[rest.lower()])
+        elif kind in ("Haus", "Wohnung", "Gebäude", "Bau", "Zimmer"):
+            parts.append(f"{kind} {translit_de(rest)}")
+        elif kind in ("Straße", "Gasse", "Prospekt", "Platz", "Boulevard", "Chaussee", "Durchfahrt"):
+            num = re.match(r"^(.*?)[\s]+(\d[\w/-]*)$", rest)
+            if num:
+                rest = num.group(1)
+            words = [_nominative(w) for w in rest.split()]
+            parts.append("-".join(translit_de(w) for w in words) + "-" + kind + (" " + num.group(2) if num else ""))
+        elif kind in ("Region", "Republik"):
+            parts.append(f"{kind} {_REGIONS.get(rest.lower()) or translit_de(rest)}")
+        elif kind:
+            parts.append(f"{kind} {translit_de(rest)}")
+        else:
+            parts.append(translit_de(part))
+    return ", ".join(parts)
+
+
 MONTHS = ("января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября",
           "октября", "ноября", "декабря")
 
