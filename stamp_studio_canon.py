@@ -56,6 +56,7 @@ import stamp_license as LIC
 import stamp_tools as TOOLS
 import stamp_decline as DECL
 import stamp_customs as CUSTOMS
+import stamp_installment as INST
 from PySide6.QtWidgets import QSizeGrip, QLayout, QStyledItemDelegate, QBoxLayout
 from PySide6.QtGui import QFont, QFontMetrics
 from PySide6.QtCore import QByteArray, QBuffer, QIODevice
@@ -593,7 +594,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.19.0"
+APP_VERSION = "6.20.0"
 EDITION = "canon"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -1056,8 +1057,14 @@ class ColumnGrid(QListWidget):
         self.setUniformItemSizes(True)
         self.setWordWrap(True)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.model().rowsInserted.connect(lambda *_: QTimer.singleShot(0, self.fit_grid))
-        self.model().rowsRemoved.connect(lambda *_: QTimer.singleShot(0, self.fit_grid))
+        self.model().rowsInserted.connect(lambda *_: QTimer.singleShot(0, self._fit_later))
+        self.model().rowsRemoved.connect(lambda *_: QTimer.singleShot(0, self._fit_later))
+
+    def _fit_later(self):
+        try:
+            self.fit_grid()
+        except RuntimeError:
+            pass                                 # список уже закрыт вместе с окном
 
     def fit_grid(self):
         vp = self.viewport().width()
@@ -5488,7 +5495,8 @@ def scan_look_page(page, dpi=190, preset="normal", color=True, seed=0, back_page
         out = paper.rotate(ang, resample=Image.BICUBIC, translate=(dx, dy), fillcolor=tone)
     else:
         # видно стекло по краям: лист чуть меньше, с тенью
-        glass = (bed if bed is not None else synth_scanner_bg(W, H, mm)).copy()
+        bed = builtin_scanner_bg()
+        glass = (bed.resize((W, H), Image.LANCZOS) if bed is not None else synth_scanner_bg(W, H, mm)).copy()
         sw, sh = int(W * 0.985), int(H * 0.985)
         sheet = paper.resize((sw, sh), Image.LANCZOS).convert("RGBA")
         sheet = sheet.rotate(ang, resample=Image.BICUBIC, expand=True)
@@ -8856,7 +8864,7 @@ class WordView(QTextEdit):
         if not self._one_block() or self.textCursor().block().blockFormat().property(WORD_PAR) is None:
             self.blocked.emit("Выделите текст в пределах одного абзаца — и вставляйте")
             return
-        text = re.sub(r"[\r\n\t]+", " ", src.text() or "").strip(" ")
+        text = re.sub(r"[\r\n\t\u2028\u2029]+", " ", src.text() or "").strip()
         if text:
             self.textCursor().insertText(text)
 
@@ -8960,8 +8968,10 @@ class ClientCardDialog(QDialog):
         head = QLabel("Карточка клиента")
         head.setObjectName("aihead")
         lay.addWidget(head)
+        self.setAcceptDrops(True)
         sub = QLabel(f"Папка: {folder}\nДанные хранятся в самой папке клиента и подставляются во все его документы: "
-                     "договор, счёт, акт, CMR.")
+                     "договор, счёт, акт, CMR.\nСкан или фото паспорта можно перетащить прямо в это окно — "
+                     "программа прочитает его и предложит данные на проверку.")
         sub.setObjectName("hint")
         sub.setWordWrap(True)
         lay.addWidget(sub)
@@ -9045,9 +9055,22 @@ class ClientCardDialog(QDialog):
             if k in self.edits:
                 self.edits[k].setText(v)
 
-    def from_scans(self):
-        paths, _ = QFileDialog.getOpenFileNames(self, "Сканы: паспорт, техпаспорт, инвойс", self.folder,
-                                                "Сканы и PDF (*.pdf *.jpg *.jpeg *.png)")
+    SCAN_EXT = (".pdf", ".jpg", ".jpeg", ".png")
+
+    def dragEnterEvent(self, e):
+        if any(u.toLocalFile().lower().endswith(self.SCAN_EXT) for u in e.mimeData().urls()):
+            e.acceptProposedAction()
+
+    def dropEvent(self, e):
+        paths = [u.toLocalFile() for u in e.mimeData().urls() if u.toLocalFile().lower().endswith(self.SCAN_EXT)]
+        if paths:
+            e.acceptProposedAction()
+            QTimer.singleShot(0, lambda: self.from_scans(paths))
+
+    def from_scans(self, paths=None):
+        if not isinstance(paths, list):
+            paths, _ = QFileDialog.getOpenFileNames(self, "Сканы: паспорт, техпаспорт, инвойс", self.folder,
+                                                    "Сканы и PDF (*.pdf *.jpg *.jpeg *.png)")
         if not paths:
             return
         allow_ai = self.chk_ai.isChecked()
@@ -13402,6 +13425,548 @@ class ToolsPage(QDialog):
         self.panel.retheme()
 
 
+class InstallmentPage(QDialog):
+    """Расчёт рассрочки: аннуитетный или стандартный график, ставка от 0 %, льготный период.
+    По расчёту создаётся приложение к договору с таблицей платежей."""
+
+    def __init__(self, win):
+        super().__init__(win)
+        self.win = win
+        self.setWindowFlags(Qt.Widget)
+        self.setObjectName("aipage")
+        self.res = {"error": "нет данных"}
+        root = QVBoxLayout(self)
+        root.setContentsMargins(16, 10, 16, 10)
+        root.setSpacing(10)
+        head = QHBoxLayout()
+        head.setSpacing(10)
+        b_back = QPushButton(" К документу")
+        b_back.setIcon(draw_icon("back", win._icon_color()))
+        b_back.setIconSize(QSize(16, 16))
+        b_back.setCursor(Qt.PointingHandCursor)
+        b_back.setToolTip("Вернуться к странице документа (Esc). Введённое здесь останется.")
+        b_back.clicked.connect(lambda: win.ai_mode(False))
+        win._themed_buttons.append((b_back, "back", False))
+        head.addWidget(b_back)
+        ttl = QLabel("РАСЧЁТ РАССРОЧКИ")
+        ttl.setObjectName("paneltitle")
+        head.addWidget(ttl)
+        note = QLabel("график платежей и приложение к договору")
+        note.setObjectName("hint")
+        head.addWidget(note, 1)
+        b_duty = QPushButton(" Таможенные платежи")
+        b_duty.setIcon(draw_icon("duty", win._icon_color()))
+        b_duty.setIconSize(QSize(15, 15))
+        b_duty.setToolTip("Перейти к расчёту таможенных платежей")
+        b_duty.clicked.connect(win.open_calc_page)
+        win._themed_buttons.append((b_duty, "duty", False))
+        head.addWidget(b_duty)
+        root.addLayout(head)
+
+        body = QHBoxLayout()
+        body.setSpacing(14)
+        left = QVBoxLayout()
+        left.setSpacing(10)
+
+        def edit(ph, w=None):
+            e = QLineEdit()
+            e.setPlaceholderText(ph)
+            e.setMinimumHeight(30)
+            if w:
+                e.setFixedWidth(w)
+            e.textChanged.connect(self.recalc)
+            return e
+
+        box = QGroupBox("Суммы, российские рубли")
+        f = QFormLayout(box)
+        f.setSpacing(7)
+        self.ed_cost = edit("стоимость автомобиля")
+        self.ed_cost.textEdited.connect(lambda *_: self._auto_amount())
+        self.ed_customs = edit("необязательно — попадёт в приложение")
+        self.ed_first = edit("первый взнос")
+        self.ed_first.textEdited.connect(lambda *_: self._auto_amount())
+        self.ed_amount = edit("стоимость минус первый взнос")
+        self.ed_amount.textEdited.connect(lambda *_: setattr(self, "_amount_auto", False))
+        self._amount_auto = True
+        f.addRow("Стоимость ТС:", self.ed_cost)
+        f.addRow("Таможенная пошлина:", self.ed_customs)
+        f.addRow("Первый взнос:", self.ed_first)
+        f.addRow("Сумма в рассрочку:", self.ed_amount)
+        left.addWidget(box)
+
+        box = QGroupBox("Условия")
+        f = QFormLayout(box)
+        f.setSpacing(7)
+        row = QHBoxLayout()
+        self.ed_months = edit("мес.", 70)
+        row.addWidget(self.ed_months)
+        row.addWidget(QLabel("месяцев"))
+        row.addStretch(1)
+        f.addRow("Срок:", row)
+        row = QHBoxLayout()
+        self.ed_rate = edit("0", 70)
+        self.ed_rate.setText("0")
+        row.addWidget(self.ed_rate)
+        row.addWidget(QLabel("% годовых — можно 0"))
+        row.addStretch(1)
+        f.addRow("Ставка:", row)
+        self.cmb_kind = QComboBox()
+        self.cmb_kind.setMinimumHeight(30)
+        for k, t in INST.KINDS:
+            self.cmb_kind.addItem(t[:1].upper() + t[1:], k)
+        self.cmb_kind.setToolTip("Аннуитетная: каждый месяц один и тот же платёж.\n"
+                                 "Стандартная: долг гасится равными частями, проценты считаются на остаток — платёж уменьшается.")
+        self.cmb_kind.currentIndexChanged.connect(self.recalc)
+        f.addRow("График:", self.cmb_kind)
+        row = QHBoxLayout()
+        self.chk_grace = QCheckBox("первые")
+        self.chk_grace.setToolTip("Льготный период: первые месяцы — своя ставка (обычно 0 %), дальше — основная.\n"
+                                  "Пример: первые 12 месяцев 0 %, общий срок 24 месяца, дальше 5 %.")
+        self.chk_grace.toggled.connect(self.recalc)
+        row.addWidget(self.chk_grace)
+        self.ed_gm = edit("12", 54)
+        row.addWidget(self.ed_gm)
+        row.addWidget(QLabel("мес. под"))
+        self.ed_gr = edit("0", 54)
+        self.ed_gr.setText("0")
+        row.addWidget(self.ed_gr)
+        row.addWidget(QLabel("%"))
+        row.addStretch(1)
+        f.addRow("Льгота:", row)
+        left.addWidget(box)
+
+        box = QGroupBox("Договор — для приложения")
+        f = QFormLayout(box)
+        f.setSpacing(7)
+        self.ed_no = QLineEdit()
+        self.ed_no.setMinimumHeight(30)
+        self.ed_no.setPlaceholderText("БМ-628")
+        self.ed_date = QLineEdit()
+        self.ed_date.setMinimumHeight(30)
+        self.ed_date.setPlaceholderText("ДД.ММ.ГГГГ — набирайте цифры")
+        self.ed_date.textEdited.connect(lambda t: WordFillPage._date_typed(self.ed_date, t))
+        f.addRow("Номер договора:", self.ed_no)
+        f.addRow("Дата договора:", self.ed_date)
+        self.lbl_card = QLabel("")
+        self.lbl_card.setObjectName("hint")
+        self.lbl_card.setWordWrap(True)
+        f.addRow(self.lbl_card)
+        left.addWidget(box)
+        left.addStretch(1)
+        lw = QWidget()
+        lw.setLayout(left)
+        lw.setFixedWidth(400)
+        body.addWidget(lw)
+
+        right = QVBoxLayout()
+        right.setSpacing(8)
+        self.lbl_sum = QLabel("")
+        self.lbl_sum.setObjectName("plain")
+        self.lbl_sum.setWordWrap(True)
+        self.lbl_sum.setTextFormat(Qt.RichText)
+        right.addWidget(self.lbl_sum)
+        self.tbl = QTableWidget(0, 5)
+        self.tbl.setHorizontalHeaderLabels(["Месяц", "Остаток долга", "Погашение", "Проценты", "Платёж"])
+        self.tbl.verticalHeader().setVisible(False)
+        self.tbl.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.tbl.setSelectionBehavior(QTableWidget.SelectRows)
+        self.tbl.setAlternatingRowColors(True)
+        hh = self.tbl.horizontalHeader()
+        hh.setSectionResizeMode(QHeaderView.Stretch)
+        hh.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        right.addWidget(self.tbl, 1)
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        self.btn_copy = QPushButton(" Скопировать расчёт")
+        self.btn_copy.setIcon(draw_icon("copy", win._icon_color()))
+        self.btn_copy.setIconSize(QSize(15, 15))
+        self.btn_copy.setToolTip("Условия и таблица — в буфер обмена; в Excel встанут по столбцам")
+        self.btn_copy.clicked.connect(self.copy)
+        win._themed_buttons.append((self.btn_copy, "copy", False))
+        row.addWidget(self.btn_copy)
+        row.addStretch(1)
+        self.btn_doc = QPushButton(" Создать приложение Word…")
+        self.btn_doc.setObjectName("primary")
+        self.btn_doc.setMinimumHeight(36)
+        self.btn_doc.setToolTip("Приложение к договору с расчётом рассрочки и графиком платежей — в папку клиента")
+        self.btn_doc.clicked.connect(self.make_doc)
+        row.addWidget(self.btn_doc)
+        right.addLayout(row)
+        body.addLayout(right, 1)
+        root.addLayout(body, 1)
+        self.refresh()
+
+    # ---- данные
+    def refresh(self):
+        """Подставить из карточки клиента открытой папки то, что ещё не вписано."""
+        try:
+            card = SW.card_load(self.win.current_dir()) or {}
+        except Exception:
+            card = {}
+        took = []
+        for ed, key, name in ((self.ed_no, "contract_no", "номер договора"), (self.ed_date, "contract_date", "дата"),
+                              (self.ed_cost, "sum_car", "стоимость"), (self.ed_customs, "sum_customs", "пошлина")):
+            val = str(card.get(key) or "").strip()
+            if key.startswith("sum_") and SW.parse_number(val) is None:
+                val = ""
+            if val and not ed.text().strip():
+                ed.setText(val)
+                took.append(name)
+        who = SW.derive(card).get("fio_short") or card.get("fio") or ""
+        self.lbl_card.setText((f"Клиент: {who.rstrip('.')}. " if who else "") + ("Из карточки взято: " + ", ".join(took) if took else ""))
+        self._auto_amount()
+        self.recalc()
+
+    def _auto_amount(self):
+        if not self._amount_auto and self.ed_amount.text().strip():
+            return
+        c, f_ = INST._d(self.ed_cost.text()), INST._d(self.ed_first.text())
+        if c is not None and c > 0:
+            val = c - (f_ or 0)
+            self._amount_auto = True
+            self.ed_amount.blockSignals(True)
+            self.ed_amount.setText(INST.money(val).replace(",00", "") if val > 0 else "")
+            self.ed_amount.blockSignals(False)
+            self.recalc()
+
+    def recalc(self, *_):
+        if not hasattr(self, "btn_doc"):
+            return                                   # страница ещё строится
+        g = self.chk_grace.isChecked()
+        self.ed_gm.setEnabled(g)
+        self.ed_gr.setEnabled(g)
+        self.res = INST.calculate(self.ed_amount.text(), self.ed_months.text(), self.ed_rate.text() or "0",
+                                  self.cmb_kind.currentData(), self.ed_gm.text() if g else 0, (self.ed_gr.text() or "0") if g else 0)
+        ok = not self.res["error"]
+        self.btn_copy.setEnabled(ok)
+        self.btn_doc.setEnabled(ok)
+        if not ok:
+            self.tbl.setRowCount(0)
+            self.lbl_sum.setText(f"<span style='color:#9a8f7a'>Чтобы посчитать: {self.res['error']}.</span>")
+            return
+        r = self.res
+        self.lbl_sum.setText(
+            f"<b>Платёж в месяц: {INST.payment_phrase(r)}</b><br>"
+            f"Сумма в рассрочку {INST.money(r['amount'])} ₽ на {INST.months_text(r['months'])} под {INST.rate_phrase(r)}. "
+            f"Проценты за весь срок: {INST.money(r['interest_total'])} ₽. Всего к выплате: <b>{INST.money(r['total'])} ₽</b>")
+        rows = r["rows"]
+        self.tbl.setRowCount(len(rows) + 1)
+        right = Qt.AlignRight | Qt.AlignVCenter
+
+        def cell(i, j, text, bold=False, align=right):
+            it = QTableWidgetItem(text)
+            it.setTextAlignment(align)
+            if bold:
+                fnt = it.font()
+                fnt.setBold(True)
+                it.setFont(fnt)
+            self.tbl.setItem(i, j, it)
+        for i, x in enumerate(rows):
+            cell(i, 0, str(x["n"]), align=Qt.AlignCenter)
+            for j, key in enumerate(("debt", "principal", "interest", "payment"), 1):
+                cell(i, j, INST.money(x[key]))
+        n = len(rows)
+        cell(n, 0, "Итого", True, Qt.AlignCenter)
+        cell(n, 1, "")
+        cell(n, 2, INST.money(r["principal_total"]), True)
+        cell(n, 3, INST.money(r["interest_total"]), True)
+        cell(n, 4, INST.money(r["total"]), True)
+
+    def copy(self):
+        if self.res.get("error"):
+            return
+        QApplication.clipboard().setText(INST.summary(self.res))
+        self.win.show_toast("✔  Расчёт скопирован — в Excel встанет по столбцам", 2200)
+
+    def make_doc(self):
+        if self.res.get("error"):
+            return
+        no = self.ed_no.text().strip()
+        d = SW.parse_date(self.ed_date.text())
+        if self.ed_date.text().strip() and not d:
+            QMessageBox.information(self, "Рассрочка", "Дата договора нужна в виде ДД.ММ.ГГГГ.")
+            return
+        date = f"«{d[0]:02d}» {SW.MONTHS[d[1] - 1]} {d[2]}" if d else ""
+        folder = self.win.current_dir()
+        name = AI.clean_filename(f"Приложение № 2 к договору {no} — рассрочка" if no else "Приложение № 2 — рассрочка")
+        out, _ = QFileDialog.getSaveFileName(self, "Сохранить приложение", os.path.join(folder, name + ".docx"),
+                                             "Документ Word (*.docx)")
+        if not out:
+            return
+        if not out.lower().endswith(".docx"):
+            out += ".docx"
+        try:
+            import base64
+            import stamp_tpl_kit
+            tpl = base64.b64decode("".join(stamp_tpl_kit.INSTALLMENT))
+            INST.build_docx(tpl, {"contract_no": no, "contract_date": date, "cost": self.ed_cost.text(),
+                                  "customs": self.ed_customs.text(), "first": self.ed_first.text()}, self.res, out)
+        except PermissionError:
+            QMessageBox.warning(self, "Рассрочка", "Не удалось записать файл — он открыт в Word. Закройте его там и повторите.")
+            return
+        except Exception as e:
+            QMessageBox.critical(self, "Рассрочка", f"Не удалось создать приложение:\n{e}")
+            return
+        self.win.reload_files()
+        self.win.ai_mode(False)
+        self.win.open_word(out, quiet=True)
+        self.win.show_toast(f"✔  Создано: {os.path.basename(out)}. Поправить текст — кнопка «Редактор» под списком файлов", 5200)
+
+
+class ClientsScan(QThread):
+    done = Signal(str, list)
+
+    def __init__(self, root, parent=None):
+        super().__init__(parent)
+        self.root = root
+
+    def run(self):
+        self.done.emit(self.root, clients_scan(self.root))
+
+
+CLIENT_DOCS = (("Договор", r"договор"), ("ДКП", r"дкп|kaufvertrag|купли"), ("Счёт", r"сч[её]т"),
+               ("Акт", r"акт[ _]|акт$|инспекц|осмотр"), ("Доверенность", r"доверенн"), ("Рассрочка", r"рассрочк"))
+_CLIENT_ORDER = ("ДКП", "Рассрочка", "Счёт", "Доверенность", "Акт", "Договор")     # от частного к общему: «Приложение к договору — рассрочка»
+
+
+def clients_scan(root):
+    """Папки клиентов в общей папке: [{folder, name, fio, car, vin, contract, phone, docs: {вид: имя файла}, mtime, text}]."""
+    out = []
+    try:
+        names = sorted(os.listdir(root), key=str.lower)
+    except OSError:
+        return out
+    for name in names:
+        folder = os.path.join(root, name)
+        if name.startswith((".", "_", "~")) or not os.path.isdir(folder):
+            continue
+        try:
+            files = [f for f in os.listdir(folder) if not f.startswith(("~$", "."))]
+        except OSError:
+            continue
+        card = SW.card_load(folder, fallback=False)
+        docs, mtime = {}, 0.0
+        pats = dict(CLIENT_DOCS)
+        for f in sorted(files, key=str.lower):
+            low = os.path.splitext(f)[0].lower()
+            ext = os.path.splitext(f)[1].lower()
+            if ext not in (".docx", ".doc", ".pdf"):
+                continue
+            try:
+                mtime = max(mtime, os.path.getmtime(os.path.join(folder, f)))
+            except OSError:
+                pass
+            for kind in _CLIENT_ORDER:
+                if re.search(pats[kind], low) or (kind == "Акт" and act_doc_name(f)):
+                    docs.setdefault(kind, f)
+                    break
+        if not mtime:
+            try:
+                mtime = os.path.getmtime(folder)
+            except OSError:
+                pass
+        row = {"folder": folder, "name": name, "fio": card.get("fio", ""), "car": card.get("car", ""),
+               "vin": card.get("vin", ""), "contract": card.get("contract_no", ""), "phone": card.get("phone", ""),
+               "docs": docs, "mtime": mtime, "files": len(files)}
+        row["text"] = " ".join([name] + [str(v) for v in card.values()] + list(docs.values())).lower().replace("ё", "е")
+        out.append(row)
+    return out
+
+
+class ClientsPage(QDialog):
+    """Все клиенты одним списком: кто есть, какие документы по нему уже сделаны и каких не хватает."""
+
+    def __init__(self, win):
+        super().__init__(win)
+        self.win = win
+        self.setWindowFlags(Qt.Widget)
+        self.setObjectName("aipage")
+        self.rows, self.root, self._thread = [], "", None
+        root = QVBoxLayout(self)
+        root.setContentsMargins(16, 10, 16, 10)
+        root.setSpacing(10)
+        head = QHBoxLayout()
+        head.setSpacing(10)
+        b_back = QPushButton(" К документу")
+        b_back.setIcon(draw_icon("back", win._icon_color()))
+        b_back.setIconSize(QSize(16, 16))
+        b_back.setCursor(Qt.PointingHandCursor)
+        b_back.clicked.connect(lambda: win.ai_mode(False))
+        win._themed_buttons.append((b_back, "back", False))
+        head.addWidget(b_back)
+        ttl = QLabel("КЛИЕНТЫ")
+        ttl.setObjectName("paneltitle")
+        head.addWidget(ttl)
+        self.lbl_root = ElideLabel("")
+        self.lbl_root.setObjectName("hint")
+        self.lbl_root.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        head.addWidget(self.lbl_root, 1)
+        b_root = QPushButton(" Папка с клиентами…")
+        b_root.setIcon(draw_icon("folder", win._icon_color()))
+        b_root.setIconSize(QSize(15, 15))
+        b_root.setToolTip("Общая папка, в которой у каждого клиента своя папка")
+        b_root.clicked.connect(self.pick_root)
+        win._themed_buttons.append((b_root, "folder", False))
+        head.addWidget(b_root)
+        b_ref = QPushButton(" Обновить")
+        b_ref.setIcon(draw_icon("refresh", win._icon_color()))
+        b_ref.setIconSize(QSize(15, 15))
+        b_ref.clicked.connect(lambda: self.reload())
+        win._themed_buttons.append((b_ref, "refresh", False))
+        head.addWidget(b_ref)
+        root.addLayout(head)
+        bar = QHBoxLayout()
+        bar.setSpacing(8)
+        self.ed_find = QLineEdit()
+        self.ed_find.setMinimumHeight(32)
+        self.ed_find.setClearButtonEnabled(True)
+        self.ed_find.setPlaceholderText("Поиск: фамилия, номер договора, VIN, автомобиль, телефон")
+        self.ed_find.textChanged.connect(self.apply_filter)
+        bar.addWidget(self.ed_find, 1)
+        self.cmb_miss = QComboBox()
+        self.cmb_miss.setMinimumHeight(32)
+        self.cmb_miss.addItem("Все клиенты", "")
+        for kind, _p in CLIENT_DOCS:
+            self.cmb_miss.addItem(f"Нет документа: {kind}", kind)
+        self.cmb_miss.addItem("Нет карточки клиента", "card")
+        self.cmb_miss.currentIndexChanged.connect(self.apply_filter)
+        bar.addWidget(self.cmb_miss)
+        root.addLayout(bar)
+        cols = ["Папка клиента", "ФИО", "Автомобиль", "Договор №"] + [{"Доверенность": "Довер."}.get(k, k) for k, _p in CLIENT_DOCS] + ["Изменён"]
+        self.tbl = QTableWidget(0, len(cols))
+        self.tbl.setHorizontalHeaderLabels(cols)
+        self.tbl.verticalHeader().setVisible(False)
+        self.tbl.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.tbl.setSelectionBehavior(QTableWidget.SelectRows)
+        self.tbl.setSelectionMode(QTableWidget.SingleSelection)
+        self.tbl.setAlternatingRowColors(True)
+        self.tbl.setSortingEnabled(True)
+        hh = self.tbl.horizontalHeader()
+        hh.setStretchLastSection(False)
+        hh.setMinimumSectionSize(40)
+        for c in range(len(cols)):
+            if c < 3:
+                hh.setSectionResizeMode(c, QHeaderView.Stretch)
+            else:
+                hh.setSectionResizeMode(c, QHeaderView.Fixed)
+                self.tbl.setColumnWidth(c, 92 if c == 3 else 90 if c == len(cols) - 1 else
+                                        {"Договор": 68, "ДКП": 48, "Счёт": 52, "Акт": 46, "Довер.": 62, "Рассрочка": 84}.get(cols[c], 70))
+                self.tbl.horizontalHeaderItem(c).setToolTip({"Довер.": "Доверенность"}.get(cols[c], cols[c]))
+        self.tbl.sortByColumn(0, Qt.AscendingOrder)
+        self.tbl.itemDoubleClicked.connect(lambda *_: self.open_selected())
+        self.tbl.setToolTip("Двойной щелчок — открыть папку клиента")
+        root.addWidget(self.tbl, 1)
+        foot = QHBoxLayout()
+        self.lbl_info = QLabel("")
+        self.lbl_info.setObjectName("hint")
+        foot.addWidget(self.lbl_info, 1)
+        self.b_open = QPushButton("Открыть папку клиента")
+        self.b_open.setObjectName("primary")
+        self.b_open.setMinimumHeight(36)
+        self.b_open.clicked.connect(self.open_selected)
+        foot.addWidget(self.b_open)
+        root.addLayout(foot)
+
+    # ---- данные
+    def default_root(self):
+        st = settings_load()
+        r = st.get("clients_root") or ""
+        if r and os.path.isdir(r):
+            return r
+        cur = self.win.current_dir()
+        parent = os.path.dirname(cur.rstrip(os.sep))
+        return parent if parent and os.path.isdir(parent) and parent != cur else cur
+
+    def pick_root(self):
+        d = QFileDialog.getExistingDirectory(self, "Папка, в которой лежат папки клиентов", self.root or self.win.current_dir())
+        if not d:
+            return
+        st = settings_load()
+        st["clients_root"] = os.path.abspath(d)
+        settings_save(st)
+        self.reload()
+
+    def refresh(self):
+        self.reload()
+
+    def reload(self, wait=False):
+        self.root = self.default_root()
+        self.lbl_root.setText(self.root)
+        self.lbl_root.setToolTip(self.root)
+        self.lbl_info.setText("Читаю папки…")
+        if wait:
+            self._loaded(self.root, clients_scan(self.root))
+            return
+        t = ClientsScan(self.root, self)
+        t.done.connect(self._loaded)
+        self._thread = t
+        t.start()
+
+    def _loaded(self, root, rows):
+        if root != self.root:
+            return
+        self.rows = rows
+        self.tbl.setSortingEnabled(False)
+        self.tbl.setRowCount(len(rows))
+        ok_col, no_col = QColor("#1b7a3d"), QColor("#b4ab9a")
+        for i, r in enumerate(rows):
+            vals = [r["name"], r["fio"], r["car"], r["contract"]]
+            for j, v in enumerate(vals):
+                it = QTableWidgetItem(v)
+                it.setData(Qt.UserRole, i)
+                if j == 0:
+                    it.setToolTip(r["folder"])
+                self.tbl.setItem(i, j, it)
+            for k, (kind, _p) in enumerate(CLIENT_DOCS):
+                has = kind in r["docs"]
+                it = QTableWidgetItem("✔" if has else "—")
+                it.setTextAlignment(Qt.AlignCenter)
+                it.setForeground(ok_col if has else no_col)
+                it.setToolTip(r["docs"].get(kind, f"{kind}: файла в папке нет"))
+                self.tbl.setItem(i, 4 + k, it)
+            when = datetime.datetime.fromtimestamp(r["mtime"]).strftime("%Y-%m-%d") if r["mtime"] else ""
+            it = QTableWidgetItem(when)
+            it.setTextAlignment(Qt.AlignCenter)
+            self.tbl.setItem(i, 4 + len(CLIENT_DOCS), it)
+        self.tbl.setSortingEnabled(True)
+        self.apply_filter()
+
+    def apply_filter(self, *_):
+        words = [x for x in self.ed_find.text().lower().replace("ё", "е").split() if x]
+        miss = self.cmb_miss.currentData()
+        shown = 0
+        for row in range(self.tbl.rowCount()):
+            it = self.tbl.item(row, 0)
+            r = self.rows[it.data(Qt.UserRole)] if it is not None else None
+            ok = r is not None and all(x in r["text"] for x in words)
+            if ok and miss:
+                ok = (not (r["fio"] or r["car"] or r["contract"])) if miss == "card" else miss not in r["docs"]
+            self.tbl.setRowHidden(row, not ok)
+            shown += ok
+        total = len(self.rows)
+        self.lbl_info.setText("В этой папке нет папок клиентов — выберите общую папку кнопкой «Папка с клиентами…»" if not total
+                              else f"Клиентов: {total}" + (f", показано: {shown}" if shown != total else "")
+                              + ". Двойной щелчок — открыть папку клиента")
+        self.b_open.setEnabled(bool(shown))
+
+    def selected(self):
+        rows = [i.row() for i in self.tbl.selectedItems() if not self.tbl.isRowHidden(i.row())]
+        if not rows:
+            vis = [r for r in range(self.tbl.rowCount()) if not self.tbl.isRowHidden(r)]
+            if len(vis) != 1:
+                return None
+            rows = vis                                   # в списке осталась одна строка — её и открываем
+        it = self.tbl.item(rows[0], 0)
+        return self.rows[it.data(Qt.UserRole)] if it is not None else None
+
+    def open_selected(self):
+        r = self.selected()
+        if r is None:
+            self.win.show_toast("Выберите клиента в списке")
+            return
+        self.win.open_client_folder(r["folder"])
+
+
 class ConvertPage(QDialog):
     """Конвертер внутри главного окна: бросили файл Word — получили PDF, бросили PDF — получили Word.
     Результат ложится рядом с исходным файлом, метаданные вычищаются."""
@@ -13658,6 +14223,13 @@ class CalcPage(QDialog):
         note = QLabel("предварительный — точную сумму определяет таможня")
         note.setObjectName("hint")
         head.addWidget(note, 1)
+        b_inst = QPushButton(" Рассрочка")
+        b_inst.setIcon(draw_icon("datalist", win._icon_color()))
+        b_inst.setIconSize(QSize(15, 15))
+        b_inst.setToolTip("Расчёт рассрочки: график платежей и приложение к договору  (Ctrl+Alt+R)")
+        b_inst.clicked.connect(win.open_installment_page)
+        win._themed_buttons.append((b_inst, "datalist", False))
+        head.addWidget(b_inst)
         root.addLayout(head)
 
         body = QHBoxLayout()
@@ -14563,6 +15135,12 @@ class MainWindow(QMainWindow):
         self.act_calc = act("Расчёт таможенных платежей…", self.open_calc_page, "Ctrl+Shift+U",
                             "Предварительный расчёт пошлины и сбора: суммы в рублях, курс Нацбанка РБ")
         m.addAction(self.act_calc)
+        self.act_clients = act("Клиенты…", self.open_clients_page, "Ctrl+Alt+K",
+                               "Список клиентов: документы по каждому и поиск")
+        m.addAction(self.act_clients)
+        self.act_inst = act("Расчёт рассрочки…", self.open_installment_page, "Ctrl+Alt+R",
+                            "График платежей по рассрочке и приложение к договору")
+        m.addAction(self.act_inst)
         self.act_act = act("Акт осмотра…", self.open_act_page, "Ctrl+Shift+K",
                            "Акт осмотра автомобиля: оригинал на немецком и перевод, замеры ЛКП почерком мастера")
         m.addAction(self.act_act)
@@ -14647,7 +15225,7 @@ class MainWindow(QMainWindow):
         self._build_modebar()
         self._build_zoom_pill()
 
-    MENU_ICONS = (("Настройки ИИ", "key"), ("Настройки", "gear"), ("Выход", "door"), ("Подписать все места", "signs"),
+    MENU_ICONS = (("Клиенты", "datalist"), ("Расчёт рассрочки", "duty"), ("Настройки ИИ", "key"), ("Настройки", "gear"), ("Выход", "door"), ("Подписать все места", "signs"),
                   ("Скопировать текст страницы", "copy"), ("Следующая страница", "down"), ("Предыдущая страница", "up"),
                   ("Дата и время", "clock"), ("ИИ-помощник", "ai"), ("Предложить имя файла", "tag"),
                   ("Данные из документа", "datalist"), ("Проверить перед отправкой", "check"),
@@ -14779,8 +15357,10 @@ class MainWindow(QMainWindow):
 
         mode("doc", "Документ", lambda: self.ai_mode(False) if self._page_on() else None,
              "Страница документа: печати, подписи, страницы  (Esc)")
+        mode("clients", "Клиенты", self.open_clients_page,
+             "Все клиенты: какие документы сделаны, каких не хватает; поиск  (Ctrl+Alt+K)")
         mode("word", "Word", self.act_word_fill_run, "Редактор Word: заполнить шаблон  (Ctrl+Shift+W)")
-        mode("act", "Акт осмотра", self.open_act_page, "Акт осмотра автомобиля  (Ctrl+Shift+K)")
+        mode("act", "Акт", self.open_act_page, "Акт осмотра автомобиля  (Ctrl+Shift+K)")
         mode("conv", "Конвертер", self.open_convert_page, "Word в PDF и PDF в Word, без метаданных  (Ctrl+Shift+J)")
         mode("calc", "Расчёт", self.open_calc_page, "Предварительный расчёт таможенных платежей  (Ctrl+Shift+U)")
         mode("tools", "Инструменты", self.open_tools_page,
@@ -14820,7 +15400,8 @@ class MainWindow(QMainWindow):
         cur = self.center_stack.currentWidget()
         key = "doc"
         for k, attr in (("word", "_word_page"), ("act", "_act_page"), ("conv", "_conv_page"), ("calc", "_calc_page"),
-                        ("tools", "_tools_page"), ("ai", "_ai_center_dlg")):
+                        ("calc", "_inst_page"), ("tools", "_tools_page"), ("clients", "_clients_page"),
+                        ("ai", "_ai_center_dlg")):
             if cur is not None and cur is getattr(self, attr, None):
                 key = k
         for k, b in getattr(self, "mode_btn", {}).items():
@@ -15761,6 +16342,48 @@ class MainWindow(QMainWindow):
         if pg is None:
             pg = CalcPage(self)
             self._calc_page = pg
+            self.center_stack.addWidget(pg)
+        else:
+            pg.refresh()
+        if self.view.pen_active():
+            self.pen_finish(commit=True)
+        self.right_dock.hide()
+        self.left_dock.show()
+        self.center_stack.setCurrentWidget(pg)
+
+    def open_clients_page(self, *_):
+        """Список клиентов — в середине окна."""
+        pg = getattr(self, "_clients_page", None)
+        if pg is None:
+            pg = ClientsPage(self)
+            self._clients_page = pg
+            self.center_stack.addWidget(pg)
+        pg.reload()
+        if self.view.pen_active():
+            self.pen_finish(commit=True)
+        self.right_dock.hide()
+        self.left_dock.show()
+        self.center_stack.setCurrentWidget(pg)
+        pg.ed_find.setFocus()
+
+    def open_client_folder(self, folder):
+        """Открыть папку клиента вкладкой (или перейти на неё, если уже открыта) и вернуться к документу."""
+        folder = os.path.abspath(folder)
+        if folder in self._dirs:
+            self.dir_tabs.setCurrentIndex(self._dirs.index(folder))
+        else:
+            self._add_tab_silent(folder)
+            self.dir_tabs.setCurrentIndex(self.dir_tabs.count() - 1)
+            self.remember_dirs()
+        self.ai_mode(False)
+        self.show_toast(f"✔  Папка клиента: {os.path.basename(folder)}", 2200)
+
+    def open_installment_page(self, *_):
+        """Расчёт рассрочки — в середине окна, рядом с расчётом таможенных платежей."""
+        pg = getattr(self, "_inst_page", None)
+        if pg is None:
+            pg = InstallmentPage(self)
+            self._inst_page = pg
             self.center_stack.addWidget(pg)
         else:
             pg.refresh()
@@ -19722,7 +20345,7 @@ def main():
             except Exception:
                 guide_n = 0
             f.write(f"OK {APP_VERSION} {EDITION} scanner={scanner_backend()} guide={guide_n} "
-                    f"ai={len(AI.PROVIDERS)} keys={len(AI.builtin_keys())} ocr={AI.selftest_ocr()} word={SW.selftest()} cloud={CLOUD.selftest()} act={'ok' if ACT.selftest() else 'fail'} license={'ok' if LIC.selftest() else 'fail'} tools={'ok' if TOOLS.selftest() else 'fail'} pdf2docx={AI.selftest_pdf2docx()} decline={DECL.selftest_text()} calc={'ok' if CUSTOMS.selftest() else 'fail'} conv={AI.selftest_convert()}")
+                    f"ai={len(AI.PROVIDERS)} keys={len(AI.builtin_keys())} ocr={AI.selftest_ocr()} word={SW.selftest()} cloud={CLOUD.selftest()} act={'ok' if ACT.selftest() else 'fail'} license={'ok' if LIC.selftest() else 'fail'} tools={'ok' if TOOLS.selftest() else 'fail'} pdf2docx={AI.selftest_pdf2docx()} decline={DECL.selftest_text()} calc={'ok' if CUSTOMS.selftest() else 'fail'} conv={AI.selftest_convert()} inst={'ok' if INST.selftest() else 'fail'} tpl={len(__import__('stamp_tpl_kit').TEMPLATES)}")
         sys.exit(0)
     install_window_chrome(app)                   # диалоги — в стиле программы
     if not license_gate():                       # без действующего ключа программа не открывается

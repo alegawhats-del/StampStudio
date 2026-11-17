@@ -1180,4 +1180,29 @@ def parse_client_text(text):
     m = re.search(r"[\w.+-]+@[\w-]+\.[\w.-]+", one)
     if m:
         out["email"] = m.group(0)
+    # --- паспорт, распознанный без подписей граф («Фамилия», «выдан» машина часто не видит)
+    passport_like = bool(re.search(r"российская федерация|мвд|уфмс|овд |паспорт", low))
+    if "passport" not in out and passport_like:
+        m = re.search(r"(?<![\d.])(\d{2})\s(\d{2})\s(\d{6})(?![\d.])", one)
+        if m:
+            out["passport"] = f"{m.group(1)} {m.group(2)} {m.group(3)}"
+    code = re.search(r"(?<!\d)(\d{2}[.\s]\d{2}[.\s](?:19|20)\d{2})\D{0,24}\d{3}\s?-\s?\d{3}(?!\d)", one)   # дата выдачи стоит перед кодом подразделения
+    issue = norm(code.group(1)) if code else ""
+    if "birth" not in out and dates:
+        m = re.search(r"(?:муж|жен)\w*\.?\D{0,20}(\d{2}[.\s]\d{2}[.\s](?:19|20)\d{2})", one, re.I)
+        if m and norm(m.group(1)) != issue:
+            out["birth"] = norm(m.group(1))
+    if passport_like and not re.search(r"мвд|уфмс|овд|увд|отдел", out.get("passport_issued", "").lower()):
+        m = re.search(r"((?:ГУ\s|УМВД|ОМВД|МВД|УФМС|ОУФМС|ТП\s|ОВД|УВД|ОТДЕЛ\w*)[^\d]{6,110}?)(?=\s*(?:\d{2}[.\s]\d{2}[.\s](?:19|20)\d{2}|дата выдачи|код подразделения|личная подпись|$))",
+                      one, re.I)
+        if m:
+            org = re.sub(r"\s+", " ", m.group(1)).strip(" :,.-")
+            when = issue or out.get("passport_issued", "")
+            if len(org) >= 8:
+                out["passport_issued"] = (org + (" " + when if re.fullmatch(r"\d{2}\.\d{2}\.\d{4}", when) else "")).strip()
+    if "address" not in out:
+        m = re.search(r"зарегистрирован\w*\W{0,6}(.{12,200}?)(?=\s*(?:\d{2}[.\s]\d{2}[.\s](?:19|20)\d{2}|ГУ МВД|УМВД|ОМВД|МВД|УФМС|ОУФМС|отдел|подпись|$))",
+                      one, re.I)
+        if m and re.search(r"ул\.|улица|пр-т|д\.\s?\d|дом |кв\.|г\. ?[А-ЯЁ]", m.group(1)):
+            out["address"] = re.sub(r"\s+", " ", m.group(1)).strip(" ,.;")
     return out
