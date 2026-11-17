@@ -594,7 +594,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.20.0"
+APP_VERSION = "6.20.1"
 EDITION = "canon"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -9583,6 +9583,7 @@ class WordFillPage(QDialog):
     def load(self, path):
         self.wd = SW.WordDoc(path)
         self.path = path
+        self._extras_data = []                       # доп. услуги — у каждого документа свои
         self.lbl_doc.setText(os.path.basename(path))
         self.lbl_doc.setToolTip(path)
         self.view.blockSignals(True)
@@ -10512,7 +10513,7 @@ class WordFillPage(QDialog):
             pdf_note = self._pdf_beside(out)
         self.win.show_toast(f"✔  Сохранено: {os.path.basename(out)} — изменено абзацев: {n}. "
                             + ("Карточка клиента обновлена" if saved else "Карточку клиента записать не удалось")
-                            + pdf_note, 5200)
+                            + pdf_note + getattr(self, "_empty_note", ""), 5200)
 
     def _save_opt(self, key, value):
         st = settings_load()
@@ -10599,7 +10600,10 @@ class WordFillPage(QDialog):
         if not settings_load().get("word_check", True):
             return True
         found = self.problems()
-        if not found:
+        self._empty_note = ""
+        if not any(not t.startswith("пустое поле «") for t, _r in found):
+            if found:                                    # одни пустые поля — не повод останавливать; скажем после сохранения
+                self._empty_note = f". Не заполнено полей: {len(found)}"
             return True
         box = QMessageBox(self)
         box.setWindowTitle("Проверка перед сохранением")
@@ -13899,6 +13903,7 @@ class ClientsPage(QDialog):
             return
         t = ClientsScan(self.root, self)
         t.done.connect(self._loaded)
+        t.finished.connect(t.deleteLater)
         self._thread = t
         t.start()
 
