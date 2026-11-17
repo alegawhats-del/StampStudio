@@ -594,7 +594,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.20.3"
+APP_VERSION = "6.20.4"
 EDITION = "main"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -6745,6 +6745,9 @@ class SettingsDialog(QDialog):
         l.addLayout(nrow)
         combo(l, "Замеры ЛКП на схеме:", "act_lkp_style", [("hand", "почерком мастера"), ("print", "печатными цифрами")],
               "hand", "Как вписывать замеры в окошки схемы: рукой мастера или ровным печатным шрифтом")
+        check(l, "Подпись и печать мастера — тем же цветом пасты, что замеры ЛКП", "act_ink_all", True,
+              "Меняете цвет пасты на странице акта — в тот же цвет перекрашиваются подпись и печать мастера на листе.\n"
+              "Выключено: подпись и печать остаются своего цвета.")
         button(l, "Открыть акт осмотра", lambda: (self.reject(), win.open_act_page()),
                "Страница акта: мастера, бланки, схема ЛКП  (Ctrl+Shift+K)")
         l.addStretch(1)
@@ -11141,17 +11144,33 @@ def lib_is_sign(entry) -> bool:
     return (entry.get("category") == "Подписи") or ("подпис" in (entry.get("name") or "").lower())
 
 
-def master_sign_image(master, height_px=220):
-    """Подпись мастера для акта: факсимиле из «Моих печатей», если выбрано, иначе нарисованная в профиле."""
+def ink_tint(pil, color):
+    """Перекрасить подпись или печать в цвет пасты: тёмное становится краской, светлое и прозрачное — пустым."""
+    im = pil.convert("RGBA")
+    r, g, b, a = im.split()
+    dark = ImageChops.invert(Image.merge("RGB", (r, g, b)).convert("L"))      # 255 — самая тёмная точка
+    lo, hi = dark.getextrema()
+    if hi > lo:                                         # растянуть: краска — в полную силу, фон — в ноль
+        dark = dark.point(lambda v: max(0, min(255, int((v - lo) * 255 / (hi - lo)))))
+    alpha = ImageChops.multiply(dark, a)
+    out = Image.new("RGBA", im.size, tuple(color) + (0,))
+    out.putalpha(alpha)
+    return out
+
+
+def master_sign_image(master, height_px=220, color=None):
+    """Подпись мастера для акта: факсимиле из «Моих печатей», если выбрано, иначе нарисованная в профиле.
+    color — цвет пасты: подпись пишется той же ручкой, что и замеры."""
     name = master.get("sign_lib") or ""
     if name:
         ent = next((e for e in lib_load() if os.path.basename(e["file"]) == name), None)
         try:
             if ent is not None:
-                return Image.open(ent["file"]).convert("RGBA")
+                im = Image.open(ent["file"]).convert("RGBA")
+                return ink_tint(im, color) if color else im
         except Exception:
             pass
-    return sign_pil(master.get("sign"), height_px)
+    return sign_pil(master.get("sign"), height_px, color)
 
 
 class GlyphPad(QWidget):
@@ -11604,7 +11623,11 @@ class ActPage(QDialog):
         f.setSpacing(6)
         row = QHBoxLayout()
         self.ed_number = QLineEdit(str(act_next_number()))
-        self.ed_number.setToolTip("Номер акта. Подставляется следующий по общему счётчику; можно исправить")
+        self._num_manual = False                 # номер вписан руками — общий счётчик от него не двигается
+        self.ed_number.textEdited.connect(lambda t: setattr(self, "_num_manual", re.sub(r"\D", "", t) != str(act_next_number())))
+        self.ed_number.setToolTip("Программа ставит следующий номер по общему счётчику.\n"
+                                  "Можно вписать свой — для этого акта. Общий счётчик от этого не сдвинется:\n"
+                                  "следующий акт снова получит номер по порядку.")
         self.ed_number.setMaximumWidth(110)
         row.addWidget(self.ed_number)
         row.addWidget(QLabel("Дата:"))
@@ -11875,11 +11898,8 @@ class ActPage(QDialog):
         self._fill_masters(cur)
         self._ink_sync()
         self._dict_refresh()
-        try:
-            if int(re.sub(r"\D", "", self.ed_number.text()) or 0) < act_next_number():
-                self.ed_number.setText(str(act_next_number()))
-        except Exception:
-            pass
+        if not self._num_manual:                 # новый акт всегда начинается с номера общего счётчика
+            self.ed_number.setText(str(act_next_number()))
         if ready and not self._sections:
             self._load_sections()
 
@@ -12287,8 +12307,9 @@ class ActPage(QDialog):
         # номер: общий счётчик в облаке, чтобы у мастеров разных смен номера не совпали
         wanted = re.sub(r"\D", "", d["number"])
         got = wanted
+        manual = wanted != str(act_next_number())           # свой номер: в общую нумерацию не идёт
         uri = cloud_uri()
-        if uri:
+        if uri and not manual:
             QApplication.setOverrideCursor(Qt.WaitCursor)
             try:
                 got = re.sub(r"\D", "", str(CLOUD.claim_number(uri, "act", wanted, auto=True, year=None, reset=False))) or wanted
@@ -12320,12 +12341,14 @@ class ActPage(QDialog):
         except Exception as e:
             QMessageBox.critical(self, "Акт осмотра", f"Не удалось заполнить бланки:\n{e}")
             return
-        act_set_last(got)
+        if not manual:
+            act_set_last(got)
+        self._num_manual = False
         self._dict_learn(d)
         s = settings_load()
         s["act_last_master"] = m["name"]
         settings_save(s)
-        self.ed_number.setText(str(int(got) + 1))
+        self.ed_number.setText(str(act_next_number()))
         ru_pdf = self.win.act_translation_pdf(ru_path)            # перевод сразу готовым PDF
         self.win.reload_files()
         self.win.open_word(de_path, quiet=True)                  # оригинал → PDF (через Word) и на страницу
@@ -16791,7 +16814,9 @@ class MainWindow(QMainWindow):
             return item
 
         placed = []
-        sg = master_sign_image(master, 220)
+        st_ = settings_load()
+        ink = act_ink_style(st_)[0] if st_.get("act_ink_all", True) else None     # подпись и печать — той же пастой, что замеры
+        sg = master_sign_image(master, 220, ink)
         if sg is not None:
             put(sg, float(master.get("sign_w") or ACT_SIGN_W), master.get("sign_pos") or (0.62, 0.82), 1.0, "sign")
             placed.append("подпись")
@@ -16800,6 +16825,8 @@ class MainWindow(QMainWindow):
             try:
                 if ent is not None:
                     st = Image.open(ent["file"]).convert("RGBA")
+                    if ink:
+                        st = ink_tint(st, ink)
                     put(st, float(master.get("stamp_w") or ent.get("mm_w") or 40.0),
                         master.get("stamp_pos") or (0.28, 0.76), 0.9, "stamp")
                     placed.append("печать")
