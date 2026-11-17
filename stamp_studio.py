@@ -594,7 +594,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.20.1"
+APP_VERSION = "6.20.2"
 EDITION = "main"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -6764,11 +6764,6 @@ class SettingsDialog(QDialog):
         check(l, "Вкладка «Инструменты» справа, рядом с «Печатью»", "tools_tab", True,
               "Инструменты под рукой у документа и в редакторе Word. Раздел «Инструменты» сверху открывает их\n"
               "на весь экран и работает независимо от этой галочки.")
-        check(l, "Редактор Word: проверять документ перед сохранением", "word_check", True,
-              "Перед сохранением программа покажет, что не сходится: пустые поля, оставшиеся образцы,\n"
-              "неверный VIN, расхождение с карточкой клиента. Сохранить можно и так.")
-        check(l, "Редактор Word: класть PDF рядом с сохранённым документом", "word_save_pdf", False,
-              "То же, что галочка «и PDF рядом» у кнопки сохранения.")
         check(l, "Брать выделенное в документе в открытую вкладку", "tools_take_selection", True,
               "Выделили в редакторе Word число, ФИО или слово — оно само попадает в панель инструментов.")
         frow = QHBoxLayout()
@@ -6825,6 +6820,75 @@ class SettingsDialog(QDialog):
                "Поля курсов на странице расчёта станут пустыми до следующего «Взять курс»")
         button(l, "Открыть расчёт", lambda: (self.reject(), win.open_calc_page()),
                "Страница расчёта таможенных платежей  (Ctrl+Shift+U)")
+        l.addStretch(1)
+        # ---- Документы и клиенты
+        l = page("Документы и клиенты", "Шаблоны и заполнение в разделе «Word», карточка клиента, список клиентов, рассрочка.")
+        combo(l, "Карточка клиента — сканы читает:", "card_scan_mode", list(CARD_SCAN_MODES), "ai_always",
+              "Паспорт, техпаспорт, инвойс → поля карточки. ИИ читает точнее, но изображения уходят в сервис ИИ\n"
+              "из настроек ИИ (нужны ключ и согласие на этом компьютере). Найденное всегда показывается на проверку.")
+        check(l, "Проверять документ перед сохранением", "word_check", True,
+              "Окно появляется, если в документе остался образец, неверный VIN или паспорт, кривая дата\n"
+              "или данные расходятся с карточкой клиента. Сохранить можно и так.")
+        check(l, "Класть PDF рядом с сохранённым документом Word", "word_save_pdf", False,
+              "То же, что галочка «и PDF рядом» у кнопки сохранения. Нужен установленный Microsoft Word.")
+        check(l, "Немецкие документы (ДКП): переводить вписанное по-русски", "word_translate_de", True,
+              "ФИО — латиницей, адрес — Region / Stadt / Straße / Haus, цвет, топливо и коробка — по словарю.\n"
+              "Выключено: в документ идёт ровно то, что вписано.")
+        check(l, "Ставить линии подписей сторон на одну высоту", "word_align_sign", True,
+              "При сохранении линии для подписей исполнителя и заказчика переносятся в общую строку таблицы.")
+        check(l, "«Мои печати»: два ряда видны целиком", "lib_two_rows", True,
+              "Значки ужимаются под высоту списка. Выключено: значки крупнее, второй ряд может быть обрезан.")
+        combo(l, "Рассрочка — график по умолчанию:", "inst_kind", [(k, t[:1].upper() + t[1:]) for k, t in INST.KINDS], "annuity")
+        irow = QHBoxLayout()
+        irow.addWidget(QLabel("Рассрочка — ставка по умолчанию, % годовых:"))
+        self.ed_inst_rate = QLineEdit(str(st.get("inst_rate", "0")))
+        self.ed_inst_rate.setMaximumWidth(80)
+        irow.addWidget(self.ed_inst_rate)
+        irow.addStretch(1)
+        l.addLayout(irow)
+        self._clients_root = st.get("clients_root") or ""
+        self.lbl_clients_root = QLabel("")
+        self.lbl_clients_root.setObjectName("plain")
+        self.lbl_clients_root.setWordWrap(True)
+        l.addWidget(self.lbl_clients_root)
+
+        def root_show():
+            self.lbl_clients_root.setText("Папка с клиентами: " + (self._clients_root or "не задана — берётся папка уровнем выше открытой"))
+
+        def root_pick():
+            d = QFileDialog.getExistingDirectory(self, "Папка, в которой лежат папки клиентов", self._clients_root or win.current_dir())
+            if d:
+                self._clients_root = os.path.abspath(d)
+                root_show()
+        root_show()
+        rrow = QHBoxLayout()
+        b = QPushButton("Выбрать папку с клиентами…")
+        b.setMinimumHeight(30)
+        b.clicked.connect(root_pick)
+        rrow.addWidget(b)
+        b = QPushButton("Сбросить")
+        b.setMinimumHeight(30)
+        b.clicked.connect(lambda: (setattr(self, "_clients_root", ""), root_show()))
+        rrow.addWidget(b)
+        rrow.addStretch(1)
+        l.addLayout(rrow)
+        self._tpl_reseed = self._tpl_forget = False
+        self.lbl_tpl_note = QLabel("")
+        self.lbl_tpl_note.setObjectName("hint")
+        trow = QHBoxLayout()
+        b = QPushButton("Вернуть готовые шаблоны")
+        b.setMinimumHeight(30)
+        b.setToolTip("Шаблоны, которые идут с программой и были удалены из списка, появятся снова. Свои шаблоны не трогаются.")
+        b.clicked.connect(lambda: (setattr(self, "_tpl_reseed", True), self.lbl_tpl_note.setText("Готовые шаблоны вернутся после «Сохранить».")))
+        trow.addWidget(b)
+        b = QPushButton("Забыть постоянные реквизиты шаблонов")
+        b.setMinimumHeight(30)
+        b.setToolTip("Банк и счёт в счёте, продавец в ДКП и другие поля с пометкой «постоянное» станут пустыми.")
+        b.clicked.connect(lambda: (setattr(self, "_tpl_forget", True), self.lbl_tpl_note.setText("Реквизиты будут забыты после «Сохранить».")))
+        trow.addWidget(b)
+        trow.addStretch(1)
+        l.addLayout(trow)
+        l.addWidget(self.lbl_tpl_note)
         l.addStretch(1)
         # ---- Лицензия
         l = page("Лицензия", "Программа работает по ключу. Ключ хранится на этом компьютере и привязан к нему.")
@@ -7078,6 +7142,16 @@ class SettingsDialog(QDialog):
         st["pdf2word_method"] = self.cmb_p2w.currentData()
         st["strip_open"] = self.chk_strip.isChecked()
         st["own_frames"] = self.chk_frames.isChecked()
+        rate = INST._d(self.ed_inst_rate.text())
+        st["inst_rate"] = INST.pct(rate).rstrip("%") if rate is not None and 0 <= rate <= 200 else "0"
+        if self._clients_root:
+            st["clients_root"] = self._clients_root
+        else:
+            st.pop("clients_root", None)
+        if self._tpl_reseed:
+            st.pop("tpl_seeded", None)
+        if self._tpl_forget:
+            st.pop("tpl_fixed", None)
         fee = CUSTOMS._d(self.ed_calc_fee.text())
         if fee is not None and fee >= 0:
             st["calc_fee"] = CUSTOMS.money(fee)
@@ -8949,6 +9023,17 @@ class CardScanDialog(QDialog):
         return out
 
 
+CARD_SCAN_MODES = (("ai_always", "ИИ — точнее всего (сканы уходят в сервис ИИ)"),
+                   ("ai_if_few", "этот компьютер; ИИ — только если нашлось мало"),
+                   ("local", "только этот компьютер — в интернет ничего не уходит"))
+
+
+def card_scan_mode(st=None) -> str:
+    st = settings_load() if st is None else st
+    m = st.get("card_scan_mode")
+    return m if m in dict(CARD_SCAN_MODES) else "ai_always"
+
+
 class ClientCardDialog(QDialog):
     """Карточка клиента: лежит файлом в папке клиента, из неё заполняются документы."""
 
@@ -9010,11 +9095,17 @@ class ClientCardDialog(QDialog):
         g.setRowStretch(row, 1)
         sc.setWidget(holder)
         lay.addWidget(sc, 1)
-        self.chk_ai = QCheckBox("Если на компьютере распознать не получилось — разрешаю отправить сканы в ИИ")
-        self.chk_ai.setChecked(bool(settings_load().get("card_scan_ai", False)))
-        self.chk_ai.setToolTip("Выключено: сканы никуда не уходят, распознавание делает сама Windows.\n"
-                               "Включено: если данных нашлось мало, изображения паспорта и техпаспорта уйдут в сервис ИИ.")
-        lay.addWidget(self.chk_ai)
+        mrow = QHBoxLayout()
+        mrow.addWidget(QLabel("Сканы читает:"))
+        self.cmb_scan = QComboBox()
+        for val, text in CARD_SCAN_MODES:
+            self.cmb_scan.addItem(text, val)
+        self.cmb_scan.setCurrentIndex(max(0, self.cmb_scan.findData(card_scan_mode())))
+        self.cmb_scan.setToolTip("ИИ читает паспорт и техпаспорт точнее, но для этого их изображения уходят в сервис ИИ,\n"
+                                 "выбранный в настройках ИИ. «Только этот компьютер» — сканы никуда не уходят.\n"
+                                 "Найденное всегда показывается на проверку. То же — в Настройки → Документы и клиенты.")
+        mrow.addWidget(self.cmb_scan, 1)
+        lay.addLayout(mrow)
         row_b = QHBoxLayout()
         b_scan = QPushButton("Заполнить из сканов…")
         b_scan.setToolTip("Паспорт, техпаспорт, инвойс: программа распознает их и предложит данные на проверку")
@@ -9074,9 +9165,10 @@ class ClientCardDialog(QDialog):
                                                     "Сканы и PDF (*.pdf *.jpg *.jpeg *.png)")
         if not paths:
             return
-        allow_ai = self.chk_ai.isChecked()
+        mode = self.cmb_scan.currentData()
+        allow_ai = mode != "local"
         st = settings_load()
-        st["card_scan_ai"] = allow_ai
+        st["card_scan_mode"] = mode
         settings_save(st)
         try:
             doc = fitz.open()
@@ -9101,12 +9193,18 @@ class ClientCardDialog(QDialog):
             text = bundle["text"] + "\n" + (AI.ocr_text_for(bundle) or "")
             found = SW.parse_client_text(text)
             how = "Распознано на этом компьютере, в интернет ничего не уходило."
-            if allow_ai and len(found) < 4:
-                status("Локально нашлось мало — спрашиваю ИИ…")
+            if allow_ai and (mode == "ai_always" or len(found) < 4):
+                status("Читаю сканы через ИИ…" if mode == "ai_always" else "Локально нашлось мало — спрашиваю ИИ…")
                 try:
                     res = AI.task_card(bundle, keys, status, cancel)
-                    for k, v in res["values"].items():
-                        found.setdefault(k, v)              # найденное на компьютере важнее ответа ИИ
+                    if mode == "ai_always":                 # ИИ читает документ целиком — его ответ главный
+                        local = found
+                        found = {k: v for k, v in res["values"].items() if str(v).strip()}
+                        for k, v in local.items():
+                            found.setdefault(k, v)
+                    else:
+                        for k, v in res["values"].items():
+                            found.setdefault(k, v)          # найденное на компьютере важнее ответа ИИ
                     how = f"Часть данных прочитал ИИ ({res['provider'].split(' (')[0]}) — сканы были отправлены в этот сервис."
                 except Exception as e:
                     how = "Распознано на этом компьютере. ИИ не ответил: " + str(e)[:120] + "."
@@ -9700,7 +9798,7 @@ class WordFillPage(QDialog):
         memo = (settings_load().get("tpl_fixed") or {}).get(self._tpl_id(), {})
         body = self.view.toPlainText()
         lat, cyr = len(re.findall(r"[A-Za-zÄÖÜäöüß]", body)), len(re.findall(r"[А-Яа-яЁё]", body))
-        german = lat > 200 and lat > 4 * cyr
+        german = lat > 200 and lat > 4 * cyr and bool(settings_load().get("word_translate_de", True))
         for (text, fixed), items in groups.items():
             hs = [h for h, _s in items]
             labels = sorted((h["label"] for h in hs if h["label"]), key=len)
@@ -10474,7 +10572,8 @@ class WordFillPage(QDialog):
             if tot_ is not None and tot_["field"] is not None:
                 services = [(name, tot_["field"].render(amount) or amount) for name, amount in self.extras()]
             n = fresh.save(out, edits=edits, services=services,
-                           total_par=tot_["field"].par if services else None)
+                           total_par=tot_["field"].par if services else None,
+                           align=bool(settings_load().get("word_align_sign", True)))
         except PermissionError:
             QMessageBox.warning(self, "Редактор Word", "Не удалось записать файл — он открыт в Word. "
                                                        "Закройте его там и повторите.")
@@ -13510,7 +13609,7 @@ class InstallmentPage(QDialog):
         f.addRow("Срок:", row)
         row = QHBoxLayout()
         self.ed_rate = edit("0", 70)
-        self.ed_rate.setText("0")
+        self.ed_rate.setText(str(settings_load().get("inst_rate", "0")))
         row.addWidget(self.ed_rate)
         row.addWidget(QLabel("% годовых — можно 0"))
         row.addStretch(1)
@@ -13519,6 +13618,7 @@ class InstallmentPage(QDialog):
         self.cmb_kind.setMinimumHeight(30)
         for k, t in INST.KINDS:
             self.cmb_kind.addItem(t[:1].upper() + t[1:], k)
+        self.cmb_kind.setCurrentIndex(max(0, self.cmb_kind.findData(settings_load().get("inst_kind", "annuity"))))
         self.cmb_kind.setToolTip("Аннуитетная: каждый месяц один и тот же платёж.\n"
                                  "Стандартная: долг гасится равными частями, проценты считаются на остаток — платёж уменьшается.")
         self.cmb_kind.currentIndexChanged.connect(self.recalc)
@@ -16310,6 +16410,17 @@ class MainWindow(QMainWindow):
         if hasattr(self, "tool_strip") and bool(st.get("strip_open", False)) != self._strip_open:
             self._strip_open = bool(st.get("strip_open", False))
             self._strip_apply()
+        rows = 2 if st.get("lib_two_rows", True) else 0
+        if hasattr(self, "lib_list") and self.lib_list.fit_rows != rows:
+            self.lib_list.fit_rows = rows
+            self.lib_list.fit_grid()
+        pg = getattr(self, "_word_page", None)
+        if pg is not None:
+            pg.chk_pdf.blockSignals(True)
+            pg.chk_pdf.setChecked(bool(st.get("word_save_pdf", False)))
+            pg.chk_pdf.blockSignals(False)
+            if pg.empty.isVisible():
+                pg.tpl_reload()
         want = bool(st.get("tools_tab", True)) and not st.get("tools_detached")
         d = getattr(self, "tools_dock", None)
         shown = bool(getattr(self, "_tools_side", False)) and d is not None
@@ -18872,7 +18983,7 @@ class MainWindow(QMainWindow):
         self.lib_list.setSpacing(2)
         self.lib_list.max_icon = 512            # печати — крупно, во всю клетку
         self.lib_list.min_rows = 1              # один ряд виден всегда; остальное место список берёт сам
-        self.lib_list.fit_rows = 2              # два ряда печатей видны целиком
+        self.lib_list.fit_rows = 2 if settings_load().get("lib_two_rows", True) else 0   # два ряда печатей видны целиком
         self.lib_list.min_floor = 152           # не ниже прежней высоты: панель по-прежнему влезает в 768
         self.lib_list.setWordWrap(False)
         self.lib_list.setMinimumHeight(178)

@@ -682,12 +682,13 @@ class WordDoc:
         return mn.group(1) + gap + mn.group(3).replace(" ", " ")
 
     # ---- доводка готового документа: то, что нельзя сделать заменой текста
-    def finish(self, services=None, total_par=None):
+    def finish(self, services=None, total_par=None, align=True):
         """services: [(название, текст значения)] — строки доп. услуг перед строкой итога (абзац total_par)."""
         if services and total_par is not None:
             self._add_service_rows(total_par, services)
         self._line_breaks()
-        self._align_signatures()
+        if align:
+            self._align_signatures()
 
     def _line_breaks(self):
         for t in list(self.doc.element.body.iter(T)):
@@ -871,9 +872,10 @@ class WordDoc:
                     done += 1
         return done
 
-    def save(self, out_path, values=None, replaces=None, edits=None, keep_highlight=False, services=None, total_par=None):
+    def save(self, out_path, values=None, replaces=None, edits=None, keep_highlight=False, services=None, total_par=None,
+             align=True):
         n = self.apply(values, replaces, edits)
-        self.finish(services, total_par)
+        self.finish(services, total_par, align)
         if not keep_highlight:
             self.strip_highlights()
         self.doc.save(out_path)
