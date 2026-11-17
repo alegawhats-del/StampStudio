@@ -29,6 +29,14 @@ def _yellowish(fill):
     return r >= 200 and g >= 190 and b <= 170
 
 
+def money_cell(value):
+    """«22416,66» → «22 416,66 (Двадцать две тысячи четыреста шестнадцать) руб. 66 коп.»; не число — как есть."""
+    n = parse_number(value)
+    if not n:
+        return str(value or "").strip()
+    return f"{format_number(n[0])},{n[1]:02d} ({number_words(n[0])}) руб. {n[1]:02d} коп."
+
+
 def date_words(value):
     """«17.11.2026» → «17 ноября 2026»; None, если это не дата."""
     d = parse_date(value)
@@ -335,7 +343,10 @@ class Field:
             whole, frac = num
             words = number_words(whole, capital=self.meta.get("capital", True))
             dec = f",{frac:02d}" if self.meta.get("decimals") else ""
-            return f"{format_number(whole, self.meta.get('sep', ' '))}{dec} ({words})" + self.meta.get("unit", "")
+            unit = self.meta.get("unit", "")
+            if frac:                                   # «руб. 66 коп.» — копейки в хвосте те же, что в сумме
+                unit = re.sub(r"\b00(\s*коп)", f"{frac:02d}\\1", unit)
+            return f"{format_number(whole, self.meta.get('sep', ' '))}{dec} ({words})" + unit
         if self.kind == "tail":
             return " " + value
         return value
@@ -710,6 +721,8 @@ class WordDoc:
         ps = [x for x in tc if x.tag == P]
         for extra in ps[1:]:
             tc.remove(extra)
+        lines = str(text).split("\n")
+        text = lines[0]
         ts = [t for t in ps[0].iter(T)] if ps else []
         if ts:
             ts[0].text = text
@@ -725,6 +738,18 @@ class WordDoc:
             t.text = text
             r.append(t)
             ps[0].append(r)
+        at = ps[0] if ps else None
+        for line in lines[1:]:                         # вторая строка ячейки — таким же абзацем
+            if at is None:
+                break
+            np_ = copy.deepcopy(ps[0])
+            nts = [t for t in np_.iter(T)]
+            if nts:
+                nts[0].text = line
+                for t in nts[1:]:
+                    t.text = ""
+            at.addnext(np_)
+            at = np_
 
     def _add_service_rows(self, total_par, services):
         p = self.pars[total_par]

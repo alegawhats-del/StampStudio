@@ -594,7 +594,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.20.2"
+APP_VERSION = "6.20.3"
 EDITION = "canon"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -9682,6 +9682,7 @@ class WordFillPage(QDialog):
         self.wd = SW.WordDoc(path)
         self.path = path
         self._extras_data = []                       # доп. услуги — у каждого документа свои
+        self._inst_data = ("", "", False)
         self.lbl_doc.setText(os.path.basename(path))
         self.lbl_doc.setToolTip(path)
         self.view.blockSignals(True)
@@ -10085,7 +10086,46 @@ class WordFillPage(QDialog):
                              "Строки встанут перед «Общей стоимостью», нумерация продолжится, сумма войдёт в итог.\n"
                              "В документе они появятся при сохранении.")
                 b.clicked.connect(lambda: self._extra_add())
-                v.addWidget(b)
+                brow = QHBoxLayout()
+                brow.setSpacing(6)
+                brow.addWidget(b, 1)
+                self.b_inst = QPushButton(" Рассрочка")
+                self.b_inst.setCheckable(True)
+                self.b_inst.setIcon(draw_icon("datalist", self.win._icon_color()))
+                self.b_inst.setIconSize(QSize(13, 13))
+                self.b_inst.setCursor(Qt.PointingHandCursor)
+                self.b_inst.setToolTip("Строка «Рассрочка» перед «Общей стоимостью»: первоначальный взнос (если есть) "
+                                       "и ежемесячный платёж.\nНа общую стоимость не влияет. В документе появится при сохранении.")
+                brow.addWidget(self.b_inst, 1)
+                v.addLayout(brow)
+                self.inst_box = QWidget()
+                il = QVBoxLayout(self.inst_box)
+                il.setContentsMargins(0, 2, 0, 0)
+                il.setSpacing(3)
+                first0, month0, on0 = getattr(self, "_inst_data", ("", "", False))
+                self.ed_inst_first = QLineEdit(first0)
+                self.ed_inst_first.setMinimumHeight(28)
+                self.ed_inst_first.setPlaceholderText("первоначальный взнос — если есть")
+                self.ed_inst_month = QLineEdit(month0)
+                self.ed_inst_month.setMinimumHeight(28)
+                self.ed_inst_month.setPlaceholderText("ежемесячный платёж")
+                il.addWidget(self.ed_inst_first)
+                mrow = QHBoxLayout()
+                mrow.setSpacing(4)
+                mrow.addWidget(self.ed_inst_month, 1)
+                bt = QPushButton("из расчёта")
+                bt.setToolTip("Взять взнос и платёж из раздела «Расчёт → Рассрочка», если там уже посчитано")
+                bt.clicked.connect(self._inst_take)
+                mrow.addWidget(bt)
+                il.addLayout(mrow)
+                v.addWidget(self.inst_box)
+                self.b_inst.setChecked(bool(on0))
+                self.inst_box.setVisible(bool(on0))
+                keep = lambda *_: setattr(self, "_inst_data", (self.ed_inst_first.text().strip(), self.ed_inst_month.text().strip(),
+                                                               self.b_inst.isChecked()))
+                self.b_inst.toggled.connect(lambda on: (self.inst_box.setVisible(on), keep(), self.ed_inst_month.setFocus() if on else None))
+                self.ed_inst_first.textChanged.connect(keep)
+                self.ed_inst_month.textChanged.connect(keep)
                 v.addSpacing(6)
                 data, self._extras = list(getattr(self, "_extras_data", [])), []
                 for name, amount in data:
@@ -10229,6 +10269,28 @@ class WordFillPage(QDialog):
     def _extras_changed(self):
         self._extras_data = [(e["name"].text().strip(), e["sum"].text().strip()) for e in self._extras]
         self._recalc()
+
+    def _inst_take(self):
+        pg = getattr(self.win, "_inst_page", None)
+        res = getattr(pg, "res", None) or {}
+        if pg is None or res.get("error") or not res.get("rows"):
+            self._say("В разделе «Расчёт → Рассрочка» пока ничего не посчитано", warn=True)
+            return
+        self.ed_inst_month.setText(INST.money(res["rows"][0]["payment"]))
+        first = INST._d(pg.ed_first.text())
+        if first:
+            self.ed_inst_first.setText(INST.money(first))
+
+    def installment_row(self):
+        """Текст ячейки строки «Рассрочка» ('' — строки нет)."""
+        first, month, on = getattr(self, "_inst_data", ("", "", False))
+        if not on or not month:
+            return ""
+        lines = []
+        if first and (SW.parse_number(first) or (0, 0))[0]:
+            lines.append("Первоначальный взнос " + SW.money_cell(first))
+        lines.append("Ежемесячный платёж " + SW.money_cell(month))
+        return "\n".join(lines)
 
     def extras(self):
         """[(название, сумма)] — заполненные строки доп. услуг."""
@@ -10570,6 +10632,8 @@ class WordFillPage(QDialog):
             services = []
             if tot_ is not None and tot_["field"] is not None:
                 services = [(name, tot_["field"].render(amount) or amount) for name, amount in self.extras()]
+                if self.installment_row():
+                    services.append(("Рассрочка", self.installment_row()))
             n = fresh.save(out, edits=edits, services=services,
                            total_par=tot_["field"].par if services else None,
                            align=bool(settings_load().get("word_align_sign", True)))
@@ -10682,6 +10746,11 @@ class WordFillPage(QDialog):
                     out.append((f"{SW.KEY_TITLES.get(k, k)}: в документе «{t}», а в карточке клиента «{card[k]}»", r))
             elif k == "vin" and r.get("de") and card.get("vin") and re.sub(r"\s", "", card["vin"]).upper() != re.sub(r"\s", "", t).upper():
                 out.append((f"VIN: в документе «{t}», а в карточке клиента «{card['vin']}»", r))
+        first_, month_, on_ = getattr(self, "_inst_data", ("", "", False))
+        if on_ and not month_:
+            out.append(("рассрочка включена, но ежемесячный платёж не вписан — строки в документе не будет", None))
+        elif on_ and SW.parse_number(month_) is None:
+            out.append((f"рассрочка: платёж «{month_}» — не число", None))
         for nm, am in getattr(self, "_extras_data", []):
             if bool(nm) != bool(am):
                 out.append((f"доп. услуга «{nm or am}»: нужны и название, и сумма — иначе строка не попадёт в документ", None))
