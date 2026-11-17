@@ -56,7 +56,7 @@ import stamp_license as LIC
 import stamp_tools as TOOLS
 import stamp_decline as DECL
 import stamp_customs as CUSTOMS
-from PySide6.QtWidgets import QSizeGrip, QLayout, QStyledItemDelegate
+from PySide6.QtWidgets import QSizeGrip, QLayout, QStyledItemDelegate, QBoxLayout
 from PySide6.QtGui import QFont, QFontMetrics
 from PySide6.QtCore import QByteArray, QBuffer, QIODevice
 from PySide6.QtCore import QMimeData
@@ -593,7 +593,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.17.4"
+APP_VERSION = "6.17.5"
 EDITION = "main"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -967,12 +967,15 @@ class ColumnGrid(QListWidget):
         self.max_icon = 512         # потолок размера иконки
         self.min_rows = 0           # сколько рядов должно быть видно всегда
         self.icon_pad = None        # поля вокруг значка в клетке; None — обычные
+        self.fit_rows = 0           # столько рядов должны помещаться целиком: значки ужимаются под высоту
         self.setViewMode(QListWidget.IconMode)
         self.setResizeMode(QListWidget.Adjust)
         self.setMovement(QListWidget.Static)
         self.setUniformItemSizes(True)
         self.setWordWrap(True)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.model().rowsInserted.connect(lambda *_: QTimer.singleShot(0, self.fit_grid))
+        self.model().rowsRemoved.connect(lambda *_: QTimer.singleShot(0, self.fit_grid))
 
     def fit_grid(self):
         vp = self.viewport().width()
@@ -980,14 +983,19 @@ class ColumnGrid(QListWidget):
             return
         gap = self.spacing() * 2
         cell = max(self.min_cell, (vp - 4) // self.columns - gap)
-        if self.gridSize().width() != cell:
-            pad = gap + 20 if self.icon_pad is None else self.icon_pad
-            icon = max(44, min(self.max_icon, cell - pad))
-            self.setGridSize(QSize(cell, icon + 26))
+        pad = gap + 20 if self.icon_pad is None else self.icon_pad
+        icon = full = max(44, min(self.max_icon, cell - pad))
+        if self.fit_rows and self.count() > self.columns * (self.fit_rows - 1):
+            row_h = (self.viewport().height() - 2 * self.spacing() - 2) // self.fit_rows - gap
+            if row_h - 24 >= 56:                        # ряды видны целиком, а не обрезаны снизу;
+                icon = min(icon, row_h - 24)            # на совсем низком окне значки остаются крупными
+        row = icon + (24 if icon < full else 26)
+        if self.gridSize() != QSize(cell, row):
+            self.setGridSize(QSize(cell, row))
             self.setIconSize(QSize(icon, icon))
             if self.min_rows:
                 self.setMinimumHeight(max(getattr(self, "min_floor", 0),
-                                          self.min_rows * (icon + 26) + 2 * self.spacing() + 4))
+                                          self.min_rows * (full + 26) + 2 * self.spacing() + 4))
 
     def sizeHint(self):
         # по умолчанию QListWidget просит 192px — из-за этого панель
@@ -6663,6 +6671,9 @@ class SettingsDialog(QDialog):
               False, "То же переключает значок со стрелкой в шапке панели.")
         combo(l, "Вкладка «Регистр»:", "case_view", [("list", "список — все варианты сразу"), ("pair", "две панели — текст и результат")],
               "list")
+        check(l, "Вкладка «Инструменты» справа, рядом с «Печатью»", "tools_tab", True,
+              "Инструменты под рукой у документа и в редакторе Word. Раздел «Инструменты» сверху открывает их\n"
+              "на весь экран и работает независимо от этой галочки.")
         check(l, "Брать выделенное в документе в открытую вкладку", "tools_take_selection", True,
               "Выделили в редакторе Word число, ФИО или слово — оно само попадает в панель инструментов.")
         frow = QHBoxLayout()
@@ -11659,6 +11670,7 @@ def _tools_qss(dark: bool) -> str:
     return (
         f"#toolspanel QLineEdit#toolresult, #toolspanel QTextEdit#toolresult {{ background: {res}; font-weight: 600; }}"
         f"#toolspanel QLabel#toolhint {{ color: {hint}; }}"
+        f"#toolspanel QFrame#toolcard {{ background: {'#1c202b' if dark else '#fbf9f4'}; border: 1px solid {line}; border-radius: 12px; }}"
         f"#toolspanel QLabel#toolflash {{ color: #1b7a3d; font-weight: 600; }}"
         f"#toolspanel QLabel#casebadge {{ background: {seg}; color: {gold}; font-weight: 700; border-radius: 6px; }}"
         "#toolspanel QGroupBox[conv=\"#e23b3b\"] { border-left: 3px solid #e23b3b; }"
@@ -11762,15 +11774,16 @@ class ToolsPanel(QWidget):
 
     TABS = ("currency", "case", "decline", "words", "power")
 
-    def __init__(self, win):
+    def __init__(self, win, page=False):
         super().__init__()
         self.win = win
+        self.page = bool(page)                 # страница на весь экран: все инструменты сразу, без вкладок
         self.setObjectName("toolspanel")
         self._rates_thread = None
         self._amount_target = None
         self._last_sel = ""
         root = QVBoxLayout(self)
-        root.setContentsMargins(10, 8, 10, 8)
+        root.setContentsMargins(*((0, 0, 0, 0) if page else (10, 8, 10, 8)))
         root.setSpacing(6)
         head = QHBoxLayout()
         head.setSpacing(4)
@@ -11787,27 +11800,85 @@ class ToolsPanel(QWidget):
         self.btn_close.setObjectName("ghost")
         self.btn_close.setIconSize(QSize(16, 16))
         self.btn_close.setCursor(Qt.PointingHandCursor)
-        self.btn_close.setToolTip("Убрать панель  (Ctrl+Shift+T)")
-        self.btn_close.clicked.connect(lambda: self.win.tools_close())
+        self.btn_close.setToolTip("Убрать вкладку. Вернуть: Настройки → Инструменты → «Вкладка „Инструменты“ справа»")
+        self.btn_close.clicked.connect(lambda: self.win.tools_tab_set(False))   # крестик: убрать вкладку совсем
         head.addWidget(self.btn_close)
         root.addLayout(head)
-        self.tabs = QTabWidget()
-        self.tabs.setUsesScrollButtons(False)
-        self.tabs.tabBar().setExpanding(False)
-        self.tabs.addTab(self._tab_currency(), "Валюты")
-        self.tabs.addTab(self._tab_case(), "Регистр")
-        self.tabs.addTab(self._tab_decline(), "Падежи")
-        self.tabs.addTab(self._tab_words(), "Прописью")
-        self.tabs.addTab(self._tab_power(), "кВт")
-        self.tabs.setTabToolTip(3, "Сумма прописью")
-        self.tabs.setTabToolTip(4, "Лошадиные силы ⇄ киловатты")
-        self.tabs.currentChanged.connect(self._tab_changed)
-        root.addWidget(self.tabs, 1)
+        self.tabs = None
+        if page:
+            ttl.hide()
+            self.btn_detach.hide()
+            self.btn_close.hide()
+            grid = QGridLayout()
+            grid.setSpacing(12)
+            self._page_grid, self._page_cols, self._page_narrow = grid, [], None
+
+            def card(title, body, stretch=0):
+                if isinstance(body, QScrollArea):          # на странице прокрутка одна — общая
+                    inner = body.takeWidget()
+                    body.deleteLater()
+                    body = inner
+                    body.setAutoFillBackground(False)
+                fr = QFrame()
+                fr.setObjectName("toolcard")
+                fv = QVBoxLayout(fr)
+                fv.setContentsMargins(10, 8, 10, 8)
+                fv.setSpacing(2)
+                cap = QLabel(title)
+                cap.setObjectName("paneltitle")
+                fv.addWidget(cap)
+                fv.addWidget(body, 1)
+                return fr, stretch
+
+            cols = (((card("ВАЛЮТЫ", self._tab_currency(), 1),), 10),
+                    ((card("ПАДЕЖИ", self._tab_decline(), 1), card("ЛОШАДИНЫЕ СИЛЫ ⇄ КИЛОВАТТЫ", self._tab_power())), 10),
+                    ((card("РЕГИСТР", self._tab_case(), 1), card("СУММА ПРОПИСЬЮ", self._tab_words())), 11))
+            for cards, k in cols:
+                cw = QWidget()
+                cv = QBoxLayout(QBoxLayout.TopToBottom, cw)
+                cv.setContentsMargins(0, 0, 0, 0)
+                cv.setSpacing(12)
+                for fr, st in cards:
+                    cv.addWidget(fr, st)
+                self._page_cols.append((cw, cv, k))
+            hold = QWidget()
+            hold.setObjectName("toolshold")
+            hold.setLayout(grid)
+            grid.setContentsMargins(0, 0, 4, 0)
+            sc = QScrollArea()
+            sc.setWidgetResizable(True)
+            sc.setFrameShape(QFrame.NoFrame)
+            sc.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            sc.setWidget(hold)
+            sc.viewport().setAutoFillBackground(False)
+            hold.setAutoFillBackground(False)
+            self.page_scroll = sc
+            root.addWidget(sc, 1)
+            self._page_place()
+            for cl in self.findChildren(CopyLine):        # документа рядом нет — вставлять некуда
+                cl.btn_ins.hide()
+            for b in self.findChildren(QPushButton):
+                if b.text() == "В документ":
+                    b.hide()
+        else:
+            self.tabs = QTabWidget()
+            self.tabs.setUsesScrollButtons(False)
+            self.tabs.tabBar().setExpanding(False)
+            self.tabs.addTab(self._tab_currency(), "Валюты")
+            self.tabs.addTab(self._tab_case(), "Регистр")
+            self.tabs.addTab(self._tab_decline(), "Падежи")
+            self.tabs.addTab(self._tab_words(), "Прописью")
+            self.tabs.addTab(self._tab_power(), "кВт")
+            self.tabs.setTabToolTip(3, "Сумма прописью")
+            self.tabs.setTabToolTip(4, "Лошадиные силы ⇄ киловатты")
+            self.tabs.currentChanged.connect(self._tab_changed)
+            root.addWidget(self.tabs, 1)
         self.chk_sel = QCheckBox("Брать выделенное в документе")
         self.chk_sel.setToolTip("Выделите в редакторе Word число, ФИО или слово — оно само попадёт в открытую вкладку")
         self.chk_sel.setChecked(bool(settings_load().get("tools_take_selection", True)))
         self.chk_sel.toggled.connect(self._sel_toggled)
         root.addWidget(self.chk_sel)
+        self.chk_sel.setVisible(not page)
         self.lbl_flash = QLabel("")
         self.lbl_flash.setObjectName("toolflash")
         self.lbl_flash.setAlignment(Qt.AlignCenter)
@@ -11853,11 +11924,21 @@ class ToolsPanel(QWidget):
 
     def showEvent(self, e):
         super().showEvent(e)
-        self._sel_timer.start()
+        if not self.page:
+            self._sel_timer.start()
         if not getattr(self, "_rates_asked", False):     # курс берётся сам при первом открытии
-            self._rates_asked = True
-            if settings_load().get("rates_auto", True) and not any(ed.text().strip() for ed in self.rate.values()):
-                QTimer.singleShot(200, self.load_rates)
+            QTimer.singleShot(200, self._rates_first)
+
+    def _rates_first(self):
+        """Первый показ панели на экране (а не вкладки, спрятанной за «Печатью») — взять курс."""
+        try:
+            if getattr(self, "_rates_asked", False) or not self.isVisible() or self.visibleRegion().isEmpty():
+                return
+        except RuntimeError:
+            return
+        self._rates_asked = True
+        if settings_load().get("rates_auto", True) and not any(ed.text().strip() for ed in self.rate.values()):
+            self.load_rates()
 
     def hideEvent(self, e):
         super().hideEvent(e)
@@ -11866,6 +11947,35 @@ class ToolsPanel(QWidget):
     def resizeEvent(self, e):
         super().resizeEvent(e)
         self._case_place()
+        if self.page:
+            self._page_place()
+
+    def _page_place(self):
+        """Страница инструментов: в широком окне три колонки, в узком — две, а «Регистр» и «Прописью» под ними в ряд."""
+        narrow = self.width() < 1010
+        if narrow == self._page_narrow:
+            return
+        self._page_narrow = narrow
+        g = self._page_grid
+        for cw, _cv, _k in self._page_cols:
+            g.removeWidget(cw)
+        for c in range(3):
+            g.setColumnStretch(c, 0)
+        (c1, _v1, k1), (c2, _v2, k2), (c3, v3, k3) = self._page_cols
+        if narrow:
+            g.addWidget(c1, 0, 0)
+            g.addWidget(c2, 0, 1)
+            g.addWidget(c3, 1, 0, 1, 2)
+            v3.setDirection(QBoxLayout.LeftToRight)
+            g.setColumnStretch(0, 1)
+            g.setColumnStretch(1, 1)
+        else:
+            g.addWidget(c1, 0, 0)
+            g.addWidget(c2, 0, 1)
+            g.addWidget(c3, 0, 2)
+            v3.setDirection(QBoxLayout.TopToBottom)
+            for c, k in enumerate((k1, k2, k3)):
+                g.setColumnStretch(c, k)
 
     def eventFilter(self, obj, ev):
         if ev.type() == QEvent.FocusIn and obj in [ed for ed, _o in self.conv.values()]:
@@ -11883,7 +11993,7 @@ class ToolsPanel(QWidget):
     def take_text(self, text):
         """Положить текст из документа в открытую вкладку. True — если взяли."""
         text = " ".join(str(text or "").replace(" ", " ").split())
-        if not text or len(text) > 300:
+        if not text or len(text) > 300 or self.tabs is None:
             return False
         key = self.TABS[self.tabs.currentIndex()]
         is_num = TOOLS._num(text) is not None
@@ -12194,7 +12304,7 @@ class ToolsPanel(QWidget):
         """Разложить вкладку «Регистр»: список; две панели друг над другом; в широком окне — рядом."""
         if not hasattr(self, "case_actions"):
             return
-        wide = self.case_view == "pair" and self.width() >= 620
+        wide = self.case_view == "pair" and self.width() >= 620 and not self.page
         state = (self.case_view, wide)
         if not force and state == self._case_wide:
             return
@@ -12550,6 +12660,41 @@ class DropZone(QFrame):
     def mouseReleaseEvent(self, e):
         if e.button() == Qt.LeftButton and self.rect().contains(e.position().toPoint()):
             self.clicked.emit()
+
+
+class ToolsPage(QDialog):
+    """Инструменты на весь экран, как соседние разделы: валюты, падежи, регистр, сумма прописью и кВт — сразу все."""
+
+    def __init__(self, win):
+        super().__init__(win)
+        self.win = win
+        self.setWindowFlags(Qt.Widget)
+        self.setObjectName("aipage")
+        root = QVBoxLayout(self)
+        root.setContentsMargins(16, 10, 16, 10)
+        root.setSpacing(10)
+        head = QHBoxLayout()
+        head.setSpacing(10)
+        b_back = QPushButton(" К документу")
+        b_back.setIcon(draw_icon("back", win._icon_color()))
+        b_back.setIconSize(QSize(16, 16))
+        b_back.setCursor(Qt.PointingHandCursor)
+        b_back.setToolTip("Вернуться к странице документа (Esc). Введённое здесь останется.")
+        b_back.clicked.connect(lambda: win.ai_mode(False))
+        win._themed_buttons.append((b_back, "back", False))
+        head.addWidget(b_back)
+        ttl = QLabel("ИНСТРУМЕНТЫ")
+        ttl.setObjectName("paneltitle")
+        head.addWidget(ttl)
+        note = QLabel("всё на одном экране")
+        note.setObjectName("hint")
+        head.addWidget(note, 1)
+        root.addLayout(head)
+        self.panel = ToolsPanel(win, page=True)
+        root.addWidget(self.panel, 1)
+
+    def refresh(self):
+        self.panel.retheme()
 
 
 class ConvertPage(QDialog):
@@ -13359,6 +13504,8 @@ class MainWindow(QMainWindow):
             ch.retint()
         if getattr(self, "_tools_dialog", None) is not None:
             self._tools_dialog.retheme()
+        if getattr(self, "_tools_page", None) is not None:
+            self._tools_page.panel.retheme()
         if getattr(self, "_conv_page", None) is not None:
             self._conv_page.refresh()
         if getattr(self, "_calc_page", None) is not None:
@@ -13713,7 +13860,7 @@ class MainWindow(QMainWindow):
         m.addAction(act("Скопировать текст страницы", self.copy_page_text, "Ctrl+Shift+C",
                         "Скопировать весь текст открытой страницы в буфер обмена", doc=True))
         m.addSeparator()
-        self.act_tools = act("Инструменты…", self.open_tools, "Ctrl+Shift+T",
+        self.act_tools = act("Инструменты…", self.open_tools_page, "Ctrl+Shift+T",
                              "Регистр текста, конвертеры валют, сумма прописью, л.с.⇄кВт", doc=False)
         m.addAction(self.act_tools)
 
@@ -13891,14 +14038,15 @@ class MainWindow(QMainWindow):
         mode("act", "Акт осмотра", self.open_act_page, "Акт осмотра автомобиля  (Ctrl+Shift+K)")
         mode("conv", "Конвертер", self.open_convert_page, "Word в PDF и PDF в Word, без метаданных  (Ctrl+Shift+J)")
         mode("calc", "Расчёт", self.open_calc_page, "Предварительный расчёт таможенных платежей  (Ctrl+Shift+U)")
+        mode("tools", "Инструменты", self.open_tools_page,
+             "Валюты, падежи, регистр, сумма прописью, кВт — на весь экран  (Ctrl+Shift+T)")
         self.btn_ai.setCheckable(True)
         self.btn_ai.setCursor(Qt.PointingHandCursor)
         self.btn_ai.clicked.connect(lambda *_: self._mode_sync())
         sh.addWidget(self.btn_ai)
         self.mode_btn["ai"] = self.btn_ai
         h.addWidget(seg)
-        self.act_tools.setIconText("Инструменты")
-        for a, style in ((self.act_tools, Qt.ToolButtonTextBesideIcon), (self.act_help, Qt.ToolButtonIconOnly),
+        for a, style in ((self.act_help, Qt.ToolButtonIconOnly),
                          (self.theme_action, Qt.ToolButtonIconOnly)):
             b = QToolButton()
             b.setObjectName("corner")
@@ -13910,6 +14058,8 @@ class MainWindow(QMainWindow):
         self._modebar = box                       # ссылка нужна: иначе виджет соберёт сборщик мусора
         self.menuBar().setCornerWidget(box, Qt.TopRightCorner)
         self.center_stack.currentChanged.connect(self._mode_sync)
+        self.center_stack.currentChanged.connect(self._tools_dock_sync)
+        QTimer.singleShot(0, self._tools_tab_default)
         more = QMenu(self.btn_more)
         more.setToolTipsVisible(True)
         for a in (self.act_pdf2word, self.act_convert, self.act_ai_ocr, self.act_meta, None, self.act_settings):
@@ -13925,7 +14075,7 @@ class MainWindow(QMainWindow):
         cur = self.center_stack.currentWidget()
         key = "doc"
         for k, attr in (("word", "_word_page"), ("act", "_act_page"), ("conv", "_conv_page"), ("calc", "_calc_page"),
-                        ("ai", "_ai_center_dlg")):
+                        ("tools", "_tools_page"), ("ai", "_ai_center_dlg")):
             if cur is not None and cur is getattr(self, attr, None):
                 key = k
         for k, b in getattr(self, "mode_btn", {}).items():
@@ -14644,6 +14794,8 @@ class MainWindow(QMainWindow):
             self.setTabPosition(Qt.RightDockWidgetArea, QTabWidget.North)
             dock.hide()
             self.tools_dock = dock
+            dock.visibilityChanged.connect(lambda *_: self._print_title.setVisible(self.tools_dock.isHidden()))
+            dock.visibilityChanged.connect(lambda on: QTimer.singleShot(200, panel._rates_first) if on else None)
             QApplication.instance().focusChanged.connect(self._focus_track)
         return panel
 
@@ -14670,7 +14822,67 @@ class MainWindow(QMainWindow):
         else:
             self.show_tools()
 
-    def tools_close(self):
+    def _tools_tab_default(self):
+        """При запуске справа две вкладки: «Печать» (открыта) и «Инструменты»."""
+        st = settings_load()
+        if not st.get("tools_tab", True) or st.get("tools_detached") or self.tools_visible():
+            return
+        self._tools_make()
+        self.tools_detach(False)
+        self._tools_dock_sync()
+        self.right_dock.raise_()
+
+    def tools_tab_set(self, on):
+        """Держать ли инструменты вкладкой справа; запоминается."""
+        st = settings_load()
+        st["tools_tab"] = bool(on)
+        settings_save(st)
+        if not on:
+            self.tools_close()
+        elif self._tools_side_ok():
+            self.show_tools()
+        else:
+            self._tools_make()
+            self._tools_side = True                  # появится у документа и в редакторе Word
+
+    def _tools_side_ok(self):
+        """Боковая вкладка инструментов уместна у документа и в редакторе Word; в остальных разделах она мешает."""
+        cur = self.center_stack.currentWidget()
+        return self.center_stack.currentIndex() == 0 or (cur is not None and cur is getattr(self, "_word_page", None))
+
+    def _tools_dock_sync(self, *_):
+        d = getattr(self, "tools_dock", None)
+        if d is None or getattr(self._tools_dialog, "_detached", False):
+            return
+        want = bool(getattr(self, "_tools_side", False)) and self._tools_side_ok()
+        if want == (not d.isHidden()):
+            return
+        if want:
+            d.show()
+            if self.center_stack.currentIndex() == 0:
+                QTimer.singleShot(0, self.right_dock.raise_)     # у документа первой открыта «Печать»
+        else:
+            d.hide()
+
+    def open_tools_page(self, *_):
+        """Инструменты на весь экран — как соседние разделы."""
+        pg = getattr(self, "_tools_page", None)
+        if pg is None:
+            pg = ToolsPage(self)
+            self._tools_page = pg
+            self.center_stack.addWidget(pg)
+        else:
+            pg.refresh()
+        if self.center_stack.currentWidget() is pg:
+            return
+        if self.view.pen_active():
+            self.pen_finish(commit=True)
+        self.right_dock.hide()
+        self.left_dock.show()
+        self.center_stack.setCurrentWidget(pg)
+
+    def tools_close(self, remember=False):
+        self._tools_side = False
         w = getattr(self, "_tools_window", None)
         if w is not None:
             w.hide()
@@ -14712,6 +14924,7 @@ class MainWindow(QMainWindow):
             panel.set_detached(False)
             panel.show()
             if show:
+                self._tools_side = True
                 self.tools_dock.show()
                 self.tools_dock.raise_()
 
@@ -14764,14 +14977,23 @@ class MainWindow(QMainWindow):
         if hasattr(self, "tool_strip") and bool(st.get("strip_open", False)) != self._strip_open:
             self._strip_open = bool(st.get("strip_open", False))
             self._strip_apply()
+        want = bool(st.get("tools_tab", True)) and not st.get("tools_detached")
+        d = getattr(self, "tools_dock", None)
+        shown = bool(getattr(self, "_tools_side", False)) and d is not None
+        if want != shown and not st.get("tools_detached") and not getattr(getattr(self, "_tools_dialog", None), "_detached", False):
+            self.tools_tab_set(want)
+            if want and self.center_stack.currentIndex() == 0:
+                self.right_dock.raise_()
         p = getattr(self, "_tools_dialog", None)
         if p is not None:
             p.cmb_src.setCurrentIndex(0 if st.get("rates_source") == "google" else 1)
             p.chk_sel.setChecked(bool(st.get("tools_take_selection", True)))
             if p.case_view != ("pair" if st.get("case_view") == "pair" else "list"):
                 p.set_case_view(st.get("case_view"))
-            if self.tools_visible() and bool(st.get("tools_detached")) != bool(getattr(p, "_detached", False)):
+            if (self.tools_visible() or getattr(self, "_tools_side", False)) \
+                    and bool(st.get("tools_detached")) != bool(getattr(p, "_detached", False)):
                 self.tools_detach(bool(st.get("tools_detached")))
+                self._tools_dock_sync()
         pg = getattr(self, "_act_page", None)
         if pg is not None:
             pg.cmb_lkp.setCurrentIndex(1 if st.get("act_lkp_style") == "print" else 0)
@@ -17239,6 +17461,7 @@ class MainWindow(QMainWindow):
         panel = QWidget()
         lay = QVBoxLayout(panel)
         ptitle = QLabel("ПЕЧАТЬ")
+        self._print_title = ptitle               # при двух вкладках название уже написано на вкладке
         ptitle.setObjectName("paneltitle")
         lay.addWidget(ptitle)
         lay.setContentsMargins(10, 6, 10, 8)
@@ -17273,6 +17496,7 @@ class MainWindow(QMainWindow):
         self.lib_list.setSpacing(2)
         self.lib_list.max_icon = 512            # печати — крупно, во всю клетку
         self.lib_list.min_rows = 1              # один ряд виден всегда; остальное место список берёт сам
+        self.lib_list.fit_rows = 2              # два ряда печатей видны целиком
         self.lib_list.min_floor = 152           # не ниже прежней высоты: панель по-прежнему влезает в 768
         self.lib_list.setWordWrap(False)
         self.lib_list.setMinimumHeight(178)
