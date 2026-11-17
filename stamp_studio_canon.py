@@ -594,7 +594,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.20.7"
+APP_VERSION = "6.20.8"
 EDITION = "canon"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -2187,6 +2187,13 @@ def draw_icon(kind: str, color: str, size: int = 64) -> QIcon:
             x1 = 8 + 4.2 * _m.cos(ang); y1 = 8 + 4.2 * _m.sin(ang)
             x2 = 8 + 5.8 * _m.cos(ang); y2 = 8 + 5.8 * _m.sin(ang)
             line(x1, y1, x2, y2)
+    elif kind == "sort":
+        line(2.6, 4.4, 9.4, 4.4)
+        line(2.6, 8.0, 7.6, 8.0)
+        line(2.6, 11.6, 5.8, 11.6)
+        line(12.0, 3.6, 12.0, 12.2)
+        line(12.0, 12.4, 9.9, 10.2)
+        line(12.0, 12.4, 14.1, 10.2)
     elif kind == "refresh":
         path = QPainterPath()
         path.arcMoveTo(3.0 * u, 3.0 * u, 10.0 * u, 10.0 * u, 50)
@@ -17833,6 +17840,17 @@ class MainWindow(QMainWindow):
         b_del.setToolTip("Удалить выбранный файл в корзину Windows  (Del)\nИз корзины его можно вернуть")
         b_del.clicked.connect(self.trash_selected_file)
         self._themed_toolbtns.append((b_del, "trash"))
+        b_sort = QToolButton()
+        b_sort.setObjectName("ghost")
+        b_sort.setAutoRaise(True)
+        b_sort.setCursor(Qt.PointingHandCursor)
+        b_sort.setFixedSize(24, 24)
+        b_sort.setIconSize(QSize(16, 16))
+        b_sort.clicked.connect(self.files_sort_menu)
+        self._themed_toolbtns.append((b_sort, "sort"))
+        self.b_files_sort = b_sort
+        self._files_sort_tip()
+        cap_row.addWidget(b_sort, 0)
         cap_row.addWidget(b_del, 0)
         cap_row.addWidget(b_ref, 0)
         tl.addLayout(cap_row)
@@ -18144,6 +18162,68 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
+    FILES_SORT = [("name", "По имени (А → Я)"),
+                  ("name_desc", "По имени (Я → А)"),
+                  ("new", "Сначала новые (по дате изменения)"),
+                  ("old", "Сначала старые (по дате изменения)"),
+                  ("type", "По типу файла"),
+                  ("size", "По размеру (крупные сверху)")]
+
+    def files_sort_mode(self) -> str:
+        m = settings_load().get("files_sort", "name")
+        return m if m in dict(self.FILES_SORT) else "name"
+
+    def _files_sort_tip(self):
+        b = getattr(self, "b_files_sort", None)
+        if b is not None:
+            b.setToolTip("Сортировка списка файлов\nСейчас: " + dict(self.FILES_SORT)[self.files_sort_mode()])
+
+    def files_sort_set(self, mode: str):
+        if mode not in dict(self.FILES_SORT):
+            return
+        st = settings_load()
+        st["files_sort"] = mode
+        settings_save(st)
+        self._files_sort_tip()
+        self.reload_files()
+
+    def files_sort_menu(self):
+        menu = QMenu(self)
+        cur = self.files_sort_mode()
+        for key, title in self.FILES_SORT:
+            a = menu.addAction(title)
+            a.setCheckable(True)
+            a.setChecked(key == cur)
+            a.triggered.connect(lambda _=False, k=key: self.files_sort_set(k))
+        b = self.b_files_sort
+        menu.exec(b.mapToGlobal(QPoint(0, b.height() + 2)))
+
+    @staticmethod
+    def _files_sorted(folder: str, names: list, mode: str, dirs: bool = False) -> list:
+        """Имена в нужном порядке. Папки по размеру и типу не сортируются — идут по имени."""
+        low = lambda x: x.lower()
+
+        def stat(n):
+            try:
+                return os.stat(os.path.join(folder, n))
+            except OSError:
+                return None
+
+        if mode in ("new", "old"):
+            st = {n: stat(n) for n in names}
+            mt = lambda n: st[n].st_mtime if st[n] else 0.0
+            return sorted(sorted(names, key=low), key=mt, reverse=(mode == "new"))
+        if mode == "name_desc":
+            return sorted(names, key=low, reverse=True)
+        if dirs or mode == "name":
+            return sorted(names, key=low)
+        if mode == "type":
+            return sorted(names, key=lambda n: (os.path.splitext(n)[1].lower(), n.lower()))
+        if mode == "size":
+            st = {n: stat(n) for n in names}
+            return sorted(sorted(names, key=low), key=lambda n: st[n].st_size if st[n] else 0, reverse=True)
+        return sorted(names, key=low)
+
     def refresh_files(self):
         if not hasattr(self, "file_list"):
             return
@@ -18163,12 +18243,21 @@ class MainWindow(QMainWindow):
                    if os.path.isdir(os.path.join(folder, e)) and not e.startswith(".")]
         exts = (".pdf", ".png", ".jpg", ".jpeg") + AI.OFFICE_EXT
         files = [e for e in entries if e.lower().endswith(exts) and not e.startswith("~$")]
+        mode = self.files_sort_mode()
+        subdirs = self._files_sorted(folder, subdirs, mode, dirs=True)
+        files = self._files_sorted(folder, files, mode)
         dark = getattr(self, "theme", "light") == "dark"
         c_pdf = QColor("#F08A99" if dark else "#8E1B2E")       # PDF — бордовым
         c_doc = QColor("#7DB1FF" if dark else "#1B55B8")       # Word — синим
         for d in subdirs:
             it = QListWidgetItem(draw_icon("folder", col), d)
-            it.setToolTip(d)
+            tip = d
+            try:
+                tip += "\nизменена " + datetime.datetime.fromtimestamp(
+                    os.path.getmtime(os.path.join(folder, d))).strftime("%d.%m.%Y %H:%M")
+            except (OSError, ValueError, OverflowError):
+                pass
+            it.setToolTip(tip)
             it.setData(Qt.UserRole, ("dir", os.path.join(folder, d)))
             self.file_list.addItem(it)
         for f in files:
@@ -18185,6 +18274,11 @@ class MainWindow(QMainWindow):
             full = os.path.join(folder, f)
             try:
                 tip = f"{f}\n{human_size(os.path.getsize(full))}"
+                try:
+                    tip += "  ·  изменён " + datetime.datetime.fromtimestamp(
+                        os.path.getmtime(full)).strftime("%d.%m.%Y %H:%M")
+                except (ValueError, OverflowError):
+                    pass
                 if is_doc:
                     tip += "\nWord: откроется копия для просмотра и проверки ИИ, сам файл не меняется"
                 it.setToolTip(tip)
