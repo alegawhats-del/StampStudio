@@ -593,7 +593,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.17.5"
+APP_VERSION = "6.18.0"
 EDITION = "canon"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -749,6 +749,59 @@ def client_key(folder):
 
 def cloud_uri():
     return CLOUD.unprotect(settings_load().get("cloud_uri", ""))
+
+
+# ---------------------------------------------------------------- шаблоны документов Word
+TPL_DIR = os.path.join(LIB_DIR, "templates")
+
+
+def tpl_list() -> list:
+    """[(название, путь)] — шаблоны Word, добавленные в программу."""
+    try:
+        names = [n for n in os.listdir(TPL_DIR) if n.lower().endswith(".docx") and not n.startswith("~$")]
+    except OSError:
+        return []
+    return [(os.path.splitext(n)[0], os.path.join(TPL_DIR, n)) for n in sorted(names, key=str.lower)]
+
+
+def tpl_is(path) -> bool:
+    try:
+        return os.path.normcase(os.path.abspath(os.path.dirname(path))) == os.path.normcase(os.path.abspath(TPL_DIR))
+    except Exception:
+        return False
+
+
+def tpl_name_ok(name: str) -> str:
+    return re.sub(r'[\\/:*?"<>|]+', " ", str(name or "")).strip().strip(".")[:80]
+
+
+def tpl_add(src: str, name: str = "") -> str:
+    """Положить файл в шаблоны (копией). Возвращает путь шаблона."""
+    os.makedirs(TPL_DIR, exist_ok=True)
+    base = tpl_name_ok(name or os.path.splitext(os.path.basename(src))[0]) or "Шаблон"
+    dst, k = os.path.join(TPL_DIR, base + ".docx"), 2
+    while os.path.exists(dst):
+        dst = os.path.join(TPL_DIR, f"{base} ({k}).docx")
+        k += 1
+    shutil.copy2(src, dst)
+    return dst
+
+
+def tpl_rename(path: str, name: str) -> str:
+    name = tpl_name_ok(name)
+    dst = os.path.join(TPL_DIR, name + ".docx")
+    if not name or os.path.normcase(dst) == os.path.normcase(path):
+        return path
+    if os.path.exists(dst):
+        raise FileExistsError(name)
+    os.rename(path, dst)
+    st = settings_load()                                  # поля и счётчик номеров привязаны к имени файла
+    old_id, new_id = os.path.basename(path).lower(), os.path.basename(dst).lower()
+    for part in ("word_marks", "doc_counters"):
+        if old_id in (st.get(part) or {}):
+            st[part][new_id] = st[part].pop(old_id)
+    settings_save(st)
+    return dst
 
 
 STAMP_CATEGORIES = ["Без категории", "Печати компаний", "Штампы", "Подписи",
@@ -9049,6 +9102,14 @@ class WordFillPage(QDialog):
         b_back.clicked.connect(lambda: win.ai_mode(False))
         win._themed_buttons.append((b_back, "back", False))
         head.addWidget(b_back)
+        self.b_tpl = QPushButton(" Шаблоны")
+        self.b_tpl.setIcon(draw_icon("datalist", win._icon_color()))
+        self.b_tpl.setIconSize(QSize(16, 16))
+        self.b_tpl.setCursor(Qt.PointingHandCursor)
+        self.b_tpl.setToolTip("Закрыть этот документ и вернуться к списку шаблонов")
+        self.b_tpl.clicked.connect(self.to_templates)
+        win._themed_buttons.append((self.b_tpl, "datalist", False))
+        head.addWidget(self.b_tpl)
         ttl = QLabel("РЕДАКТОР WORD")
         ttl.setObjectName("paneltitle")
         head.addWidget(ttl)
@@ -9161,6 +9222,40 @@ class WordFillPage(QDialog):
         v = QVBoxLayout(w)
         v.setContentsMargins(0, 0, 0, 0)
         v.setSpacing(10)
+        th = QHBoxLayout()
+        th.setSpacing(8)
+        cap = QLabel("ШАБЛОНЫ")
+        cap.setObjectName("paneltitle")
+        th.addWidget(cap)
+        self.lbl_tpl = QLabel("")
+        self.lbl_tpl.setObjectName("hint")
+        th.addWidget(self.lbl_tpl, 1)
+        self.b_tpl_add = QPushButton(" Добавить шаблон…")
+        self.b_tpl_add.setIcon(draw_icon("plus", self.win._icon_color()))
+        self.b_tpl_add.setIconSize(QSize(14, 14))
+        self.b_tpl_add.setCursor(Qt.PointingHandCursor)
+        self.b_tpl_add.setToolTip("Файл Word копируется в программу и остаётся в этом списке.\n"
+                                  "То, что меняется от документа к документу, выделите в файле жёлтым — это станет полями.")
+        self.b_tpl_add.clicked.connect(self.tpl_add_dialog)
+        self.win._themed_buttons.append((self.b_tpl_add, "plus", False))
+        th.addWidget(self.b_tpl_add)
+        v.addLayout(th)
+        self.lst_tpl = QListWidget()
+        self.lst_tpl.setObjectName("tpllist")
+        self.lst_tpl.setViewMode(QListWidget.IconMode)
+        self.lst_tpl.setResizeMode(QListWidget.Adjust)
+        self.lst_tpl.setMovement(QListWidget.Static)
+        self.lst_tpl.setWrapping(True)
+        self.lst_tpl.setSpacing(6)
+        self.lst_tpl.setIconSize(QSize(34, 34))
+        self.lst_tpl.setGridSize(QSize(148, 92))
+        self.lst_tpl.setWordWrap(True)
+        self.lst_tpl.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.lst_tpl.setToolTip("Щелчок — открыть чистый бланк. Правая кнопка — переименовать, заменить файл, удалить")
+        self.lst_tpl.itemClicked.connect(lambda it: self.win.word_fill(it.data(Qt.UserRole)))
+        self.lst_tpl.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.lst_tpl.customContextMenuRequested.connect(self._tpl_menu)
+        v.addWidget(self.lst_tpl, 3)
         self.zone = DropZone()
         self.zone.exts = (".docx",)
         zl = QVBoxLayout(self.zone)
@@ -9197,6 +9292,7 @@ class WordFillPage(QDialog):
         self.zone.dropped.connect(lambda files: self.win.word_fill(files[0]))
         self.zone.clicked.connect(self.pick)
         v.addWidget(self.zone, 2)
+        self.zone.setMinimumHeight(128)
         self.lbl_here = QLabel("Документы Word в открытой папке:")
         self.lbl_here.setObjectName("plain")
         v.addWidget(self.lbl_here)
@@ -9205,6 +9301,97 @@ class WordFillPage(QDialog):
         self.lst_here.itemClicked.connect(lambda it: self.win.word_fill(it.data(Qt.UserRole)))
         v.addWidget(self.lst_here, 3)
         return w
+
+    # ---- шаблоны
+    def tpl_reload(self):
+        self.lst_tpl.clear()
+        items = tpl_list()
+        ic = draw_icon("word", self.win._icon_color())
+        for name, path in items:
+            it = QListWidgetItem(ic, name)
+            it.setData(Qt.UserRole, path)
+            it.setTextAlignment(Qt.AlignHCenter | Qt.AlignTop)
+            it.setToolTip(name)
+            self.lst_tpl.addItem(it)
+        self.lst_tpl.setVisible(bool(items))
+        self.lbl_tpl.setText("щелчок — открыть чистый бланк; готовый файл сохраняется в папку клиента" if items else
+                             "пока пусто — добавьте файл Word; то, что в нём меняется, выделите жёлтым")
+
+    def tpl_add_dialog(self):
+        paths, _ = QFileDialog.getOpenFileNames(self, "Файлы Word — в шаблоны", self.win.current_dir(),
+                                                "Документ Word (*.docx)")
+        n = 0
+        for path in paths:
+            try:
+                SW.WordDoc(path)                           # файл читается — значит, годится
+                tpl_add(path)
+                n += 1
+            except Exception as e:
+                QMessageBox.warning(self, "Шаблоны", f"Не удалось добавить «{os.path.basename(path)}»:\n{e}")
+        if n:
+            self.tpl_reload()
+            self.win.show_toast(f"✔  Шаблонов добавлено: {n}")
+
+    def _tpl_menu(self, pos):
+        it = self.lst_tpl.itemAt(pos)
+        if it is None:
+            return
+        path = it.data(Qt.UserRole)
+        col = self.win._icon_color()
+        m = QMenu(self)
+        m.addAction(draw_icon("word", col), "Открыть", lambda: self.win.word_fill(path))
+        m.addAction(draw_icon("pen", col), "Переименовать…", lambda: self.tpl_rename_dialog(path))
+        m.addAction(draw_icon("refresh", col), "Заменить файлом…", lambda: self.tpl_replace_dialog(path))
+        m.addSeparator()
+        m.addAction(draw_icon("trash", col), "Удалить из шаблонов", lambda: self.tpl_delete(path))
+        self._menu_show(m, self.lst_tpl.viewport().mapToGlobal(pos))
+
+    def tpl_rename_dialog(self, path):
+        old = os.path.splitext(os.path.basename(path))[0]
+        name, ok = QInputDialog.getText(self, "Шаблон", "Название шаблона:", text=old)
+        if not ok or not tpl_name_ok(name) or tpl_name_ok(name) == old:
+            return
+        try:
+            tpl_rename(path, name)
+        except FileExistsError:
+            QMessageBox.information(self, "Шаблон", "Шаблон с таким названием уже есть.")
+        except OSError as e:
+            QMessageBox.warning(self, "Шаблон", f"Не удалось переименовать:\n{e}")
+        self.tpl_reload()
+
+    def tpl_replace_dialog(self, path):
+        src, _ = QFileDialog.getOpenFileName(self, "Новый файл для этого шаблона", self.win.current_dir(),
+                                             "Документ Word (*.docx)")
+        if not src:
+            return
+        try:
+            SW.WordDoc(src)
+            shutil.copy2(src, path)
+        except Exception as e:
+            QMessageBox.warning(self, "Шаблон", f"Не удалось заменить файл:\n{e}")
+            return
+        self.win.show_toast("✔  Файл шаблона заменён — название, поля и счётчик номеров остались")
+
+    def tpl_delete(self, path):
+        name = os.path.splitext(os.path.basename(path))[0]
+        if QMessageBox.question(self, "Шаблон", f"Удалить «{name}» из шаблонов?\nУже сохранённые документы не затрагиваются.",
+                                QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+            return
+        try:
+            os.remove(path)
+        except OSError as e:
+            QMessageBox.warning(self, "Шаблон", f"Не удалось удалить:\n{e}")
+        self.tpl_reload()
+
+    def to_templates(self):
+        """Закрыть документ и вернуться к списку шаблонов."""
+        if self.wd is not None and self.view.changed_paragraphs():
+            if QMessageBox.question(self, "Редактор Word", "Документ не сохранён. Закрыть его без сохранения?",
+                                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+                return
+        self.wd = None
+        self.path = ""
+        self.show_empty(True)
 
     def pick(self):
         path, _ = QFileDialog.getOpenFileName(self, "Выберите документ Word для заполнения",
@@ -9217,9 +9404,10 @@ class WordFillPage(QDialog):
         on = bool(on)
         self.empty.setVisible(on)
         self.body_w.setVisible(not on)
-        for wdg in (self.b_save, self.lbl_client, self.b_card, self.b_dir):
+        for wdg in (self.b_save, self.lbl_client, self.b_card, self.b_dir, self.b_tpl):
             wdg.setVisible(not on)
         if on:
+            self.tpl_reload()
             self.zone._paint()
             self.lbl_doc.setText("")
             self.lbl_info.setText("Выберите документ — или щёлкните по нему в списке файлов слева и нажмите «Редактор».")
@@ -9299,6 +9487,14 @@ class WordFillPage(QDialog):
             return None
         if row["field"] is not None:
             return row["field"].render(value)
+        hl = row.get("hl")
+        if hl == "date_words":
+            return SW.date_words(value) or value
+        if hl == "num":
+            n = SW.parse_number(value)
+            if n:
+                sep = "\u00a0" if "\u00a0" in row["sample"] else (" " if " " in row["sample"] else "")
+                return SW.format_number(n[0], sep) if sep else str(n[0])
         return value
 
     def _write(self, row, value):
@@ -9394,6 +9590,9 @@ class WordFillPage(QDialog):
                 rows.append(self._new_row(f"{title}: «{m['text'][:40]}»" + (f" ×{len(spans)}" if len(spans) > 1 else ""),
                                           m.get("key", ""), "mark", spans, mark=m))
                 taken += spans
+        rows += self._highlight_rows(taken)
+        if self.wd.highlights:                           # в шаблоне поля помечены жёлтым — догадки о подписях не нужны
+            rows = [r for r in rows if r["kind"] not in ("tail", "cell")]
         rows.sort(key=lambda r: (bool(r["current"]), r["cursors"][0].selectionStart()))
         # номер этого документа: первое по тексту поле-номер (заголовок «ДОГОВОР № …», «Счёт № …»)
         nums = [r for r in rows if r["key"] == "doc_no" or (r["kind"] == "dummy" and r["dummy"] == "Номер договора")]
@@ -9403,11 +9602,59 @@ class WordFillPage(QDialog):
             if r["key"] == "doc_no" and r is not own and r["kind"] == "dummy":
                 r["twin"] = True                         # тот же номер в другом написании («000-2026»)
         self.rows = rows
-        self.client_dir = os.path.dirname(path)
+        self.client_dir = self.win.current_dir() if tpl_is(path) else os.path.dirname(path)   # шаблон — в папку клиента
         self._build_panel()
         self._apply_card()
         self._paint_marks()
         self.lbl_info.setText(self._home)
+
+    def _highlight_rows(self, taken):
+        """Поля из жёлтого выделения: одинаковый текст в нескольких местах — одно поле."""
+        groups = {}
+        for h in self.wd.highlights:
+            a, b = self.view.pos_of(h["par"], h["start"]), self.view.pos_of(h["par"], h["end"])
+            if a is None or b is None or any(x < b and a < y for x, y in taken):
+                continue
+            groups.setdefault(h["text"], []).append((h, (a, b)))
+        rows = []
+        for text, items in groups.items():
+            hs = [h for h, _s in items]
+            labels = sorted((h["label"] for h in hs if h["label"]), key=len)
+            before = hs[0]["before"]
+            low = before.lower()
+            key = SW.guess_key(before) or next((k for k in (SW.guess_label(h["label"]) for h in hs) if k), "")
+            kind = ""
+            if re.search(r"сч[её]т\w*\s*№\s*$", low):
+                key = "doc_no"
+            elif re.search(r"автомобил\w*\s*\(\s*$", low) or re.search(r"марка\W*модель", (labels[0] if labels else "").lower()):
+                key = "car"
+            elif re.search(r"покупатель|заказчик", (labels[0] if labels else "").lower()) and text.count(",") >= 2:
+                key = "buyer_line"
+            if re.search(r"договор\w*\s*№[^№]{0,40}\bот\s*$", low):
+                key = "contract_date"
+            if re.fullmatch(r"\d{1,2} [а-яё]+ \d{4}", text.lower()):
+                kind = "date_words"
+            elif re.fullmatch(r"\d{2}\.\d{2}\.\d{2,4}", text):
+                kind = "date"
+            elif re.fullmatch(r"\d{1,3}(?:[ \u00a0]\d{3})+|\d{4,9}", text) and not re.search(r"vin|инн|кпп|бик|сч\.|паспорт|№\s*$", (low + " " + " ".join(labels)).lower()):
+                kind = "num"
+            title = SW.KEY_TITLES.get(key) if key and key != "doc_no" else None
+            title = title or (labels[0] if labels else "") or "Поле"
+            title = title[:1].upper() + title[1:]
+            row = self._new_row(f"{title}: «{text[:40]}»" + (f" ×{len(items)}" if len(items) > 1 else ""),
+                                key, "hl", [s_ for _h, s_ in items])
+            row["hl"], row["sample"] = kind, text
+            rows.append(row)
+        for r in rows:                                   # «сумма прописью» считается из суммы цифрами
+            if r["hl"] != "num":
+                continue
+            n = SW.parse_number(r["sample"])
+            words = SW.number_words(n[0]).lower() if n else ""
+            for w_ in rows:
+                if w_ is not r and words and w_["sample"].lower().startswith(words):
+                    w_["hl"], w_["words_of"] = "words", r
+                    w_["label"] = "Сумма прописью (считается сама)"
+        return rows
 
     # ---- карточка клиента и номер документа
     def _counter(self):
@@ -9431,6 +9678,9 @@ class WordFillPage(QDialog):
             d_, by_ = split_issued(data["passport_issued"])
             data.setdefault("passport_date", d_)
             data.setdefault("passport_by", by_)
+        if data.get("fio"):                                # «ФИО, паспорт, адрес» одной строкой — для счёта
+            data.setdefault("buyer_line", ", ".join(x for x in (data.get("fio"), re.sub(r"\s+", "", data.get("passport", "")),
+                                                                 data.get("address")) if x))
         who = data.get("fio_short") or data.get("fio") or ""
         self.lbl_client.setText(("Клиент: " + who) if who else "Клиент: карточки нет")
         n = 0
@@ -9515,6 +9765,19 @@ class WordFillPage(QDialog):
                 tot["edit"].setText(text)
                 tot["auto"] = True
                 self._write(tot, text)
+        for r in self.rows:
+            src = r.get("words_of")
+            if src is None or r["edit"] is None or src["edit"] is None or not (not r["edit"].text().strip() or r["auto"]):
+                continue
+            n = SW.parse_number(src["edit"].text())
+            text = SW.money_words(n[0], r["sample"]) if n else ""
+            if text and n[1]:
+                text = re.sub(r"\b00(\s+копе)", f"{n[1]:02d}\\1", text)
+            if r["edit"].text() != text:
+                r["edit"].setText(text)
+                r["edit"].setCursorPosition(0)
+                r["auto"] = True
+                self._write(r, text)
         vals = self.client_values()
         combo = " / ".join(x for x in (vals.get("engine_volume", ""), vals.get("engine_type", "")) if x)
         if combo:
@@ -9530,7 +9793,8 @@ class WordFillPage(QDialog):
         v = QVBoxLayout(holder)
         v.setContentsMargins(0, 0, 8, 0)
         v.setSpacing(2)
-        tips = {"date": "ДД.ММ.ГГГГ", "sum": "число — пропись подставится; или словом: Бесплатно"}
+        tips = {"date": "ДД.ММ.ГГГГ", "sum": "число — пропись подставится; или словом: Бесплатно",
+                "hl": "впишите своё — образец в документе заменится"}
         sep_done = False
         for row in self.rows:
             if row["current"] and not sep_done:
@@ -9575,7 +9839,8 @@ class WordFillPage(QDialog):
             ed = QLineEdit()
             ed.setMinimumHeight(28)
             ed.setTextMargins(1, 0, 7, 0)                 # длинный текст не упирается в правую рамку
-            is_date = row["kind"] == "date" or (row["kind"] == "dummy" and row.get("dummy") == "Дата")
+            is_date = row["kind"] == "date" or (row["kind"] == "dummy" and row.get("dummy") == "Дата") \
+                or row.get("hl") in ("date", "date_words")
             ed.setPlaceholderText("первый номер впишите сами — дальше пойдёт сам" if row.get("docnum") else
                                   row.get("hint") or ("ДД.ММ.ГГГГ — набирайте цифры, точки встанут сами" if is_date else
                                                       tips.get(row["kind"], SW.KEY_TITLES.get(row["key"], ""))))
@@ -14659,7 +14924,8 @@ class MainWindow(QMainWindow):
         if not path:
             cur = str(self.doc_path or "")
             pg = getattr(self, "_word_page", None)
-            if cur.endswith(" (из Word)") and cur[:-len(" (из Word)")].lower().endswith(".docx"):
+            if cur.endswith(" (из Word)") and cur[:-len(" (из Word)")].lower().endswith(".docx") \
+                    and not tpl_is(cur[:-len(" (из Word)")]):       # шаблон сохранён — дальше снова список шаблонов
                 path = cur[:-len(" (из Word)")]
             elif pg is not None and pg.wd is not None and pg.path:
                 path = pg.path                                    # вернуться к документу, с которым работали

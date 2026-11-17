@@ -17,6 +17,37 @@ W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 XML = "http://www.w3.org/XML/1998/namespace"
 T, P, R, TC, TR, TBL, RPR, PPR = (f"{{{W}}}{n}" for n in ("t", "p", "r", "tc", "tr", "tbl", "rPr", "pPr"))
 
+HL, SHD, VAL = f"{{{W}}}highlight", f"{{{W}}}shd", f"{{{W}}}val"
+
+
+def _yellowish(fill):
+    """Заливка текста жёлтого тона (её тоже используют как выделение)."""
+    m = re.fullmatch(r"([0-9a-fA-F]{2})([0-9a-fA-F]{2})([0-9a-fA-F]{2})", str(fill or ""))
+    if not m:
+        return False
+    r, g, b = (int(x, 16) for x in m.groups())
+    return r >= 200 and g >= 190 and b <= 170
+
+
+def date_words(value):
+    """«17.11.2026» → «17 ноября 2026»; None, если это не дата."""
+    d = parse_date(value)
+    return f"{d[0]:02d} {MONTHS[d[1] - 1]} {d[2]}" if d else None
+
+
+def money_words(whole, sample=""):
+    """Сумма прописью по образцу: «Девятьсот шесть тысяч пятьсот рублей 00 копеек» → те же слова для другой суммы."""
+    words = number_words(int(whole), capital=not sample or sample[:1].isupper())
+    m = re.search(r"\s(?:(российск|белорусск)\w*\s+)?рубл\w*(.*)$", sample)
+    if not m:
+        return words
+    adj = {"российск": ("российский", "российских", "российских"), "белорусск": ("белорусский", "белорусских", "белорусских")}
+    out = words + " "
+    if m.group(1):
+        out += _plural(int(whole), adj[m.group(1).lower()]) + " "
+    return out + _plural(int(whole), ("рубль", "рубля", "рублей")) + m.group(2)
+
+
 MONTHS = ("января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября",
           "октября", "ноября", "декабря")
 
@@ -201,6 +232,7 @@ class WordDoc:
         self._texts = [self._ts(p) for p in self.pars]
         self.fields = self._find_fields()
         self.dummies = self._find_dummies()
+        self.highlights = self._find_highlights()
 
     # ---- текст абзаца: только его собственные w:t (вложенные надписи считаются отдельными абзацами)
     @staticmethod
@@ -324,6 +356,78 @@ class WordDoc:
                     f.label = (prev[:48] + ("…" if len(prev) > 48 else "")) + "  →  " + f.label
         return out
 
+    # ---- жёлтое выделение: так в шаблоне помечают то, что меняется от документа к документу
+    @staticmethod
+    def _marked(t):
+        r = t.getparent()
+        while r is not None and r.tag != R:
+            r = r.getparent()
+        rpr = r.find(RPR) if r is not None else None
+        if rpr is None:
+            return False
+        hl = rpr.find(HL)
+        if hl is not None and (hl.get(VAL) or "").lower() not in ("", "none", "white", "black"):
+            return True
+        shd = rpr.find(SHD)
+        return shd is not None and _yellowish(shd.get(f"{{{W}}}fill"))
+
+    def _find_highlights(self):
+        """[{par, start, end, text, label, ctx, before}] — выделенные цветом куски, по порядку."""
+        out = []
+        for i, ts in enumerate(self._texts):
+            if not ts or not any(self._marked(t) for t in ts):
+                continue
+            text, pos, spans = self.text(i), 0, []
+            for t in ts:
+                n = len(t.text or "")
+                if n and self._marked(t):
+                    if spans and spans[-1][1] == pos:
+                        spans[-1][1] = pos + n
+                    else:
+                        spans.append([pos, pos + n])
+                pos += n
+            ctx = self._cell_ctx(self.pars[i])[0]
+            near = ""                                  # подпись — ближайшая слева ячейка с текстом
+            tc = self.pars[i].getparent()
+            while tc is not None and tc.tag != TC:
+                tc = tc.getparent()
+            if tc is not None:
+                for c in reversed([c for c in tc.getparent() if c.tag == TC][:[c for c in tc.getparent() if c.tag == TC].index(tc)]):
+                    near = re.sub(r"\s+", " ", "".join(t.text or "" for t in c.iter(T))).strip()
+                    if re.search(r"[A-Za-zА-Яа-яЁё]{2,}", near):
+                        break
+                    near = ""
+            for a, b in spans:
+                while a < b and text[a] in " \t\u00a0\n":
+                    a += 1
+                while b > a and text[b - 1] in " \t\u00a0\n":
+                    b -= 1
+                if b <= a:
+                    continue
+                before = re.sub(r"\s+", " ", text[:a][-60:]).strip()
+                label = before if len(before) >= 3 else re.sub(r"^\d+\.?\s+", "", near)
+                label = re.sub(r"[\s:(«\"№]+$", "", label)[-46:].strip()
+                out.append({"par": i, "start": a, "end": b, "text": text[a:b], "label": label,
+                            "ctx": ctx, "before": text[:a][-70:]})
+        return out
+
+    def strip_highlights(self):
+        """Готовому документу выделение не нужно: убрать цветной фон у всего текста."""
+        n = 0
+        for el in list(self.doc.element.body.iter(HL)):
+            if (el.get(VAL) or "").lower() not in ("", "none"):
+                el.getparent().remove(el)
+                n += 1
+        for el in list(self.doc.element.body.iter(SHD)):
+            if el.getparent().tag == RPR and _yellowish(el.get(f"{{{W}}}fill")):
+                el.getparent().remove(el)
+                n += 1
+        for _title, zone, _ids in self.zones:
+            for el in list(zone.iter(HL)):
+                el.getparent().remove(el)
+                n += 1
+        return n
+
     def _find_dummies(self):
         """[(название, текст-образец, сколько раз встречается)] — в порядке появления."""
         full = [self.text(i) for i in range(len(self.pars))]
@@ -422,8 +526,10 @@ class WordDoc:
                     done += 1
         return done
 
-    def save(self, out_path, values=None, replaces=None, edits=None):
+    def save(self, out_path, values=None, replaces=None, edits=None, keep_highlight=False):
         n = self.apply(values, replaces, edits)
+        if not keep_highlight:
+            self.strip_highlights()
         self.doc.save(out_path)
         return n
 
