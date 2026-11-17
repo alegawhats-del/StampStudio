@@ -593,7 +593,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.18.1"
+APP_VERSION = "6.18.2"
 EDITION = "canon"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -628,7 +628,7 @@ def settings_load() -> dict:
 
 
 SETTINGS_CHANGED = []            # кому сообщить, что изменились настройки, которые уходят в облако
-_SYNCED_KEYS = ("word_marks", "pen_presets", "name_templates", "doc_counters", "sheet_templates", "act_masters", "act_dict")
+_SYNCED_KEYS = ("tpl_fixed", "word_marks", "pen_presets", "name_templates", "doc_counters", "sheet_templates", "act_masters", "act_dict")
 _synced_seen = [None]
 
 
@@ -762,6 +762,35 @@ def tpl_list() -> list:
     except OSError:
         return []
     return [(os.path.splitext(n)[0], os.path.join(TPL_DIR, n)) for n in sorted(names, key=str.lower)]
+
+
+def tpl_seed() -> int:
+    """Положить в шаблоны те, что идут с программой. Каждый — один раз: удалённый шаблон сам не возвращается."""
+    try:
+        import base64
+        import stamp_tpl_kit
+    except Exception:
+        return 0
+    st = settings_load()
+    done, n = list(st.get("tpl_seeded") or []), 0
+    for name, *chunks in stamp_tpl_kit.TEMPLATES:
+        if name in done:
+            continue
+        try:
+            os.makedirs(TPL_DIR, exist_ok=True)
+            dst = os.path.join(TPL_DIR, name + ".docx")
+            if not os.path.exists(dst) or not os.path.getsize(dst):
+                data = base64.b64decode("".join(chunks))
+                with open(dst, "wb") as f:
+                    f.write(data)
+                n += 1
+            done.append(name)
+        except Exception:
+            pass
+    if done != list(st.get("tpl_seeded") or []):
+        st["tpl_seeded"] = done
+        settings_save(st)
+    return n
 
 
 def tpl_is(path) -> bool:
@@ -9305,6 +9334,7 @@ class WordFillPage(QDialog):
     # ---- шаблоны
     def tpl_reload(self):
         self.lst_tpl.clear()
+        tpl_seed()
         items = tpl_list()
         ic = draw_icon("word", self.win._icon_color())
         for name, path in items:
@@ -9604,6 +9634,9 @@ class WordFillPage(QDialog):
         self.rows = rows
         self.client_dir = self.win.current_dir() if tpl_is(path) else os.path.dirname(path)   # шаблон — в папку клиента
         self._build_panel()
+        for r in rows:                                   # запомненные постоянные реквизиты — сразу в документ
+            if r.get("fixed") and r["current"] and r["edit"] is not None:
+                self._write(r, r["current"])
         self._apply_card()
         self._paint_marks()
         self.lbl_info.setText(self._home)
@@ -9615,9 +9648,10 @@ class WordFillPage(QDialog):
             a, b = self.view.pos_of(h["par"], h["start"]), self.view.pos_of(h["par"], h["end"])
             if a is None or b is None or any(x < b and a < y for x, y in taken):
                 continue
-            groups.setdefault(h["text"], []).append((h, (a, b)))
+            groups.setdefault((h["text"], h.get("fixed", False)), []).append((h, (a, b)))
         rows = []
-        for text, items in groups.items():
+        memo = (settings_load().get("tpl_fixed") or {}).get(self._tpl_id(), {})
+        for (text, fixed), items in groups.items():
             hs = [h for h, _s in items]
             labels = sorted((h["label"] for h in hs if h["label"]), key=len)
             if hs[0]["label"] and len(hs[0]["label"]) <= 26:      # подпись первого места понятнее, если она короткая
@@ -9646,6 +9680,12 @@ class WordFillPage(QDialog):
             row = self._new_row(f"{title}: «{text[:40]}»" + (f" ×{len(items)}" if len(items) > 1 else ""),
                                 key, "hl", [s_ for _h, s_ in items])
             row["hl"], row["sample"] = kind, text
+            if fixed:                                    # постоянный реквизит: вписали один раз — дальше подставляется сам
+                row["fixed"] = True
+                row["key"] = ""
+                row["hint"] = "вписывается один раз — программа запомнит"
+                row["label"] = row["label"].split(": «")[0] + " · постоянное"
+                row["current"] = memo.get(text, "")
             rows.append(row)
         for r in rows:                                   # «сумма прописью» считается из суммы цифрами
             if r["hl"] != "num":
@@ -10189,6 +10229,12 @@ class WordFillPage(QDialog):
         except Exception as e:
             QMessageBox.critical(self, "Редактор Word", f"Не удалось сохранить:\n{e}")
             return
+        fixed = {r["sample"]: r["edit"].text().strip() for r in self.rows
+                 if r.get("fixed") and r["edit"] is not None and r["edit"].text().strip()}
+        if fixed:                                        # постоянные реквизиты шаблона — запомнить на будущее
+            st = settings_load()
+            st.setdefault("tpl_fixed", {}).setdefault(self._tpl_id(), {}).update(fixed)
+            settings_save(st)
         # номер документа занят только теперь, когда файл записан
         own = next((r for r in self.rows if r.get("docnum") and r["edit"] is not None), None)
         num = own["edit"].text().strip() if own is not None else ""
@@ -13607,7 +13653,47 @@ class WindowChrome(QObject):
             # список сам выставляет себе форму при открытии — возвращаем скругление сразу после показа
             if obj.isWidgetType() and obj.isWindow() and not isinstance(obj, QDialog) and obj.property("chrome"):
                 QTimer.singleShot(0, lambda o=obj: self.shape(o, 8))
+            if obj.isWidgetType() and obj.inherits("QComboBoxPrivateContainer"):
+                self.widen_popup(obj)
         return False
+
+    @staticmethod
+    def widen_popup(pop):
+        """Выпадающий список не уже своих строк: длинные названия видны целиком, без «…»."""
+        try:
+            combo = pop.parent()
+            if not isinstance(combo, QComboBox) or not combo.count():
+                return
+            view = combo.view()
+            view.setTextElideMode(Qt.ElideNone)
+            fm = view.fontMetrics()
+            icon = combo.iconSize().width() + 6 if any(not combo.itemIcon(i).isNull() for i in range(combo.count())) else 0
+            need = max(fm.horizontalAdvance(combo.itemText(i)) for i in range(combo.count())) + icon + 44
+            if combo.count() > combo.maxVisibleItems():
+                need += 14                                  # место под полосу прокрутки
+            scr = combo.screen().availableGeometry() if combo.screen() is not None else None
+            if scr is not None:
+                need = min(need, scr.width() - 16)
+            if need <= pop.width():
+                return
+            view.setMinimumWidth(need - 2)                  # в следующий раз список откроется сразу нужной ширины
+
+            def fit():
+                try:
+                    g = pop.geometry()
+                    if g.width() < need:
+                        g.setWidth(need)
+                    if scr is not None and g.right() > scr.right() - 4:
+                        g.moveRight(scr.right() - 4)
+                    pop.setGeometry(g)
+                    if pop.property("chrome"):
+                        WindowChrome.shape(pop, 8)
+                except RuntimeError:
+                    pass
+            fit()
+            QTimer.singleShot(0, fit)
+        except Exception:
+            pass
 
     @staticmethod
     def shape(widget, radius):

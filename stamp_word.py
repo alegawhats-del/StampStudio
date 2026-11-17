@@ -364,12 +364,12 @@ class WordDoc:
             r = r.getparent()
         rpr = r.find(RPR) if r is not None else None
         if rpr is None:
-            return False
+            return ""
         hl = rpr.find(HL)
         if hl is not None and (hl.get(VAL) or "").lower() not in ("", "none", "white", "black"):
-            return True
+            return "yellow" if "yellow" in hl.get(VAL).lower() else "fixed"   # зелёным и др. — постоянные реквизиты
         shd = rpr.find(SHD)
-        return shd is not None and _yellowish(shd.get(f"{{{W}}}fill"))
+        return "yellow" if shd is not None and _yellowish(shd.get(f"{{{W}}}fill")) else ""
 
     def _find_highlights(self):
         """[{par, start, end, text, label, ctx, before}] — выделенные цветом куски, по порядку."""
@@ -380,11 +380,12 @@ class WordDoc:
             text, pos, spans = self.text(i), 0, []
             for t in ts:
                 n = len(t.text or "")
-                if n and self._marked(t):
-                    if spans and spans[-1][1] == pos:
+                col = self._marked(t) if n else ""
+                if col:
+                    if spans and spans[-1][1] == pos and spans[-1][2] == col:
                         spans[-1][1] = pos + n
                     else:
-                        spans.append([pos, pos + n])
+                        spans.append([pos, pos + n, col])
                 pos += n
             ctx = self._cell_ctx(self.pars[i])[0]
             near = ""                                  # подпись — ближайшая слева ячейка с текстом
@@ -397,7 +398,7 @@ class WordDoc:
                     if re.search(r"[A-Za-zА-Яа-яЁё]{2,}", near):
                         break
                     near = ""
-            for a, b in spans:
+            for a, b, col in spans:
                 while a < b and text[a] in " \t\u00a0\n":
                     a += 1
                 while b > a and text[b - 1] in " \t\u00a0\n":
@@ -408,7 +409,7 @@ class WordDoc:
                 label = before if len(before) >= 3 else re.sub(r"^\d+\.?\s+", "", near)
                 label = re.sub(r"[\s:(«\"№]+$", "", label)[-46:].strip()
                 out.append({"par": i, "start": a, "end": b, "text": text[a:b], "label": label,
-                            "ctx": ctx, "before": text[:a][-70:]})
+                            "ctx": ctx, "before": text[:a][-70:], "fixed": col == "fixed"})
         return out
 
     def strip_highlights(self):
