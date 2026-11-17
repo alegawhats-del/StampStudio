@@ -593,7 +593,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.18.0"
+APP_VERSION = "6.18.1"
 EDITION = "canon"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -9620,6 +9620,8 @@ class WordFillPage(QDialog):
         for text, items in groups.items():
             hs = [h for h, _s in items]
             labels = sorted((h["label"] for h in hs if h["label"]), key=len)
+            if hs[0]["label"] and len(hs[0]["label"]) <= 26:      # подпись первого места понятнее, если она короткая
+                labels.insert(0, hs[0]["label"])
             before = hs[0]["before"]
             low = before.lower()
             key = SW.guess_key(before) or next((k for k in (SW.guess_label(h["label"]) for h in hs) if k), "")
@@ -10976,6 +10978,15 @@ class ActPage(QDialog):
                                 "оригинал на немецком и перевод на русском (.docx)")
         self.btn_kit.clicked.connect(self.load_kit)
         head.addWidget(self.btn_kit)
+        self.btn_clear = QPushButton(" Очистить")
+        self.btn_clear.setIcon(draw_icon("trash", win._icon_color()))
+        self.btn_clear.setIconSize(QSize(15, 15))
+        self.btn_clear.setToolTip("Акт сделан — очистить форму под следующий автомобиль.\n"
+                                  "Стираются данные автомобиля, значения с переводом, резина, комментарий и замеры ЛКП.\n"
+                                  "Номер, дата, мастер и настройки пасты остаются.")
+        self.btn_clear.clicked.connect(lambda *_: self.clear_form())
+        win._themed_buttons.append((self.btn_clear, "trash", False))
+        head.addWidget(self.btn_clear)
         self.btn_ai = QPushButton(" Перевести ИИ")
         self.btn_ai.setToolTip("Перевести через ИИ то, чего нет в словаре программы: значения полей и комментарий")
         self.btn_ai.clicked.connect(self.translate_ai)
@@ -11467,6 +11478,42 @@ class ActPage(QDialog):
         self.win.show_toast("✔  Бланки акта загружены")
 
     # ---------------------------------------------------------- данные формы
+    CAR_DEFAULTS = {"seats": "5", "doors": "5", "owners": "1"}
+
+    def form_filled(self):
+        """Есть ли в форме данные автомобиля (то, что стирает «Очистить»)."""
+        return bool(any(e.text().strip() and e.text().strip() != self.CAR_DEFAULTS.get(k, "") for k, e in self.ed.items())
+                    or any(c.currentText().strip() for pair in self.pair.values() for c in pair)
+                    or any(chk.isChecked() or ed.text().strip() for chk, ed in self.tire.values())
+                    or self.txt_cru.toPlainText().strip() or any(self.board.values().values())
+                    or self.txt_cde.toPlainText().strip() not in ("", ACT.DEFAULT_COMMENT_DE.strip())
+                    or self.ed_start.text().strip() not in ("", "-"))
+
+    def clear_form(self, ask=True):
+        """Форма под следующий автомобиль: номер, дата, мастер и паста остаются."""
+        if not self.form_filled():
+            self.win.show_toast("Форма уже пустая")
+            return
+        if ask and QMessageBox.question(self, "Акт осмотра", "Очистить данные автомобиля, замеры и комментарий?\n"
+                                        "Номер, дата и мастер останутся.",
+                                        QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes) != QMessageBox.Yes:
+            return
+        for k, e in self.ed.items():
+            e.setText(self.CAR_DEFAULTS.get(k, ""))
+        self._vin_edited("")
+        for cd, cr in self.pair.values():
+            self._set_pair(cd, "")
+            self._set_pair(cr, "")
+        for chk, ed in self.tire.values():
+            chk.setChecked(False)
+            ed.clear()
+        self.txt_cru.clear()
+        self.txt_cde.setPlainText(ACT.DEFAULT_COMMENT_DE)
+        self.ed_start.setText("-")
+        self.board.set_values({})
+        self.ed["brand"].setFocus()
+        self.win.show_toast("✔  Форма очищена — номер, дата и мастер на месте")
+
     def form_data(self):
         d = {k: e.text().strip() for k, e in self.ed.items()}
         d["number"] = self.ed_number.text().strip()
