@@ -120,6 +120,7 @@ def initials(fio):
 # ----------------------------------------------------------------------------- шаблоны поиска
 RE_DATE = re.compile(r"«\s*[_0]{1,4}\s*»\s*[_]{2,}(?:\s*(\d{4}))?(?:\s*(г\.|года|год))?")
 RE_SUM = re.compile(r"(?<![\d,.])(\d[\d  ]*?)(,\d{2})?\s*\(\s*([^()\d]{0,160}?)\s*\)")
+RE_SUM_UNIT = re.compile(r"\s*(?:(?:российск\w*|белорусск\w*)\s+)?руб\w*\.?(?:\s*\d{2}\s*коп\w*\.?)?\s*", re.I)
 RE_BLANK = re.compile(r"_{3,}")
 RE_INITIALS = re.compile(r"[А-ЯЁ][а-яё]+\s+[А-ЯЁ]\.\s?[А-ЯЁ]\.")
 DUMMY_PATTERNS = (
@@ -154,11 +155,11 @@ class Field:
         if self.kind == "sum":
             num = parse_number(value)
             if not num:
-                return value
+                return value                   # «Бесплатно», «Включено в стоимость» — словом, без «руб. 00 коп.»
             whole, frac = num
             words = number_words(whole, capital=self.meta.get("capital", True))
             dec = f",{frac:02d}" if self.meta.get("decimals") else ""
-            return f"{format_number(whole, self.meta.get('sep', ' '))}{dec} ({words})"
+            return f"{format_number(whole, self.meta.get('sep', ' '))}{dec} ({words})" + self.meta.get("unit", "")
         if self.kind == "tail":
             return " " + value
         return value
@@ -273,11 +274,15 @@ class WordDoc:
                 label = self._snip(text, m.start(), m.end(), "sum")
                 if ctx and len(text) < 90:
                     label = re.sub(r"^\d+\.?\s+", "", ctx) + ": " + label
-                out.append(Field("sum", i, m.start(), m.end(), label,
+                end, unit = m.end(), ""
+                um = RE_SUM_UNIT.fullmatch(text[m.end():])
+                if ctx and um and not text[:m.start()].strip():
+                    end, unit = len(text), text[m.end():].rstrip()   # ячейка «сумма руб. 00 коп.» — единицы часть поля
+                out.append(Field("sum", i, m.start(), end, label,
                                  current="" if zero else format_number(int(digits)) + (m.group(2) or ""),
                                  meta={"decimals": bool(m.group(2)), "capital": blank or words.strip()[:1].isupper(),
-                                       "sep": " " if " " in m.group(1) else " "}))
-                taken.append(m.span())
+                                       "sep": " " if " " in m.group(1) else " ", "unit": unit}))
+                taken.append((m.start(), end))
             ctx, idx, n, cell_pars = self._cell_ctx(p)
             for m in RE_BLANK.finditer(text):
                 if any(a <= m.start() < b for a, b in taken):

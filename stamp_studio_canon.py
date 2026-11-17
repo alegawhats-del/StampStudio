@@ -593,7 +593,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.17.3"
+APP_VERSION = "6.17.4"
 EDITION = "canon"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -9491,6 +9491,7 @@ class WordFillPage(QDialog):
             parts = [r for r in self.rows if r is not tot and r["kind"] == "sum" and not r.get("total")
                      and r.get("table") and r.get("table") == tot.get("table") and r["edit"] is not None]
             nums = [SW.parse_number(r["edit"].text()) for r in parts if r["edit"].text().strip()]
+            nums = [x for x in nums if x is not None]     # «Бесплатно» в сумму не идёт
             if not nums and tot["auto"] and tot["edit"].text().strip():
                 tot["edit"].clear()                  # слагаемые стёрли — итог тоже пустой
                 self._write(tot, "")
@@ -9518,7 +9519,7 @@ class WordFillPage(QDialog):
         v = QVBoxLayout(holder)
         v.setContentsMargins(0, 0, 8, 0)
         v.setSpacing(2)
-        tips = {"date": "ДД.ММ.ГГГГ", "sum": "число — пропись подставится"}
+        tips = {"date": "ДД.ММ.ГГГГ", "sum": "число — пропись подставится; или словом: Бесплатно"}
         sep_done = False
         for row in self.rows:
             if row["current"] and not sep_done:
@@ -10268,6 +10269,23 @@ def sign_pil(strokes_norm, height_px, color=None):
     return _strokes_image(strokes, (x1 - x0) * k + 2 * pad, height_px + 2 * pad, color or PEN_INKS[0][1])
 
 
+def lib_is_sign(entry) -> bool:
+    return (entry.get("category") == "Подписи") or ("подпис" in (entry.get("name") or "").lower())
+
+
+def master_sign_image(master, height_px=220):
+    """Подпись мастера для акта: факсимиле из «Моих печатей», если выбрано, иначе нарисованная в профиле."""
+    name = master.get("sign_lib") or ""
+    if name:
+        ent = next((e for e in lib_load() if os.path.basename(e["file"]) == name), None)
+        try:
+            if ent is not None:
+                return Image.open(ent["file"]).convert("RGBA")
+        except Exception:
+            pass
+    return sign_pil(master.get("sign"), height_px)
+
+
 class GlyphPad(QWidget):
     """Клетка, в которой мастер пишет знак (или подпись) своей рукой. Правая кнопка — стереть."""
     changed = Signal()
@@ -10434,6 +10452,17 @@ class ActMasterDialog(QDialog):
         b = QPushButton("Стереть подпись")
         b.clicked.connect(self.pad_sign.clear)
         col.addWidget(b)
+        self.cmb_sign = QComboBox()
+        self.cmb_sign.setMinimumHeight(30)
+        self.cmb_sign.setToolTip("Какую подпись ставить на акт: нарисованную в клетке слева или готовое факсимиле "
+                                 "из «Моих печатей».\nФаксимиле туда попадает так: поставьте подпись на странице, "
+                                 "правая кнопка — «Сохранить подпись в коллекцию».")
+        self.cmb_sign.addItem("Подпись: нарисованная слева", "")
+        for s in lib_load():
+            if lib_is_sign(s) or os.path.basename(s["file"]) == m.get("sign_lib"):
+                self.cmb_sign.addItem("Факсимиле: " + (s.get("name") or "подпись"), os.path.basename(s["file"]))
+        self.cmb_sign.setCurrentIndex(max(0, self.cmb_sign.findData(m.get("sign_lib") or "")))
+        col.addWidget(self.cmb_sign)
         srow = QHBoxLayout()
         srow.addWidget(QLabel("Ширина подписи:"))
         self.sp_sign_w = QDoubleSpinBox()
@@ -10518,7 +10547,7 @@ class ActMasterDialog(QDialog):
 
     def master(self):
         out = {"name": self.ed_name.text().strip(), "glyphs": self.glyphs(), "sign": self.pad_sign.data(),
-               "stamp": self.cmb_stamp.currentData() or "", "sign_w": float(self.sp_sign_w.value()),
+               "sign_lib": self.cmb_sign.currentData() or "", "stamp": self.cmb_stamp.currentData() or "", "sign_w": float(self.sp_sign_w.value()),
                "stamp_w": float(self.sp_stamp_w.value())}
         out.update(self._keep)                        # запомненное место подписи и печати на листе
         return out
@@ -14984,7 +15013,7 @@ class MainWindow(QMainWindow):
             return item
 
         placed = []
-        sg = sign_pil(master.get("sign"), 220)
+        sg = master_sign_image(master, 220)
         if sg is not None:
             put(sg, float(master.get("sign_w") or ACT_SIGN_W), master.get("sign_pos") or (0.62, 0.82), 1.0, "sign")
             placed.append("подпись")
@@ -15592,7 +15621,91 @@ class MainWindow(QMainWindow):
         self.view.on_view_changed = self.place_mascot
         self.place_mascot()
         self.view.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.view.customContextMenuRequested.connect(self.mascot_menu)
+        self.view.customContextMenuRequested.connect(self.view_menu)
+
+    def view_menu(self, pos):
+        """Правая кнопка на странице: на печати или подписи — её меню, на пустом месте — меню картинки."""
+        try:
+            item = next((i for i in self.view.items(pos) if isinstance(i, StampItem)), None)
+        except RuntimeError:
+            item = None
+        if item is None or self.view.pen_layer is not None:
+            return self.mascot_menu(pos)
+        self.scene.clearSelection()
+        item.setSelected(True)
+        menu = QMenu(self)
+        ent = next((e for e in lib_load() if e.get("file") == getattr(item, "lib_file", None)), None)
+        if ent is not None:
+            a = menu.addAction(draw_icon("check", self._icon_color()), f"В коллекции: «{ent['name']}»")
+            a.setEnabled(False)
+        else:
+            a = menu.addAction(draw_icon("signs", self._icon_color()), "Сохранить подпись в коллекцию…")
+            a.triggered.connect(lambda: self.stamp_to_collection(item, True))
+            a = menu.addAction(draw_icon("stamp", self._icon_color()), "Сохранить в коллекцию как печать…")
+            a.triggered.connect(lambda: self.stamp_to_collection(item, False))
+        masters = act_masters_load()
+        if masters:
+            sub = menu.addMenu(draw_icon("act", self._icon_color()), "Подпись мастера в актах осмотра")
+            for m in masters:
+                a = sub.addAction(m["name"])
+                a.setCheckable(True)
+                a.setChecked(bool(ent) and m.get("sign_lib") == os.path.basename(ent["file"]))
+                a.triggered.connect(lambda _=False, n=m["name"]: self.stamp_to_master(item, n))
+        menu.addSeparator()
+        a = menu.addAction(draw_icon("trash", self._icon_color()), "Убрать со страницы")
+        a.triggered.connect(self.delete_selected)
+        self._view_menu_show(menu, self.view.mapToGlobal(pos))
+
+    @staticmethod
+    def _view_menu_show(menu, pos):
+        menu.exec(pos)
+
+    def stamp_to_collection(self, item, as_sign=True):
+        """Печать или подпись со страницы — в «Мои печати». Возвращает запись библиотеки или None."""
+        ent = next((e for e in lib_load() if e.get("file") == getattr(item, "lib_file", None)), None)
+        if ent is not None:
+            return ent
+        n = sum(1 for e in lib_load() if lib_is_sign(e)) + 1
+        name, ok = QInputDialog.getText(self, "Подпись в коллекцию" if as_sign else "Печать в коллекцию",
+                                        "Чья это подпись? Под этим именем она будет в «Моих печатях»:" if as_sign
+                                        else "Как назвать печать?", text=f"Подпись {n}" if as_sign else "")
+        if not ok or not name.strip():
+            return None
+        name = name.strip()
+        if as_sign and "подпис" not in name.lower():
+            name = "Подпись " + name
+        try:
+            ent = lib_add(name, item.mm_w, item.mm_h, pil_image=item.pil_image,
+                          category="Подписи" if as_sign else (self.combo_cat.currentData() or "Без категории"))
+        except Exception as e:
+            QMessageBox.critical(self, "Не удалось сохранить", f"Не сохранилось в коллекцию.\n\nПапка: {LIB_DIR}\nОшибка: {e}")
+            return None
+        item.lib_file = ent["file"]
+        self.reload_library()
+        self._update_geom_title()
+        self.show_toast(f"✔  «{name}» в «Моих печатях» — ставьте на любой документ" if as_sign else
+                        f"✔  «{name}» в «Моих печатях»", 3200)
+        return ent
+
+    def stamp_to_master(self, item, master_name):
+        """Сделать подпись со страницы подписью мастера в актах осмотра (или вернуть нарисованную)."""
+        items = act_masters_load()
+        m = next((x for x in items if x.get("name") == master_name), None)
+        if m is None:
+            return
+        cur = next((e for e in lib_load() if e.get("file") == getattr(item, "lib_file", None)), None)
+        if cur is not None and m.get("sign_lib") == os.path.basename(cur["file"]):
+            m["sign_lib"] = ""
+            act_masters_save(items)
+            self.show_toast(f"Мастер {master_name}: в актах снова подпись из его профиля", 3200)
+            return
+        ent = cur or self.stamp_to_collection(item, True)
+        if ent is None:
+            return
+        m["sign_lib"] = os.path.basename(ent["file"])
+        m["sign_w"] = float(min(90, max(10, round(item.mm_w))))
+        act_masters_save(items)
+        self.show_toast(f"✔  Мастер {master_name}: в актах осмотра теперь эта подпись", 3200)
 
     def mascot_menu(self, pos):
         if self.mascot is None:
