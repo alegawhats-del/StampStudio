@@ -594,7 +594,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.20.4"
+APP_VERSION = "6.20.5"
 EDITION = "canon"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -12723,8 +12723,8 @@ class ToolsPanel(QWidget):
         self.btn_close.setObjectName("ghost")
         self.btn_close.setIconSize(QSize(16, 16))
         self.btn_close.setCursor(Qt.PointingHandCursor)
-        self.btn_close.setToolTip("Убрать вкладку. Вернуть: Настройки → Инструменты → «Вкладка „Инструменты“ справа»")
-        self.btn_close.clicked.connect(lambda: self.win.tools_tab_set(False))   # крестик: убрать вкладку совсем
+        self.btn_close.setToolTip("Закрыть окно — инструменты вернутся вкладкой рядом с «Печатью»")
+        self.btn_close.clicked.connect(lambda: self.win.tools_dock_back())      # вкладка справа не закрывается: она всегда под рукой
         head.addWidget(self.btn_close)
         root.addLayout(head)
         self.tabs = None
@@ -12828,6 +12828,7 @@ class ToolsPanel(QWidget):
 
     def set_detached(self, on):
         self._detached = bool(on)
+        self.btn_close.setVisible(bool(on) and not self.page)     # крестик — только у отдельного окна
         self.btn_detach.setToolTip("Вернуть панель в окно программы" if on
                                    else "Открепить: инструменты отдельным окном поверх остальных")
         QTimer.singleShot(0, self._case_place)
@@ -13504,7 +13505,10 @@ class ToolsWindow(QDialog):
         self.lay.setContentsMargins(0, 0, 0, 0)
 
     def closeEvent(self, e):
-        e.accept()                                # закрыли крестиком — окно просто прячется
+        e.accept()                                # закрыли крестиком — инструменты возвращаются вкладкой в окно программы
+        win = self.parent()
+        if win is not None and hasattr(win, "tools_detach") and settings_load().get("tools_detached"):
+            QTimer.singleShot(0, win.tools_dock_back)
 
 
 # ======================================================================
@@ -16349,12 +16353,24 @@ class MainWindow(QMainWindow):
     def _tools_tab_default(self):
         """При запуске справа две вкладки: «Печать» (открыта) и «Инструменты»."""
         st = settings_load()
+        if not st.get("tools_tab_back"):                 # вкладку раньше можно было убрать крестиком насовсем — возвращаем один раз
+            st["tools_tab_back"] = True
+            st["tools_tab"] = True
+            st["tools_detached"] = False
+            settings_save(st)
         if not st.get("tools_tab", True) or st.get("tools_detached") or self.tools_visible():
             return
         self._tools_make()
         self.tools_detach(False)
         self._tools_dock_sync()
         self.right_dock.raise_()
+
+    def tools_dock_back(self):
+        """Отдельное окно инструментов закрыли — они возвращаются вкладкой рядом с «Печатью»."""
+        self.tools_detach(False)
+        self._tools_dock_sync()
+        if self.center_stack.currentIndex() == 0:
+            self.right_dock.raise_()
 
     def tools_tab_set(self, on):
         """Держать ли инструменты вкладкой справа; запоминается."""
