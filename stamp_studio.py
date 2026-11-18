@@ -608,7 +608,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.21.1"
+APP_VERSION = "6.21.2"
 EDITION = "main"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -10027,7 +10027,7 @@ class WordFillPage(QDialog):
         new = self._render(row, value)
         self.view.blockSignals(True)
         for k, c in enumerate(row["cursors"]):
-            text = row["orig"][k] if new is None else new + (row.get("extra") or {}).get(k, "")
+            text = row["orig"][k] if new is None else (row.get("pre") or {}).get(k, "") + new + (row.get("extra") or {}).get(k, "")
             if c.selectedText() == text:
                 continue
             c.beginEditBlock()
@@ -10918,6 +10918,9 @@ class WordFillPage(QDialog):
             return
         main, p2 = two["main"], two["edit"].text().strip()
         main["extra"] = {0: SW.LINE_BREAK + p2} if p2 and main["edit"].text().strip() else {}
+        c0 = main["cursors"][0]                        # «Моб. телефон: номер» + второй номер → оба номера строками под подписью
+        before = c0.block().text()[:max(0, c0.selectionStart() - c0.block().position())].replace(SW.LINE_BREAK, "")
+        main["pre"] = {0: SW.LINE_BREAK} if main["extra"] and before.strip() else {}
         self._write(main, main["edit"].text())
 
     KW_PER_PS = 0.73549875
