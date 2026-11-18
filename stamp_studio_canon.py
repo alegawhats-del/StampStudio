@@ -14,6 +14,8 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
+import difflib
 
 try:                      # новое имя библиотеки
     import pymupdf as fitz
@@ -602,7 +604,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.20.9"
+APP_VERSION = "6.21.0"
 EDITION = "canon"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -762,6 +764,43 @@ def cloud_uri():
 
 # ---------------------------------------------------------------- шаблоны документов Word
 TPL_DIR = os.path.join(LIB_DIR, "templates")
+
+
+DRAFT_DIR = os.path.join(LIB_DIR, "drafts")
+
+
+def draft_list() -> list:
+    """Черновики заполнения — свежие сверху: [{id, tpl, name, title, folder, time, ...}]."""
+    out = []
+    try:
+        names = [n for n in os.listdir(DRAFT_DIR) if n.endswith(".json")]
+    except OSError:
+        return []
+    for n in names:
+        try:
+            with open(os.path.join(DRAFT_DIR, n), "r", encoding="utf-8") as f:
+                d = json.load(f)
+            if isinstance(d, dict) and d.get("tpl"):
+                d["id"] = n[:-5]
+                out.append(d)
+        except Exception:
+            continue
+    return sorted(out, key=lambda d: d.get("time", 0), reverse=True)
+
+
+def draft_save(did: str, data: dict) -> str:
+    os.makedirs(DRAFT_DIR, exist_ok=True)
+    did = did or datetime.datetime.now().strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:6]
+    write_json_whole(os.path.join(DRAFT_DIR, did + ".json"), data)
+    return did
+
+
+def draft_delete(did: str):
+    try:
+        if did:
+            os.remove(os.path.join(DRAFT_DIR, did + ".json"))
+    except OSError:
+        pass
 
 
 def tpl_list() -> list:
@@ -9465,6 +9504,16 @@ class WordFillPage(QDialog):
         self.chk_pdf.setChecked(bool(settings_load().get("word_save_pdf", False)))
         self.chk_pdf.toggled.connect(lambda on: self._save_opt("word_save_pdf", bool(on)))
         foot.addWidget(self.chk_pdf)
+        self.b_draft = QPushButton(" В черновик")
+        self.b_draft.setIcon(draw_icon("pen", self.win._icon_color()))
+        self.b_draft.setIconSize(QSize(14, 14))
+        self.b_draft.setMinimumHeight(36)
+        self.b_draft.setCursor(Qt.PointingHandCursor)
+        self.b_draft.setToolTip("Отложить заполнение: всё, что уже вписано, запомнится.\n"
+                                "Продолжить — раздел Word, список «Черновики» под шаблонами")
+        self.b_draft.clicked.connect(self.draft_keep)
+        self.win._themed_buttons.append((self.b_draft, "pen", False))
+        foot.addWidget(self.b_draft)
         self.b_save = QPushButton("Сохранить как Word…")
         self.b_save.setObjectName("primary")
         self.b_save.setMinimumHeight(36)
@@ -9527,6 +9576,29 @@ class WordFillPage(QDialog):
         self.lst_tpl.setContextMenuPolicy(Qt.CustomContextMenu)
         self.lst_tpl.customContextMenuRequested.connect(self._tpl_menu)
         v.addWidget(self.lst_tpl, 0)
+        self.cap_draft = QLabel("ЧЕРНОВИКИ")
+        self.cap_draft.setObjectName("paneltitle")
+        self.cap_draft.setToolTip("Начатые документы: щелчок — продолжить заполнение с того же места.\n"
+                                  "Правая кнопка — удалить черновик")
+        v.addWidget(self.cap_draft)
+        self.lst_draft = QListWidget()
+        self.lst_draft.setObjectName("tpllist")
+        self.lst_draft.setViewMode(QListWidget.ListMode)
+        self.lst_draft.setFlow(QListWidget.LeftToRight)
+        self.lst_draft.setResizeMode(QListWidget.Adjust)
+        self.lst_draft.setMovement(QListWidget.Static)
+        self.lst_draft.setWrapping(True)
+        self.lst_draft.setSpacing(0)
+        self.lst_draft.setIconSize(QSize(22, 22))
+        self.lst_draft.setTextElideMode(Qt.ElideRight)
+        self.lst_draft.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.lst_draft.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.lst_draft.setToolTip(self.cap_draft.toolTip())
+        self.lst_draft.itemClicked.connect(lambda it: self.draft_open(it.data(Qt.UserRole)))
+        self.lst_draft.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.lst_draft.customContextMenuRequested.connect(self._draft_menu)
+        self.lst_draft.viewport().installEventFilter(self)
+        v.addWidget(self.lst_draft, 0)
         self.zone = DropZone()
         self.zone.exts = (".docx",)
         zl = QVBoxLayout(self.zone)
@@ -9586,6 +9658,20 @@ class WordFillPage(QDialog):
             self.lst_tpl.addItem(it)
         self.lst_tpl.setGridSize(QSize())
         self.lst_tpl.setVisible(bool(items))
+        self.lst_draft.clear()
+        self.lst_draft.setGridSize(QSize())
+        ic = draw_icon("pen", self.win._icon_color())
+        for d in draft_list():
+            when = datetime.datetime.fromtimestamp(d.get("time", 0)).strftime("%d.%m %H:%M")
+            folder = os.path.basename(str(d.get("folder") or "").rstrip("\\/"))
+            text = "  ·  ".join(x for x in (d.get("name", ""), d.get("title", ""), when) if x)
+            it = QListWidgetItem(ic, text)
+            it.setData(Qt.UserRole, d["id"])
+            it.setToolTip(text + (f"\nПапка: {d.get('folder')}" if folder else ""))
+            self.lst_draft.addItem(it)
+        has = self.lst_draft.count() > 0
+        self.cap_draft.setVisible(has)
+        self.lst_draft.setVisible(has)
         self._tpl_fit()
         self.lbl_tpl.setText("щелчок — открыть бланк  ·  правая кнопка — дать своё название, заменить, удалить" if items else
                              "пока пусто — добавьте файл Word; то, что в нём меняется, выделите жёлтым")
@@ -9593,8 +9679,11 @@ class WordFillPage(QDialog):
     TPL_ROW = 40
 
     def _tpl_fit(self):
+        self._list_fit(self.lst_tpl, 6)
+        self._list_fit(self.lst_draft, 3)
+
+    def _list_fit(self, lst, max_rows):
         """Колонки по ширине: самое длинное название видно целиком; высота — по числу строк."""
-        lst = self.lst_tpl
         n = lst.count()
         if not n:
             return
@@ -9607,7 +9696,7 @@ class WordFillPage(QDialog):
         full = max(120, lst.width() - pad_w)
         cols = max(1, min(n, full // max(need, 200)))
         rows = -(-n // cols)
-        show = min(rows, 6)
+        show = min(rows, max_rows)
         pol = Qt.ScrollBarAlwaysOn if rows > show else Qt.ScrollBarAlwaysOff
         if lst.verticalScrollBarPolicy() != pol:
             lst.setVerticalScrollBarPolicy(pol)
@@ -9627,9 +9716,119 @@ class WordFillPage(QDialog):
             lst.setFixedHeight(h)
 
     def eventFilter(self, obj, ev):
-        if ev.type() == QEvent.Resize and obj is getattr(self, "lst_tpl", None).viewport():
+        if ev.type() == QEvent.Resize and any(obj is getattr(self, n).viewport() for n in ("lst_tpl", "lst_draft")
+                                              if getattr(self, n, None) is not None):
             QTimer.singleShot(0, self._tpl_fit)
         return super().eventFilter(obj, ev)
+
+    # ---- черновики: отложить заполнение и вернуться
+    def draft_keep(self):
+        if getattr(self, "wd", None) is None or not self.path:
+            return
+        fields = [{"i": i, "key": r["key"], "label": r["label"], "text": r["edit"].text(), "auto": bool(r.get("auto"))}
+                  for i, r in enumerate(self.rows) if r["edit"] is not None and r["edit"].text().strip()]
+        fio = next((r["edit"].text().strip() for r in self.rows if r["key"] == "fio" and r["edit"] is not None
+                    and r["edit"].text().strip()), "")
+        data = {"tpl": self.path, "name": os.path.splitext(os.path.basename(self.path))[0],
+                "title": SW.initials(fio) if fio else "", "folder": self.win.current_dir(), "time": time.time(),
+                "fields": fields, "extras": [list(x) for x in getattr(self, "_extras_data", [])],
+                "inst": list(getattr(self, "_inst_data", ("", "", False))),
+                "pars": {str(k): v for k, v in self.view.changed_paragraphs().items()}}
+        try:
+            self._draft_id = draft_save(getattr(self, "_draft_id", ""), data)
+        except Exception as e:
+            QMessageBox.warning(self, "Черновик", f"Не удалось сохранить черновик:\n{e}")
+            return
+        self.win.show_toast("✔  Черновик сохранён — продолжить можно в разделе Word, список «Черновики»", 4200)
+
+    def draft_open(self, did):
+        d = next((x for x in draft_list() if x["id"] == did), None)
+        if d is None:
+            self.tpl_reload()
+            return
+        if not os.path.isfile(d["tpl"]):
+            QMessageBox.warning(self, "Черновик", "Файл, с которого начат этот черновик, не найден:\n" + d["tpl"])
+            return
+        folder = d.get("folder") or ""
+        if folder and os.path.isdir(folder) and folder != self.win.current_dir():
+            self.win.set_dir(folder)
+        self.wd = None                               # бланк читается заново — чистым
+        self.win.word_fill(d["tpl"])
+        if getattr(self, "wd", None) is None:
+            return
+        self._draft_id = did
+        used = set()
+
+        def find(f):
+            i = f.get("i", -1)
+            if 0 <= i < len(self.rows) and i not in used and self.rows[i]["key"] == f.get("key") \
+                    and self.rows[i]["label"] == f.get("label"):
+                return i
+            return next((j for j, r in enumerate(self.rows) if j not in used and r["key"] == f.get("key")
+                         and r["label"] == f.get("label")), -1)
+
+        todo = []
+        for f in d.get("fields", []):
+            i = find(f)
+            if i >= 0 and self.rows[i]["edit"] is not None:
+                used.add(i)
+                todo.append((self.rows[i], f))
+        for name, amount in d.get("extras", []):
+            self._extra_add(name, amount, focus=False)
+        inst = d.get("inst") or ["", "", False]
+        if hasattr(self, "ed_inst_month") and len(inst) == 3:
+            self.ed_inst_first.setText(str(inst[0]))
+            self.ed_inst_month.setText(str(inst[1]))
+            self.b_inst.setChecked(bool(inst[2]))
+        for _pass in (0, 1):                         # второй проход — то, что пересчиталось не так, как было вписано
+            for row, f in todo:
+                if row["edit"].text() != f["text"]:
+                    row["edit"].setText(f["text"])
+                    self._typed(row, f["text"], spread=False)
+                row["auto"] = bool(f.get("auto"))
+        self._extras_preview()
+        self._draft_pars(d.get("pars") or {})
+        self._later()
+        self.win.show_toast("Черновик открыт — продолжайте заполнение", 3000)
+
+    def _draft_pars(self, pars):
+        """Правки, сделанные прямо в тексте документа (не через поля), — вернуть на место."""
+        now = self.view.changed_paragraphs()
+        left = {int(k): v for k, v in pars.items() if now.get(int(k)) != v}
+        if not left:
+            return
+        self.view.blockSignals(True)
+        b = self.view.document().begin()
+        seen = set()
+        while b.isValid():
+            v = b.blockFormat().property(WORD_PAR)
+            if v is not None and int(v) in left and int(v) not in seen:
+                seen.add(int(v))
+                txt = b.text()
+                if "\t" not in txt:                  # абзацы с табуляцией не трогаем: там свой счёт позиций
+                    c = QTextCursor(b)
+                    fmt = c.charFormat()
+                    sm = difflib.SequenceMatcher(None, txt, left[int(v)], autojunk=False)
+                    for tag, i1, i2, j1, j2 in reversed(sm.get_opcodes()):
+                        if tag == "equal":
+                            continue
+                        c.setPosition(b.position() + i1)
+                        c.setPosition(b.position() + i2, QTextCursor.KeepAnchor)
+                        c.insertText(left[int(v)][j1:j2])
+            b = b.next()
+        self.view.blockSignals(False)
+
+    def _draft_menu(self, pos):
+        it = self.lst_draft.itemAt(pos)
+        if it is None:
+            return
+        did = it.data(Qt.UserRole)
+        col = self.win._icon_color()
+        m = QMenu(self)
+        m.addAction(draw_icon("pen", col), "Продолжить заполнение", lambda: self.draft_open(did))
+        m.addSeparator()
+        m.addAction(draw_icon("trash", col), "Удалить черновик", lambda: (draft_delete(did), self.tpl_reload()))
+        self._menu_show(m, self.lst_draft.viewport().mapToGlobal(pos))
 
     def tpl_add_dialog(self):
         paths, _ = QFileDialog.getOpenFileNames(self, "Файлы Word — в шаблоны", self.win.current_dir(),
@@ -9718,7 +9917,7 @@ class WordFillPage(QDialog):
         on = bool(on)
         self.empty.setVisible(on)
         self.body_w.setVisible(not on)
-        for wdg in (self.b_save, self.chk_pdf, self.lbl_client, self.b_card, self.b_dir, self.b_tpl):
+        for wdg in (self.b_save, self.b_draft, self.chk_pdf, self.lbl_client, self.b_card, self.b_dir, self.b_tpl):
             wdg.setVisible(not on)
         if on:
             self.tpl_reload()
@@ -9834,6 +10033,7 @@ class WordFillPage(QDialog):
         self.wd = SW.WordDoc(path)
         self.path = path
         self._extras_data = []                       # доп. услуги — у каждого документа свои
+        self._draft_id = ""
         self._inst_data = ("", "", False)
         self.lbl_doc.setText(os.path.basename(path))
         self.lbl_doc.setToolTip(path)
@@ -10162,9 +10362,13 @@ class WordFillPage(QDialog):
         for tot in self.rows:
             if not tot.get("total") or tot["edit"] is None or not (not tot["edit"].text().strip() or tot["auto"]):
                 continue
-            parts = [r for r in self.rows if r is not tot and r["kind"] == "sum" and not r.get("total")
+            parts = [r for r in self.rows if r is not tot and (r["kind"] == "sum" or r["key"] == "sum_invoice")
+                     and not r.get("total")
                      and r.get("table") and r.get("table") == tot.get("table") and r["edit"] is not None]
-            nums = [SW.parse_number(r["edit"].text()) for r in parts if r["edit"].text().strip()]
+            lead = lambda t: (re.match(r"\s*\d[\d \u00a0]*(?:[.,]\d{1,2})?", t) or re.match("", t)).group(0)
+            nums = [SW.parse_number(r["edit"].text())
+                    or (SW.parse_number(lead(r["edit"].text())) if "руб" in r["edit"].text().lower() else None)
+                    for r in parts if r["edit"].text().strip()]
             nums = [x for x in nums if x is not None]     # «Бесплатно» в сумму не идёт
             if tot is getattr(self, "_extras_tot", None):
                 nums += [x for x in (SW.parse_number(a) for _n, a in self.extras()) if x is not None]
@@ -10354,6 +10558,10 @@ class WordFillPage(QDialog):
                 ed.setPlaceholderText("например: 2.2 2151 — «л.» и «см³» допишутся сами")
                 ed.textEdited.connect(lambda t, r=row: self._typed(r, t))
                 ed.editingFinished.connect(lambda r=row, e=ed: self._volume_done(r, e))
+            elif row["key"] == "sum_invoice":
+                ed.setPlaceholderText("число — пропись подставится; или своё, например: 15 000 EUR")
+                ed.textEdited.connect(lambda t, r=row: self._typed(r, t))
+                ed.editingFinished.connect(lambda r=row, e=ed: self._invoice_done(r, e))
             else:
                 ed.textEdited.connect(lambda t, r=row: self._typed(r, t))
             kind_ = FIELD_CHOICES.get(row["key"])
@@ -10582,6 +10790,16 @@ class WordFillPage(QDialog):
                 pos += 1
             edit.setCursorPosition(pos)
         return new
+
+    def _invoice_done(self, row, edit):
+        """Голое число в «Стоимости по инвойсу» — в тот же вид, что и остальные суммы: «980 000,00 (…) руб.»"""
+        if SW.parse_number(edit.text()) is None:
+            return
+        new = re.sub(r"\s*00 коп\.\s*$", "", SW.money_cell(edit.text()))
+        if new != edit.text():
+            edit.setText(new)
+            edit.setCursorPosition(0)
+            self._typed(row, new)
 
     def _volume_done(self, row, edit):
         new = volume_text(edit.text())
@@ -10924,6 +11142,8 @@ class WordFillPage(QDialog):
             card[self._num_key()] = num
         card.pop("fio_short", None)
         saved = SW.card_save(out_dir, card) if card else True
+        draft_delete(getattr(self, "_draft_id", ""))
+        self._draft_id = ""
         self.wd = None                              # следующий документ открывается с чистого шаблона
         self.win.cloud_soon()
         self.win.reload_files()

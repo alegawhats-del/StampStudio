@@ -991,7 +991,7 @@ _GUESS_LABEL = ((r"заказчик \(декларант\)", "fio"), (r"^зак�
                 (r"тип двигателя", "engine_type"), (r"тип кпп|коробк", "gearbox"), (r"тип кузова", "body"),
                 (r"цвет кузова", "color"), (r"салон", "interior"), (r"\bvin\b", "vin"), (r"\bвес\b", "weight"),
                 (r"адрес доставки", "delivery_address"), (r"стоимость доставки", "sum_delivery"),
-                (r"таможенное оформление", "sum_customs"), (r"стоимость автомобиля", "sum_car"),
+                (r"таможенное оформление|таможенные платежи", "sum_customs"), (r"стоимость автомобиля", "sum_car"),
                 (r"вознаграждение", "sum_fee"), (r"общая стоимость", "sum_total"),
                 (r"стоимость по инвойсу", "sum_invoice"), (r"e-?mail", "email"), (r"^(?:моб\.?\s*)?телефон|^тел\b", "phone"),
                 (r"дата рождения", "birth"), (r"^выдан", "passport_issued"), (r"^паспорт", "passport"),
@@ -1141,6 +1141,11 @@ def derive(values):
     vol, typ = out.get("engine_volume", ""), out.get("engine_type", "")
     if (vol or typ) and not out.get("engine_combo"):
         out["engine_combo"] = " / ".join(x for x in (vol, typ) if x)
+    if out.get("sum_car") and not out.get("sum_invoice"):       # договор таможенного представителя идёт следом за основным
+        try:
+            out["sum_invoice"] = re.sub(r"\s*00 коп\.\s*$", "", money_cell(out["sum_car"]))
+        except Exception:
+            out["sum_invoice"] = out["sum_car"]
     return out
 
 
