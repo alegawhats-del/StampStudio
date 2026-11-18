@@ -218,7 +218,9 @@ QLineEdit:focus, QComboBox:focus, QDoubleSpinBox:focus, QSpinBox:focus {{
 /* поля ввода: без отступа сверху и снизу — текст стоит по центру всей высоты и хвосты букв не срезаются */
 QLineEdit {{ padding: 0px 8px; min-height: 32px; }}
 QLineEdit:focus {{ padding: 0px 7px; min-height: 30px; }}
-QAbstractSpinBox QLineEdit, QComboBox QLineEdit {{ min-height: 0px; padding: 0px; border: none; background: transparent; }}
+QAbstractSpinBox QLineEdit, QComboBox QLineEdit, QAbstractSpinBox QLineEdit:focus, QComboBox QLineEdit:focus {{
+    min-height: 0px; padding: 0px; border: none; background: transparent;
+}}
 
 QToolBar#dirbar {{
     background: #171a22; border: none; border-bottom: 1px solid #2e3345;
@@ -369,7 +371,9 @@ QLineEdit:focus, QComboBox:focus, QDoubleSpinBox:focus, QSpinBox:focus {{
 /* поля ввода: без отступа сверху и снизу — текст стоит по центру всей высоты и хвосты букв не срезаются */
 QLineEdit {{ padding: 0px 8px; min-height: 32px; }}
 QLineEdit:focus {{ padding: 0px 7px; min-height: 30px; }}
-QAbstractSpinBox QLineEdit, QComboBox QLineEdit {{ min-height: 0px; padding: 0px; border: none; background: transparent; }}
+QAbstractSpinBox QLineEdit, QComboBox QLineEdit, QAbstractSpinBox QLineEdit:focus, QComboBox QLineEdit:focus {{
+    min-height: 0px; padding: 0px; border: none; background: transparent;
+}}
 
 QToolBar#dirbar {{
     background: #efece5; border: none; border-bottom: 1px solid #e2ddd2;
@@ -604,7 +608,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.21.0"
+APP_VERSION = "6.21.1"
 EDITION = "canon"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -2138,6 +2142,8 @@ def draw_icon(kind: str, color: str, size: int = 64) -> QIcon:
         fl(8, 3.2, 8, 12.8); fl(3.2, 8, 12.8, 8)
     elif kind == "chev_down":
         fl(4.4, 6.2, 8, 9.8, 11.6, 6.2)
+    elif kind == "chev_up":
+        fl(4.4, 9.8, 8, 6.2, 11.6, 9.8)
     elif kind == "chev_left":
         fl(9.8, 4.4, 6.2, 8, 9.8, 11.6)
     elif kind == "chev_right":
@@ -9998,6 +10004,10 @@ class WordFillPage(QDialog):
         value = (value or "").strip()
         if not value:
             return None
+        if row.get("free_city"):
+            return SW.city_genitive(value)
+        if row["key"] == "contact":                       # «ФИО; телефон» — в документе двумя строками
+            return re.sub(r"\s*;\s*", SW.LINE_BREAK, value)
         if row["field"] is not None:
             return row["field"].render(value)
         hl = row.get("hl")
@@ -10124,6 +10134,20 @@ class WordFillPage(QDialog):
             two["virtual"], two["main"] = "phone2", ph
             two["hint"] = "встанет строкой под первым номером"
             rows.append(two)
+        spans, b_ = [], self.view.document().begin()   # «до г. Москвы», «от г. Москвы» — город бесплатной доставки
+        while b_.isValid():
+            if b_.blockFormat().property(WORD_PAR) is not None:
+                for m_ in SW.RE_FREE_CITY.finditer(b_.text()):
+                    a_, e_ = b_.position() + m_.start(1), b_.position() + m_.end(1)
+                    if not any(x < e_ and a_ < y for x, y in taken):
+                        spans.append((a_, e_))
+            b_ = b_.next()
+        if len(spans) >= 2:
+            fc = self._new_row(f"Город бесплатной доставки ×{len(spans)}", "free_city", "city", spans)
+            fc["free_city"] = True
+            fc["hint"] = "Москва или Санкт-Петербург — поменяется по всему тексту"
+            rows.append(fc)
+            taken += spans
         rows += self._highlight_rows(taken)
         if self.wd.highlights:                           # в шаблоне поля помечены жёлтым — догадки о подписях не нужны
             rows = [r for r in rows if r["kind"] not in ("tail", "cell")]
@@ -10384,6 +10408,7 @@ class WordFillPage(QDialog):
                 tot["edit"].setText(text)
                 tot["auto"] = True
                 self._write(tot, text)
+        self._contact_sync()
         rest = next((r for r in self.rows if r.get("calc") == "rest" and r["edit"] is not None), None)
         price = next((r for r in self.rows if r.get("calc") == "price" and r["edit"] is not None), None)
         if rest is not None and price is not None and (not rest["edit"].text().strip() or rest["auto"]):
@@ -10558,6 +10583,20 @@ class WordFillPage(QDialog):
                 ed.setPlaceholderText("например: 2.2 2151 — «л.» и «см³» допишутся сами")
                 ed.textEdited.connect(lambda t, r=row: self._typed(r, t))
                 ed.editingFinished.connect(lambda r=row, e=ed: self._volume_done(r, e))
+            elif row.get("free_city"):
+                ed.setText(next((n for n, g in (("Москва", "Москвы"), ("Санкт-Петербург", "Санкт-Петербурга"))
+                                 if row["orig"][0].startswith(g[:5])), "Москва"))
+                ed.textEdited.connect(lambda t, r=row: self._typed(r, t))
+                act = ed.addAction(draw_icon("chev_down", self.win._icon_color()), QLineEdit.TrailingPosition)
+                act.setToolTip("Москва или Санкт-Петербург")
+                act.triggered.connect(lambda _=False, r=row, e=ed: self._city_choices(r, e))
+            elif row["key"] == "delivery_term":
+                ed.setPlaceholderText("например: 7-10 — «дней» допишется само")
+                ed.textEdited.connect(lambda t, r=row: self._typed(r, t))
+                ed.editingFinished.connect(lambda r=row, e=ed: self._term_done(r, e))
+            elif row["key"] == "contact":
+                ed.setPlaceholderText("ФИО; телефон — подставятся сами, встанут в две строки")
+                ed.textEdited.connect(lambda t, r=row: self._typed(r, t))
             elif row["key"] == "sum_invoice":
                 ed.setPlaceholderText("число — пропись подставится; или своё, например: 15 000 EUR")
                 ed.textEdited.connect(lambda t, r=row: self._typed(r, t))
@@ -10790,6 +10829,36 @@ class WordFillPage(QDialog):
                 pos += 1
             edit.setCursorPosition(pos)
         return new
+
+    def _city_choices(self, row, edit):
+        m = QMenu(edit)
+        for v in ("Москва", "Санкт-Петербург"):
+            m.addAction(v, lambda val=v: (edit.setText(val), self._typed(row, val)))
+        m.setMinimumWidth(edit.width())
+        self._menu_show(m, edit.mapToGlobal(QPoint(0, edit.height() + 2)))
+
+    def _term_done(self, row, edit):
+        new = SW.term_days(edit.text())
+        if new != edit.text():
+            edit.setText(new)
+            self._typed(row, new)
+
+    def _contact_sync(self):
+        """«Контактное лицо при получении» — ФИО заказчика и его первый телефон, пока поле не поправили руками."""
+        con = next((r for r in self.rows if r["key"] == "contact" and r["edit"] is not None), None)
+        if con is None or not (not con["edit"].text().strip() or con["auto"]):
+            return
+        val = lambda key: next((r["edit"].text().strip() for r in self.rows if r["key"] == key and r["edit"] is not None
+                                and r is not con and r["edit"].text().strip()), "")
+        card = SW.derive(getattr(self, "card", None) or {})
+        fio = val("fio") or str(card.get("fio") or "")
+        phone = val("phone") or str(card.get("phone") or "")
+        text = "; ".join(x for x in (fio, phone) if x)
+        if con["edit"].text() != text:
+            con["edit"].setText(text)
+            con["edit"].setCursorPosition(0)
+            con["auto"] = True
+            self._write(con, text)
 
     def _invoice_done(self, row, edit):
         """Голое число в «Стоимости по инвойсу» — в тот же вид, что и остальные суммы: «980 000,00 (…) руб.»"""
@@ -15229,6 +15298,18 @@ class WindowChrome(QObject):
                         self.adopt(obj)
                 except Exception:
                     pass
+            if obj.isWidgetType() and obj.inherits("QAbstractSpinBox") and not obj.property("inset"):
+                try:                                     # число не прилипает к левой рамке поля
+                    obj.setProperty("inset", True)
+                    obj.lineEdit().setTextMargins(7, 0, 0, 0)
+                except Exception:
+                    pass
+            if isinstance(obj, QInputDialog):
+                try:
+                    obj.setOkButtonText("ОК")
+                    obj.setCancelButtonText("Отмена")
+                except Exception:
+                    pass
             if isinstance(obj, QMessageBox):
                 QTimer.singleShot(0, lambda box=obj: russian_buttons(box))
             elif isinstance(obj, (QMenu, QComboBox)):
@@ -15484,6 +15565,21 @@ class MainWindow(QMainWindow):
             style += ("\nQComboBox::drop-down, QDateEdit::drop-down { subcontrol-origin: padding; "
                       "subcontrol-position: center right; width: 22px; border: none; background: transparent; }"
                       f"\nQComboBox::down-arrow, QDateEdit::down-arrow {{ image: url('{arrow}'); width: 12px; height: 12px; }}")
+        up = qss_icon_path("chev_up", "#c9cddb" if self.theme == "dark" else "#4a4636")
+        if arrow and up:                                      # числовые поля: аккуратные стрелки вместо системных
+            hov = "rgba(232,176,75,0.22)" if self.theme == "dark" else "rgba(192,127,22,0.16)"
+            style += ("\nQSpinBox, QDoubleSpinBox { padding: 5px 26px 5px 8px; }"
+                      "\nQSpinBox:focus, QDoubleSpinBox:focus { padding: 4px 25px 4px 7px; }"
+                      "\nQSpinBox::up-button, QDoubleSpinBox::up-button { subcontrol-origin: border; "
+                      "subcontrol-position: top right; width: 22px; border: none; background: transparent; "
+                      "margin: 3px 3px 0 0; border-radius: 4px; }"
+                      "\nQSpinBox::down-button, QDoubleSpinBox::down-button { subcontrol-origin: border; "
+                      "subcontrol-position: bottom right; width: 22px; border: none; background: transparent; "
+                      "margin: 0 3px 3px 0; border-radius: 4px; }"
+                      f"\nQSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover, QSpinBox::down-button:hover, "
+                      f"QDoubleSpinBox::down-button:hover {{ background: {hov}; }}"
+                      f"\nQSpinBox::up-arrow, QDoubleSpinBox::up-arrow {{ image: url('{up}'); width: 10px; height: 10px; }}"
+                      f"\nQSpinBox::down-arrow, QDoubleSpinBox::down-arrow {{ image: url('{arrow}'); width: 10px; height: 10px; }}")
         QApplication.instance().setStyleSheet(style)
         self.view.set_theme(self.theme)
         self._retint_icons()

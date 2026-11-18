@@ -995,8 +995,47 @@ _GUESS_LABEL = ((r"заказчик \(декларант\)", "fio"), (r"^зак�
                 (r"вознаграждение", "sum_fee"), (r"общая стоимость", "sum_total"),
                 (r"стоимость по инвойсу", "sum_invoice"), (r"e-?mail", "email"), (r"^(?:моб\.?\s*)?телефон|^тел\b", "phone"),
                 (r"дата рождения", "birth"), (r"^выдан", "passport_issued"), (r"^паспорт", "passport"),
-                (r"адрес регистрации", "address"), (r"^фио", "fio"))
+                (r"адрес регистрации", "address"), (r"^фио", "fio"),
+                (r"контактное лицо", "contact"), (r"^срок доставки", "delivery_term"))
 TOTAL_RE = re.compile(r"\bитого\b|общая стоимость", re.I)
+
+
+_CITY_GEN = {"москва": "Москвы", "санкт-петербург": "Санкт-Петербурга"}
+_CITY_ALIAS = {"мск": "москва", "спб": "санкт-петербург", "питер": "санкт-петербург", "петербург": "санкт-петербург",
+               "с-петербург": "санкт-петербург", "санкт петербург": "санкт-петербург"}
+RE_FREE_CITY = re.compile(r"\b(?:до|от)\s+г\.\s*(Москв[аыеу]|Санкт-Петербург[ае]?)")
+
+
+def city_genitive(name):
+    """«Москва» → «Москвы», «спб» → «Санкт-Петербурга» — для «до г. …», «от г. …». Незнакомый город — по словарю, иначе как есть."""
+    t = " ".join(str(name or "").split())
+    low = _CITY_ALIAS.get(t.lower().replace("ё", "е"), t.lower())
+    if low in _CITY_GEN:
+        return _CITY_GEN[low]
+    if not t or not re.fullmatch(r"[А-ЯЁа-яё]+", t):
+        return t
+    try:
+        import stamp_decline as D
+        m = D._analyzer()
+        for p_ in (m.parse(t)[:4] if m is not None else ()):
+            if "NOUN" in p_.tag and "nomn" in p_.tag and "sing" in p_.tag:
+                f = p_.inflect({"gent"})
+                if f is not None:
+                    return f.word[:1].upper() + f.word[1:]
+    except Exception:
+        pass
+    return t
+
+
+def term_days(text):
+    """Срок: «7-10» → «7-10 дней», «3» → «3 дня», «1» → «1 день». Не число — как есть."""
+    t = str(text or "").strip()
+    m = re.fullmatch(r"(\d+)(?:\s*[-–—]\s*(\d+))?(?:\s*(?:дн\w*|день|дня|дней)\.?)?", t)
+    if not m:
+        return t
+    n = int(m.group(2) or m.group(1))
+    word = "дней" if 10 < n % 100 < 20 or n % 10 in (0, 5, 6, 7, 8, 9) else ("день" if n % 10 == 1 else "дня")
+    return (f"{m.group(1)}-{m.group(2)}" if m.group(2) else m.group(1)) + " " + word
 
 
 def guess_label(label):
