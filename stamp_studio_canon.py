@@ -213,6 +213,10 @@ QStatusBar::item {{ border: none; }}
 QLineEdit:focus, QComboBox:focus, QDoubleSpinBox:focus, QSpinBox:focus {{
     border: 2px solid #e8b04b; padding: 4px 7px;
 }}
+/* поля ввода: без отступа сверху и снизу — текст стоит по центру всей высоты и хвосты букв не срезаются */
+QLineEdit {{ padding: 0px 8px; min-height: 32px; }}
+QLineEdit:focus {{ padding: 0px 7px; min-height: 30px; }}
+QAbstractSpinBox QLineEdit, QComboBox QLineEdit {{ min-height: 0px; padding: 0px; border: none; background: transparent; }}
 
 QToolBar#dirbar {{
     background: #171a22; border: none; border-bottom: 1px solid #2e3345;
@@ -360,6 +364,10 @@ QDockWidget::title {{ border-right: 1px solid #e2ddd2; }}
 QLineEdit:focus, QComboBox:focus, QDoubleSpinBox:focus, QSpinBox:focus {{
     border: 2px solid #c07f16; padding: 4px 7px;
 }}
+/* поля ввода: без отступа сверху и снизу — текст стоит по центру всей высоты и хвосты букв не срезаются */
+QLineEdit {{ padding: 0px 8px; min-height: 32px; }}
+QLineEdit:focus {{ padding: 0px 7px; min-height: 30px; }}
+QAbstractSpinBox QLineEdit, QComboBox QLineEdit {{ min-height: 0px; padding: 0px; border: none; background: transparent; }}
 
 QToolBar#dirbar {{
     background: #efece5; border: none; border-bottom: 1px solid #e2ddd2;
@@ -594,7 +602,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.20.8"
+APP_VERSION = "6.20.9"
 EDITION = "canon"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -8587,6 +8595,7 @@ class AiCenterDialog(QDialog):
 
 
 WORD_PAR = QTextFormat.UserProperty + 1
+WORD_EXTRA = QTextFormat.UserProperty + 7     # строка доп. услуги в окне: в файл попадает при сохранении
 
 
 class ClickLabel(QLabel):
@@ -8654,6 +8663,18 @@ def pages_label(pages):
         out.append(str(nums[i]) if i == j else f"{nums[i]}-{nums[j]}")
         i = j + 1
     return ",".join(out)
+
+
+def passport_mask(text):
+    """Паспорт РФ по ходу набора: «3209828287» → «32 09 828287». Пробелы встают сами.
+    Если есть буквы (паспорт другой страны) или цифр больше десяти — текст не трогается."""
+    text = str(text or "")
+    if re.search(r"[^\d\s]", text):
+        return text
+    d = re.sub(r"\D", "", text)
+    if len(d) > 10:
+        return text
+    return " ".join(p for p in (d[:2], d[2:4], d[4:]) if p)
 
 
 def phone_mask(text):
@@ -9166,7 +9187,13 @@ class ClientCardDialog(QDialog):
                 if key.startswith("sum_"):
                     ed.setPlaceholderText("число, без «руб.»")
                 elif key in ("birth", "contract_date"):
-                    ed.setPlaceholderText("ДД.ММ.ГГГГ")
+                    ed.setPlaceholderText("ДД.ММ.ГГГГ — только цифры, точки встанут сами")
+                    ed.textEdited.connect(lambda t, e=ed: WordFillPage._date_typed(e, t))
+                elif key == "passport":
+                    ed.setPlaceholderText("цифры подряд — пробелы встанут сами")
+                    ed.textEdited.connect(lambda t, e=ed: WordFillPage._passport_typed(e, t))
+                elif key in ("phone", "phone2"):
+                    ed.textEdited.connect(lambda t, e=ed: WordFillPage._mask_typed(e, t, phone_mask(t), True))
                 g.addWidget(ed, row, 1)
                 self.edits[key] = ed
                 row += 1
@@ -9482,21 +9509,24 @@ class WordFillPage(QDialog):
         v.addLayout(th)
         self.lst_tpl = QListWidget()
         self.lst_tpl.setObjectName("tpllist")
-        self.lst_tpl.setViewMode(QListWidget.IconMode)
+        # ровные строки в несколько колонок: значок слева, название целиком в одну строку
+        self.lst_tpl.setViewMode(QListWidget.ListMode)
+        self.lst_tpl.setFlow(QListWidget.LeftToRight)
         self.lst_tpl.setResizeMode(QListWidget.Adjust)
         self.lst_tpl.setMovement(QListWidget.Static)
         self.lst_tpl.setWrapping(True)
-        self.lst_tpl.setSpacing(6)
-        self.lst_tpl.setIconSize(QSize(34, 34))
-        self.lst_tpl.setGridSize(QSize(204, 128))      # три строки названия помещаются целиком
-        self.lst_tpl.setWordWrap(True)
-        self.lst_tpl.setTextElideMode(Qt.ElideNone)
+        self.lst_tpl.setSpacing(0)
+        self.lst_tpl.setIconSize(QSize(22, 22))
+        self.lst_tpl.setWordWrap(False)
+        self.lst_tpl.setTextElideMode(Qt.ElideRight)
         self.lst_tpl.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.lst_tpl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.lst_tpl.viewport().installEventFilter(self)
         self.lst_tpl.setToolTip("Щелчок — открыть чистый бланк. Правая кнопка — переименовать, заменить файл, удалить")
         self.lst_tpl.itemClicked.connect(lambda it: self.win.word_fill(it.data(Qt.UserRole)))
         self.lst_tpl.setContextMenuPolicy(Qt.CustomContextMenu)
         self.lst_tpl.customContextMenuRequested.connect(self._tpl_menu)
-        v.addWidget(self.lst_tpl, 3)
+        v.addWidget(self.lst_tpl, 0)
         self.zone = DropZone()
         self.zone.exts = (".docx",)
         zl = QVBoxLayout(self.zone)
@@ -9552,12 +9582,54 @@ class WordFillPage(QDialog):
         for name, path in items:
             it = QListWidgetItem(ic, name)
             it.setData(Qt.UserRole, path)
-            it.setTextAlignment(Qt.AlignHCenter | Qt.AlignTop)
             it.setToolTip(name)
             self.lst_tpl.addItem(it)
+        self.lst_tpl.setGridSize(QSize())
         self.lst_tpl.setVisible(bool(items))
-        self.lbl_tpl.setText("щелчок — открыть чистый бланк; готовый файл сохраняется в папку клиента" if items else
+        self._tpl_fit()
+        self.lbl_tpl.setText("щелчок — открыть бланк  ·  правая кнопка — дать своё название, заменить, удалить" if items else
                              "пока пусто — добавьте файл Word; то, что в нём меняется, выделите жёлтым")
+
+    TPL_ROW = 40
+
+    def _tpl_fit(self):
+        """Колонки по ширине: самое длинное название видно целиком; высота — по числу строк."""
+        lst = self.lst_tpl
+        n = lst.count()
+        if not n:
+            return
+        fm = lst.fontMetrics()
+        need = max(fm.horizontalAdvance(lst.item(i).text()) for i in range(n)) + 22 + 44
+        pad_w = max(0, lst.width() - lst.viewport().width())
+        pad_h = max(0, lst.height() - lst.viewport().height())
+        if lst.verticalScrollBar().isVisible():
+            pad_w -= lst.verticalScrollBar().width()
+        full = max(120, lst.width() - pad_w)
+        cols = max(1, min(n, full // max(need, 200)))
+        rows = -(-n // cols)
+        show = min(rows, 6)
+        pol = Qt.ScrollBarAlwaysOn if rows > show else Qt.ScrollBarAlwaysOff
+        if lst.verticalScrollBarPolicy() != pol:
+            lst.setVerticalScrollBarPolicy(pol)
+        avail = full - (lst.verticalScrollBar().sizeHint().width() if rows > show else 0)
+        wrap = cols == 1 and need > avail                  # совсем узко — название в две строки
+        row_h = 56 if wrap else self.TPL_ROW
+        if lst.wordWrap() != wrap:
+            lst.setWordWrap(wrap)
+        grid = QSize(max(60, (avail - 2) // cols), row_h)
+        if lst.gridSize() != grid:
+            cell = QSize(grid.width() - 6, row_h - 4)      # подсветка и щелчок — на всю ячейку
+            for i in range(n):
+                lst.item(i).setSizeHint(cell)
+            lst.setGridSize(grid)
+        h = show * row_h + pad_h
+        if lst.minimumHeight() != h or lst.maximumHeight() != h:
+            lst.setFixedHeight(h)
+
+    def eventFilter(self, obj, ev):
+        if ev.type() == QEvent.Resize and obj is getattr(self, "lst_tpl", None).viewport():
+            QTimer.singleShot(0, self._tpl_fit)
+        return super().eventFilter(obj, ev)
 
     def tpl_add_dialog(self):
         paths, _ = QFileDialog.getOpenFileNames(self, "Файлы Word — в шаблоны", self.win.current_dir(),
@@ -10210,8 +10282,8 @@ class WordFillPage(QDialog):
                 v.addWidget(self.inst_box)
                 self.b_inst.setChecked(bool(on0))
                 self.inst_box.setVisible(bool(on0))
-                keep = lambda *_: setattr(self, "_inst_data", (self.ed_inst_first.text().strip(), self.ed_inst_month.text().strip(),
-                                                               self.b_inst.isChecked()))
+                keep = lambda *_: (setattr(self, "_inst_data", (self.ed_inst_first.text().strip(), self.ed_inst_month.text().strip(),
+                                                                self.b_inst.isChecked())), self._extras_preview())
                 self.b_inst.toggled.connect(lambda on: (self.inst_box.setVisible(on), keep(), self.ed_inst_month.setFocus() if on else None))
                 self.ed_inst_first.textChanged.connect(keep)
                 self.ed_inst_month.textChanged.connect(keep)
@@ -10256,7 +10328,7 @@ class WordFillPage(QDialog):
             ed.setMinimumHeight(34)
             ed.setTextMargins(1, 0, 7, 0)                 # длинный текст не упирается в правую рамку
             is_date = row["kind"] == "date" or (row["kind"] == "dummy" and row.get("dummy") == "Дата") \
-                or row.get("hl") in ("date", "date_words")
+                or row.get("hl") in ("date", "date_words") or row["key"] == "birth"
             ed.setPlaceholderText("первый номер впишите сами — дальше пойдёт сам" if row.get("docnum") else
                                   row.get("hint") or ("ДД.ММ.ГГГГ — набирайте цифры, точки встанут сами" if is_date else
                                                       tips.get(row["kind"], SW.KEY_TITLES.get(row["key"], ""))))
@@ -10271,6 +10343,9 @@ class WordFillPage(QDialog):
                 ed.setPlaceholderText("набирайте цифры: +7(916) 975-13-68" if row["key"] == "phone" else
                                       "второй номер — если есть")
                 ed.textEdited.connect(lambda t, r=row, e=ed: self._typed(r, self._mask_typed(e, t, phone_mask(t), True)))
+            elif row["key"] == "passport":
+                ed.setPlaceholderText("цифры подряд — пробелы встанут сами")
+                ed.textEdited.connect(lambda t, r=row, e=ed: self._typed(r, self._passport_typed(e, t)))
             elif unit:
                 ed.setPlaceholderText("только число — «%s» допишется само" % unit[0])
                 ed.textEdited.connect(lambda t, r=row, e=ed, u=unit: self._typed(
@@ -10358,6 +10433,83 @@ class WordFillPage(QDialog):
     def _extras_changed(self):
         self._extras_data = [(e["name"].text().strip(), e["sum"].text().strip()) for e in self._extras]
         self._recalc()
+        self._extras_preview()
+
+    def _services(self):
+        """[(название, текст ячейки)] — строки, которые добавятся в таблицу перед итогом."""
+        tot_ = getattr(self, "_extras_tot", None)
+        if tot_ is None or tot_.get("field") is None:
+            return []
+        out = [(name, tot_["field"].render(amount) or amount) for name, amount in self.extras()]
+        if self.installment_row():
+            out.append(("Рассрочка", self.installment_row()))
+        return out
+
+    def _extras_preview(self):
+        """Показать строки доп. услуг и рассрочки в документе на экране — так же, как они лягут в файл."""
+        tot_ = getattr(self, "_extras_tot", None)
+        if tot_ is None or tot_.get("field") is None or getattr(self, "wd", None) is None:
+            return
+        doc = self.view.document()
+        blk, b = None, doc.begin()
+        while b.isValid():
+            if b.blockFormat().property(WORD_PAR) == tot_["field"].par:
+                blk = b
+                break
+            b = b.next()
+        if blk is None:
+            return
+        cur = QTextCursor(blk)
+        tbl = cur.currentTable()
+        if tbl is None:
+            return
+        marked = lambda r: tbl.cellAt(r, 0).firstCursorPosition().blockFormat().property(WORD_EXTRA) is not None
+        num_re = re.compile(r"^\s*(\d+)(\.?)\s*$")
+        cell_text = lambda r, c: QTextCursor(tbl.cellAt(r, c).firstCursorPosition()).block().text()
+        services = self._services()
+        sb = self.view.verticalScrollBar()
+        keep_scroll = sb.value()
+        self.view.blockSignals(True)
+        edit = QTextCursor(doc)
+        edit.beginEditBlock()
+        try:
+            row = tbl.cellAt(cur).row()
+            old = 0
+            while row - old - 1 >= 0 and marked(row - old - 1):
+                old += 1
+            if old:
+                tbl.removeRows(row - old, old)
+                row -= old
+            cols = tbl.columns()
+            base = num_re.match(cell_text(row - 1, 0)) if row >= 1 else None
+            tot_num = num_re.match(cell_text(row, 0))
+            if services and row >= 1 and cols >= 3:
+                tbl.insertRows(row, len(services))
+                for j, (name, value) in enumerate(services):
+                    vals = {0: f"{int(base.group(1)) + j + 1}{base.group(2)}" if base else "", 1: name, cols - 1: value}
+                    for c in range(cols):
+                        text = vals.get(c, "")
+                        src = tbl.cellAt(row - 1, c).firstCursorPosition()
+                        cc = tbl.cellAt(row + j, c).firstCursorPosition()
+                        bf = src.blockFormat()
+                        bf.clearProperty(WORD_PAR)
+                        bf.setProperty(WORD_EXTRA, True)
+                        cc.setBlockFormat(bf)
+                        cf = src.charFormat()
+                        cf.clearBackground()
+                        cc.insertText(str(text).replace("\n", "\u2028"), cf)
+                row += len(services)
+            if base and tot_num:                           # номер строки итога идёт следом
+                want = f"{int(base.group(1)) + len(services) + 1}{tot_num.group(2)}"
+                c0 = tbl.cellAt(row, 0).firstCursorPosition()
+                if c0.block().text().strip() != want:
+                    fmt = c0.charFormat()
+                    c0.movePosition(QTextCursor.EndOfBlock, QTextCursor.KeepAnchor)
+                    c0.insertText(want, fmt)
+        finally:
+            edit.endEditBlock()
+            self.view.blockSignals(False)
+            sb.setValue(keep_scroll)
 
     def _inst_take(self):
         pg = getattr(self.win, "_inst_page", None)
@@ -10414,6 +10566,21 @@ class WordFillPage(QDialog):
             edit.setText(new)
         if new:
             edit.setCursorPosition(len(new) if to_end else max(0, len(new) - tail))
+        return new
+
+    @staticmethod
+    def _passport_typed(edit, text):
+        """Пробелы в паспорте ставятся сами; курсор остаётся у той же цифры."""
+        new = passport_mask(text)
+        if new != text:
+            digits = len(re.sub(r"\D", "", text[:edit.cursorPosition()]))
+            edit.setText(new)
+            pos = 0
+            while digits and pos < len(new):
+                if new[pos].isdigit():
+                    digits -= 1
+                pos += 1
+            edit.setCursorPosition(pos)
         return new
 
     def _volume_done(self, row, edit):
@@ -10724,11 +10891,7 @@ class WordFillPage(QDialog):
         try:
             fresh = SW.WordDoc(self.path)
             tot_ = getattr(self, "_extras_tot", None)
-            services = []
-            if tot_ is not None and tot_["field"] is not None:
-                services = [(name, tot_["field"].render(amount) or amount) for name, amount in self.extras()]
-                if self.installment_row():
-                    services.append(("Рассрочка", self.installment_row()))
+            services = self._services()
             n = fresh.save(out, edits=edits, services=services,
                            total_par=tot_["field"].par if services else None,
                            align=bool(settings_load().get("word_align_sign", True)))
@@ -11570,7 +11733,7 @@ class LkpBoard(QWidget):
             e.setFrame(False)
             e.setMaxLength(9 if name.startswith("b") else 3)
             e.setStyleSheet("QLineEdit { background: rgba(255,255,255,0); color: #1b36a8; border: none; "
-                            "padding: 0; font-weight: 600; } QLineEdit:focus { background: #fff6dc; }")
+                            "padding: 0; min-height: 0px; font-weight: 600; } QLineEdit:focus { background: #fff6dc; padding: 0; min-height: 0px; }")
             e.setToolTip("Толщина ЛКП в микронах, код повреждения или «-/-»" if name.startswith("b")
                          else "Износ, %  (только число)")
             if name in ACT.PERCENT_BOXES:                # окошко у колеса: сюда пишется износ в процентах
@@ -12523,9 +12686,9 @@ QDialog#license QLabel#lic_title { font-size: 20px; font-weight: 700; color: #1f
 QDialog#license QLabel#lic_sub { color: #6f6a5c; }
 QDialog#license QLabel#lic_err { color: #b3261e; }
 QDialog#license QLabel#lic_ok { color: #1b7a3d; }
-QDialog#license QLineEdit { background: #ffffff; border: 1px solid #d9d2bf; border-radius: 8px; padding: 9px 12px;
+QDialog#license QLineEdit { background: #ffffff; border: 1px solid #d9d2bf; border-radius: 8px; padding: 6px 12px; min-height: 24px;
     font-size: 14px; color: #1f1e1b; selection-background-color: #f1d79a; }
-QDialog#license QLineEdit:focus { border-color: #d69a33; }
+QDialog#license QLineEdit:focus { border: 1px solid #d69a33; padding: 6px 12px; min-height: 24px; }
 QDialog#license QPushButton { border-radius: 8px; padding: 9px 16px; font-size: 13px; font-weight: 600;
     background: #ffffff; border: 1px solid #d9d2bf; color: #2b2a26; }
 QDialog#license QPushButton:hover { border-color: #d69a33; }
@@ -19814,7 +19977,8 @@ class MainWindow(QMainWindow):
         self.doc_path = path
         self.compress_profile = None
         folder = os.path.dirname(str(path))
-        if os.path.isdir(folder) and hasattr(self, "_dirs") and folder != self.current_dir():
+        if os.path.isdir(folder) and hasattr(self, "_dirs") and folder != self.current_dir() \
+                and not tpl_is(folder + os.sep + "x"):      # шаблон открыт — работа остаётся в папке клиента
             self.set_dir(folder)
         self.refresh_page_list(0)
         self.show_page(0)
