@@ -608,7 +608,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.21.3"
+APP_VERSION = "6.21.4"
 EDITION = "main"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -9578,14 +9578,14 @@ class WordFillPage(QDialog):
         self.lst_tpl.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.lst_tpl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.lst_tpl.viewport().installEventFilter(self)
-        self.lst_tpl.setToolTip("Щелчок — открыть чистый бланк. Правая кнопка — переименовать, заменить файл, удалить")
-        self.lst_tpl.itemClicked.connect(lambda it: self.win.word_fill(it.data(Qt.UserRole)))
+        self.lst_tpl.setToolTip("Двойной щелчок — открыть чистый бланк. Правая кнопка — переименовать, заменить файл, удалить")
+        self.lst_tpl.itemDoubleClicked.connect(lambda it: self.tpl_open(it.data(Qt.UserRole)))
         self.lst_tpl.setContextMenuPolicy(Qt.CustomContextMenu)
         self.lst_tpl.customContextMenuRequested.connect(self._tpl_menu)
         v.addWidget(self.lst_tpl, 0)
         self.cap_draft = QLabel("ЧЕРНОВИКИ")
         self.cap_draft.setObjectName("paneltitle")
-        self.cap_draft.setToolTip("Начатые документы: щелчок — продолжить заполнение с того же места.\n"
+        self.cap_draft.setToolTip("Начатые документы: двойной щелчок — продолжить заполнение с того же места.\n"
                                   "Правая кнопка — удалить черновик")
         v.addWidget(self.cap_draft)
         self.lst_draft = QListWidget()
@@ -9601,7 +9601,7 @@ class WordFillPage(QDialog):
         self.lst_draft.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.lst_draft.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.lst_draft.setToolTip(self.cap_draft.toolTip())
-        self.lst_draft.itemClicked.connect(lambda it: self.draft_open(it.data(Qt.UserRole)))
+        self.lst_draft.itemDoubleClicked.connect(lambda it: self.draft_open(it.data(Qt.UserRole)))
         self.lst_draft.setContextMenuPolicy(Qt.CustomContextMenu)
         self.lst_draft.customContextMenuRequested.connect(self._draft_menu)
         self.lst_draft.viewport().installEventFilter(self)
@@ -9663,6 +9663,12 @@ class WordFillPage(QDialog):
             it.setData(Qt.UserRole, path)
             it.setToolTip(name)
             self.lst_tpl.addItem(it)
+        if items:                                        # расчёт рассрочки с графиком платежей — тут же, среди бланков
+            it = QListWidgetItem(draw_icon("datalist", self.win._icon_color()), "Рассрочка — расчёт и график платежей")
+            it.setData(Qt.UserRole, self.TPL_INST)
+            it.setToolTip("Расчёт рассрочки (аннуитет или равными долями, льготный период)\n"
+                          "и готовое приложение к договору с таблицей платежей")
+            self.lst_tpl.addItem(it)
         self.lst_tpl.setGridSize(QSize())
         self.lst_tpl.setVisible(bool(items))
         self.lst_draft.clear()
@@ -9680,13 +9686,20 @@ class WordFillPage(QDialog):
         self.cap_draft.setVisible(has)
         self.lst_draft.setVisible(has)
         self._tpl_fit()
-        self.lbl_tpl.setText("щелчок — открыть бланк  ·  правая кнопка — дать своё название, заменить, удалить" if items else
+        self.lbl_tpl.setText("двойной щелчок — открыть  ·  правая кнопка — переименовать" if items else
                              "пока пусто — добавьте файл Word; то, что в нём меняется, выделите жёлтым")
 
     TPL_ROW = 40
+    TPL_INST = "@installment"
+
+    def tpl_open(self, path):
+        if path == self.TPL_INST:
+            self.win.open_installment_page()
+        else:
+            self.win.word_fill(path)
 
     def _tpl_fit(self):
-        self._list_fit(self.lst_tpl, 6)
+        self._list_fit(self.lst_tpl, 8)
         self._list_fit(self.lst_draft, 3)
 
     def _list_fit(self, lst, max_rows):
@@ -9857,6 +9870,11 @@ class WordFillPage(QDialog):
         if it is None:
             return
         path = it.data(Qt.UserRole)
+        if path == self.TPL_INST:
+            m = QMenu(self)
+            m.addAction(draw_icon("datalist", self.win._icon_color()), "Открыть расчёт рассрочки", self.win.open_installment_page)
+            self._menu_show(m, self.lst_tpl.viewport().mapToGlobal(pos))
+            return
         col = self.win._icon_color()
         m = QMenu(self)
         m.addAction(draw_icon("word", col), "Открыть", lambda: self.win.word_fill(path))
