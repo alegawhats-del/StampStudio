@@ -608,7 +608,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.21.4"
+APP_VERSION = "6.21.5"
 EDITION = "main"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -10153,6 +10153,16 @@ class WordFillPage(QDialog):
             two["virtual"], two["main"] = "phone2", ph
             two["hint"] = "встанет строкой под первым номером"
             rows.append(two)
+        else:                                            # «Тел.: ____» — пустое место после подписи: второй номер тоже нужен
+            ph = next((r for r in rows if r["key"] == "phone" and r["kind"] in ("blank", "tail")), None)
+            if ph is not None:
+                end = ph["cursors"][0].selectionEnd()
+                two = self._new_row("Второй телефон — если есть", "phone2", "virtual", [(end, end)])
+                two["virtual"], two["main"] = "phone2", ph
+                two["hint"] = "оба номера встанут строками под подписью"
+                rows.append(two)
+        if ph is not None:
+            ph["phone_main"] = True
         spans, b_ = [], self.view.document().begin()   # «до г. Москвы», «от г. Москвы» — город бесплатной доставки
         while b_.isValid():
             if b_.blockFormat().property(WORD_PAR) is not None:
@@ -10960,7 +10970,7 @@ class WordFillPage(QDialog):
 
     def _typed(self, row, text, spread=True):
         row["auto"] = False
-        if row.get("virtual") == "phone2" or (row["kind"] == "dummy" and row["key"] == "phone"):
+        if row.get("virtual") == "phone2" or row.get("phone_main") or (row["kind"] == "dummy" and row["key"] == "phone"):
             self._write(row, text)
             self._phone_sync()
             self._recalc()
