@@ -608,7 +608,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.21.2"
+APP_VERSION = "6.21.3"
 EDITION = "canon"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -10996,10 +10996,12 @@ class WordFillPage(QDialog):
         for r in self.rows:
             if r["key"] in ("passport_date", "birth"):
                 continue                                  # дата паспорта и рождения — не «дата документа»
-            if r["kind"] == "date" and r["edit"] is not None and (not r["edit"].text().strip() or r["auto"]):
+            if (r["kind"] == "date" or r.get("hl") in ("date", "date_words")) and not r.get("fixed") \
+                    and r["edit"] is not None and (not r["edit"].text().strip() or r["auto"]):
                 r["edit"].setText(text.strip())
                 r["auto"] = True
                 self._write(r, text)
+        self._recalc()
         self._count()
 
     def _count(self):
