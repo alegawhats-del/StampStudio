@@ -608,7 +608,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.21.6"
+APP_VERSION = "6.22.0"
 EDITION = "canon"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -9752,6 +9752,7 @@ class WordFillPage(QDialog):
                 "title": SW.initials(fio) if fio else "", "folder": self.win.current_dir(), "time": time.time(),
                 "fields": fields, "extras": [list(x) for x in getattr(self, "_extras_data", [])],
                 "inst": list(getattr(self, "_inst_data", ("", "", False))),
+                "tradein": getattr(self, "_tradein_data", None) or {},
                 "pars": {str(k): v for k, v in self.view.changed_paragraphs().items()}}
         try:
             self._draft_id = draft_save(getattr(self, "_draft_id", ""), data)
@@ -9799,6 +9800,11 @@ class WordFillPage(QDialog):
             self.ed_inst_first.setText(str(inst[0]))
             self.ed_inst_month.setText(str(inst[1]))
             self.b_inst.setChecked(bool(inst[2]))
+        td = d.get("tradein") or {}
+        if hasattr(self, "ed_trade") and td.get("values"):
+            for k, e in self.ed_trade.items():
+                e.setText(str(td["values"].get(k, "")))
+            self.b_trade.setChecked(bool(td.get("on")))
         for _pass in (0, 1):                         # второй проход — то, что пересчиталось не так, как было вписано
             for row, f in todo:
                 if row["edit"].text() != f["text"]:
@@ -10063,6 +10069,7 @@ class WordFillPage(QDialog):
         self._extras_data = []                       # доп. услуги — у каждого документа свои
         self._draft_id = ""
         self._inst_data = ("", "", False)
+        self._tradein_data = {"on": False, "values": {}}
         self.lbl_doc.setText(os.path.basename(path))
         self.lbl_doc.setToolTip(path)
         self.view.blockSignals(True)
@@ -10544,6 +10551,36 @@ class WordFillPage(QDialog):
                 self.b_inst.toggled.connect(lambda on: (self.inst_box.setVisible(on), keep(), self.ed_inst_month.setFocus() if on else None))
                 self.ed_inst_first.textChanged.connect(keep)
                 self.ed_inst_month.textChanged.connect(keep)
+                td = getattr(self, "_tradein_data", None) or {"on": False, "values": {}}
+                self.b_trade = QPushButton(" Трейд-ин: автомобиль заказчика")
+                self.b_trade.setCheckable(True)
+                self.b_trade.setIcon(draw_icon("datalist", self.win._icon_color()))
+                self.b_trade.setIconSize(QSize(13, 13))
+                self.b_trade.setCursor(Qt.PointingHandCursor)
+                self.b_trade.setToolTip("Таблица «Характеристики передаваемого автомобиля» под «Общей стоимостью».\n"
+                                        "В документ попадают только заполненные строки. На общую стоимость не влияет.")
+                v.addWidget(self.b_trade)
+                self.trade_box = QWidget()
+                tl = QVBoxLayout(self.trade_box)
+                tl.setContentsMargins(0, 2, 0, 0)
+                tl.setSpacing(3)
+                self.ed_trade = {}
+                hints = {"mileage": " — только число, «км» допишется", "volume": " — например: 1.6 1591",
+                         "price": " — только число, пропись подставится"}
+                for key, title in SW.TRADEIN_ROWS:
+                    e = QLineEdit(str(td["values"].get(key, "")))
+                    e.setMinimumHeight(34)
+                    e.setPlaceholderText(title + hints.get(key, ""))
+                    e.setToolTip(title)
+                    e.textChanged.connect(self._tradein_keep)
+                    e.editingFinished.connect(lambda k=key, w_=e: self._tradein_done(k, w_))
+                    tl.addWidget(e)
+                    self.ed_trade[key] = e
+                v.addWidget(self.trade_box)
+                self.b_trade.setChecked(bool(td.get("on")))
+                self.trade_box.setVisible(bool(td.get("on")))
+                self.b_trade.toggled.connect(lambda on: (self.trade_box.setVisible(on), self._tradein_keep(),
+                                                         self.ed_trade["model"].setFocus() if on else None))
                 v.addSpacing(6)
                 data, self._extras = list(getattr(self, "_extras_data", [])), []
                 for name, amount in data:
@@ -10752,6 +10789,10 @@ class WordFillPage(QDialog):
             old = 0
             while row - old - 1 >= 0 and marked(row - old - 1):
                 old += 1
+            top = row - old - 1
+            edge0 = tbl.cellAt(top, tbl.columns() - 1).lastCursorPosition().position() if top >= 0 else -1
+            held0 = [(c_, c_.selectionStart(), c_.selectionEnd()) for r_ in self.rows for c_ in r_.get("cursors", ())
+                     if c_.selectionEnd() <= edge0]       # места полей выше вставляемых строк остаются на месте
             if old:
                 tbl.removeRows(row - old, old)
                 row -= old
@@ -10774,6 +10815,10 @@ class WordFillPage(QDialog):
                         cf.clearBackground()
                         cc.insertText(str(text).replace("\n", "\u2028"), cf)
                 row += len(services)
+            for c_, a_, b_ in held0:
+                if (c_.selectionStart(), c_.selectionEnd()) != (a_, b_):
+                    c_.setPosition(a_)
+                    c_.setPosition(b_, QTextCursor.KeepAnchor)
             if base and tot_num:                           # номер строки итога идёт следом
                 want = f"{int(base.group(1)) + len(services) + 1}{tot_num.group(2)}"
                 c0 = tbl.cellAt(row, 0).firstCursorPosition()
@@ -10781,10 +10826,75 @@ class WordFillPage(QDialog):
                     fmt = c0.charFormat()
                     c0.movePosition(QTextCursor.EndOfBlock, QTextCursor.KeepAnchor)
                     c0.insertText(want, fmt)
+            edge = tbl.cellAt(row, cols - 1).lastCursorPosition().position()
+            held = [(c_, c_.selectionStart(), c_.selectionEnd()) for r_ in self.rows for c_ in r_.get("cursors", ())
+                    if c_.selectionEnd() <= edge]         # места полей выше: вставка строк ниже не должна их сдвинуть
+            below = 0                                      # трейд-ин — под строкой итога
+            while row + 1 + below < tbl.rows() and marked(row + 1 + below):
+                below += 1
+            if below:
+                tbl.removeRows(row + 1, below)
+            items = self.tradein_rows()
+            if items and cols >= 3:
+                if row + 1 >= tbl.rows():
+                    tbl.appendRows(len(items) + 1)
+                else:
+                    tbl.insertRows(row + 1, len(items) + 1)
+                lines = [{0: SW.TRADEIN_TITLE}] + [{0: f"{j}.", 1: name, cols - 1: value}
+                                                   for j, (name, value) in enumerate(items, 1)]
+                for j, vals in enumerate(lines):
+                    for c in range(cols):
+                        src = tbl.cellAt(row, c if j else cols - 1).firstCursorPosition()
+                        cc = tbl.cellAt(row + 1 + j, c).firstCursorPosition()
+                        bf = src.blockFormat()
+                        bf.clearProperty(WORD_PAR)
+                        bf.setProperty(WORD_EXTRA, True)
+                        if not j:
+                            bf.setAlignment(Qt.AlignHCenter)
+                        cc.setBlockFormat(bf)
+                        cf = src.charFormat()
+                        cf.clearBackground()
+                        cc.insertText(str(vals.get(c, "")), cf)
+                tbl.mergeCells(row + 1, 0, 1, cols)
+            for c_, a_, b_ in held:
+                if (c_.selectionStart(), c_.selectionEnd()) != (a_, b_):
+                    c_.setPosition(a_)
+                    c_.setPosition(b_, QTextCursor.KeepAnchor)
         finally:
             edit.endEditBlock()
             self.view.blockSignals(False)
             sb.setValue(keep_scroll)
+
+    def _tradein_keep(self, *_):
+        if not hasattr(self, "ed_trade"):
+            return
+        self._tradein_data = {"on": self.b_trade.isChecked(),
+                              "values": {k: e.text().strip() for k, e in self.ed_trade.items()}}
+        self._extras_preview()
+
+    def _tradein_done(self, key, edit):
+        """Пробег, объём и оценочная стоимость приводятся к тому же виду, что и в основной таблице."""
+        t = edit.text().strip()
+        if not t:
+            return
+        new = t
+        if key == "mileage":
+            m = re.match(r"^(\D*?)(\d[\d \u00a0]*)\s*(?:км\.?)?$", t)
+            if m:
+                new = m.group(1) + unit_text(m.group(2), "км", True)
+        elif key == "volume":
+            new = volume_text(t)
+        elif key == "price" and SW.parse_number(t) is not None:
+            new = SW.money_cell(t)
+        if new != t:
+            edit.setText(new)
+
+    def tradein_rows(self):
+        """[(название, значение)] для таблицы трейд-ина — только заполненные строки; [] — таблицы нет."""
+        td = getattr(self, "_tradein_data", None) or {}
+        if not td.get("on") or getattr(self, "_extras_tot", None) is None:
+            return []
+        return [(title, td["values"][key]) for key, title in SW.TRADEIN_ROWS if td.get("values", {}).get(key)]
 
     def _inst_take(self):
         pg = getattr(self.win, "_inst_page", None)
@@ -11212,8 +11322,9 @@ class WordFillPage(QDialog):
             fresh = SW.WordDoc(self.path)
             tot_ = getattr(self, "_extras_tot", None)
             services = self._services()
-            n = fresh.save(out, edits=edits, services=services,
-                           total_par=tot_["field"].par if services else None,
+            tradein = self.tradein_rows()
+            n = fresh.save(out, edits=edits, services=services, tradein=tradein,
+                           total_par=tot_["field"].par if (services or tradein) else None,
                            align=bool(settings_load().get("word_align_sign", True)))
         except PermissionError:
             QMessageBox.warning(self, "Редактор Word", "Не удалось записать файл — он открыт в Word. "

@@ -697,7 +697,9 @@ class WordDoc:
         return mn.group(1) + gap + mn.group(3).replace(" ", " ")
 
     # ---- доводка готового документа: то, что нельзя сделать заменой текста
-    def finish(self, services=None, total_par=None, align=True):
+    def finish(self, services=None, total_par=None, align=True, tradein=None):
+        if tradein and total_par is not None:              # до доп. услуг: те вставляются выше итога и его не сдвигают
+            self._add_tradein_rows(total_par, tradein)
         """services: [(название, текст значения)] — строки доп. услуг перед строкой итога (абзац total_par)."""
         if services and total_par is not None:
             self._add_service_rows(total_par, services)
@@ -796,6 +798,69 @@ class WordDoc:
         if num(tr):
             self._cell_set(cells_of(tr)[0], f"{n0 + len(services) + 1}{dot}")
         return len(services)
+
+    def _add_tradein_rows(self, total_par, items):
+        """Под строкой итога: заголовок «Характеристики передаваемого автомобиля» и строки [(название, значение)]."""
+        p = self.pars[total_par]
+        tr = p.getparent()
+        while tr is not None and tr.tag != TR:
+            tr = tr.getparent()
+        if tr is None:
+            return 0
+        cells_of = lambda row: [c for c in row if c.tag == TC]
+        if len(cells_of(tr)) < 3:
+            return 0
+        wq = lambda n: f"{{{W}}}{n}"
+        head = copy.deepcopy(tr)
+        cs = cells_of(head)
+        width = 0
+        for c in cs:
+            tw = c.find(wq("tcPr") + "/" + wq("tcW"))
+            try:
+                width += int(tw.get(wq("w"))) if tw is not None else 0
+            except (TypeError, ValueError):
+                pass
+        first = cs[-1]                                     # оформление — как у ячейки значения
+        for c in cs[:-1]:
+            head.remove(c)
+        pr = first.find(wq("tcPr"))
+        if pr is None:
+            pr = first.makeelement(wq("tcPr"), {})
+            first.insert(0, pr)
+        for old in pr.findall(wq("gridSpan")):
+            pr.remove(old)
+        tw = pr.find(wq("tcW"))
+        if tw is not None and width:
+            tw.set(wq("w"), str(width))
+        span = pr.makeelement(wq("gridSpan"), {wq("val"): str(len(cs))})
+        if tw is not None:
+            tw.addnext(span)
+        else:
+            pr.insert(0, span)
+        self._cell_set(first, TRADEIN_TITLE)
+        for par in [x for x in first if x.tag == P]:
+            ppr = par.find(wq("pPr"))
+            if ppr is None:
+                ppr = par.makeelement(wq("pPr"), {})
+                par.insert(0, ppr)
+            for old in ppr.findall(wq("jc")):
+                ppr.remove(old)
+            jc = ppr.makeelement(wq("jc"), {wq("val"): "center"})
+            rpr = ppr.find(wq("rPr"))
+            (rpr.addprevious(jc) if rpr is not None else ppr.append(jc))
+        dot = "." if "." in "".join(t.text or "" for t in cells_of(tr)[0].iter(T)) else "."
+        last = tr
+        last.addnext(head)
+        last = head
+        for j, (name, value) in enumerate(items, 1):
+            new = copy.deepcopy(tr)
+            c2 = cells_of(new)
+            self._cell_set(c2[0], f"{j}{dot}")
+            self._cell_set(c2[1], name)
+            self._cell_set(c2[-1], value)
+            last.addnext(new)
+            last = new
+        return len(items)
 
     def _align_signatures(self):
         """Линии для подписей сторон стоят на одной высоте: они переносятся в отдельную строку таблицы."""
@@ -920,9 +985,9 @@ class WordDoc:
         return done
 
     def save(self, out_path, values=None, replaces=None, edits=None, keep_highlight=False, services=None, total_par=None,
-             align=True):
+             align=True, tradein=None):
         n = self.apply(values, replaces, edits)
-        self.finish(services, total_par, align)
+        self.finish(services, total_par, align, tradein)
         if not keep_highlight:
             self.strip_highlights()
         self.doc.save(out_path)
@@ -1036,6 +1101,12 @@ def term_days(text):
     n = int(m.group(2) or m.group(1))
     word = "дней" if 10 < n % 100 < 20 or n % 10 in (0, 5, 6, 7, 8, 9) else ("день" if n % 10 == 1 else "дня")
     return (f"{m.group(1)}-{m.group(2)}" if m.group(2) else m.group(1)) + " " + word
+
+
+TRADEIN_TITLE = "Характеристики передаваемого автомобиля"
+TRADEIN_ROWS = (("model", "Марка и модель автомобиля"), ("year", "Год выпуска"), ("mileage", "Пробег, тыс. км"),
+                ("volume", "Объем двигателя (л/см³)"), ("fuel", "Тип двигателя"), ("color", "Цвет кузова"),
+                ("owners", "Кол. Владельцев"), ("price", "Оценочная стоимость автомобиля"))
 
 
 def guess_label(label):
