@@ -608,7 +608,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.22.1"
+APP_VERSION = "6.22.2"
 EDITION = "canon"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -10018,6 +10018,33 @@ class WordFillPage(QDialog):
             b = b.next()
         return out
 
+    def _phone_filled(self, row):
+        """Под подписью «Моб. телефон:» уже стоят номера → (начало, конец, первый, второй); иначе None."""
+        b = row["cursors"][0].block()
+        tbl0 = QTextCursor(b).currentTable()
+        cell0 = tbl0.cellAt(b.position()) if tbl0 is not None else None
+        num = r"\+?\d[\d() \-]{6,}\d"
+        nxt = b.next()
+        for _ in range(3):
+            if not nxt.isValid():
+                return None
+            if tbl0 is not None:
+                t_ = QTextCursor(nxt).currentTable()
+                c_ = t_.cellAt(nxt.position()) if t_ is not None else None
+                if t_ is None or c_ is None or (c_.row(), c_.column()) != (cell0.row(), cell0.column()):
+                    return None
+            text = nxt.text()
+            if text.strip():
+                one = r"\+?\d\s?\(\d{3}\)\s?\d{3}-\d{2}-\d{2}"      # перенос строки из файла в окне не виден: номера идут слитно
+                m = re.fullmatch(rf"(\s*)({one})[\s{SW.LINE_BREAK}]*({one})?[\s{SW.LINE_BREAK}]*", text) \
+                    or re.fullmatch(rf"(\s*)({num})(?:\s*{SW.LINE_BREAK}\s*({num}))?\s*", text)
+                if not m:
+                    return None
+                a_ = nxt.position() + len(m.group(1))
+                return a_, nxt.position() + len(text.rstrip()), m.group(2).strip(), (m.group(3) or "").strip()
+            nxt = nxt.next()
+        return None
+
     def _new_row(self, label, key, kind, spans, field=None, mark=None, dummy=""):
         cs = [self._cursor(a, b) for a, b in spans]
         return {"label": label, "key": key, "kind": kind, "cursors": cs, "fmts": [self._fmt_at(a, b) for a, b in spans],
@@ -10161,7 +10188,19 @@ class WordFillPage(QDialog):
             rows.append(two)
         else:                                            # «Тел.: ____» — пустое место после подписи: второй номер тоже нужен
             ph = next((r for r in rows if r["key"] == "phone" and r["kind"] in ("blank", "tail")), None)
-            if ph is not None:
+            filled = self._phone_filled(ph) if ph is not None and ph["kind"] == "tail" else None
+            if filled:                                   # готовый документ: номера уже стоят под подписью — правим их
+                a_, e_, n1, n2 = filled
+                rows.remove(ph)
+                ph = self._new_row("Телефон", "phone", "dummy", [(a_, e_)])
+                ph["current"] = n1
+                rows.append(ph)
+                two = self._new_row("Второй телефон — если есть", "phone2", "virtual", [(e_, e_)])
+                two["virtual"], two["main"], two["current"] = "phone2", ph, n2
+                two["hint"] = "встанет строкой под первым номером"
+                rows.append(two)
+                self._phone_refill = True
+            elif ph is not None:
                 end = ph["cursors"][0].selectionEnd()
                 two = self._new_row("Второй телефон — если есть", "phone2", "virtual", [(end, end)])
                 two["virtual"], two["main"] = "phone2", ph
@@ -10201,6 +10240,9 @@ class WordFillPage(QDialog):
             if r.get("fixed") and r["current"] and r["edit"] is not None:
                 self._write(r, r["current"])
         self._apply_card()
+        if getattr(self, "_phone_refill", False):       # номера из готового документа — снова двумя строками
+            self._phone_refill = False
+            self._phone_sync()
         self._paint_marks()
         self.lbl_info.setText(self._home)
 
@@ -11142,8 +11184,9 @@ class WordFillPage(QDialog):
             if r["key"] in ("passport_date", "birth"):
                 continue                                  # дата паспорта и рождения — не «дата документа»
             if (r["kind"] == "date" or r.get("hl") in ("date", "date_words")) and not r.get("fixed") \
-                    and r["edit"] is not None and (not r["edit"].text().strip() or r["auto"]):
-                r["edit"].setText(text.strip())
+                    and r["edit"] is not None and (not r["edit"].text().strip() or r["auto"]
+                                                   or (r["current"] and r["edit"].text().strip() == r["current"])):
+                r["edit"].setText(text.strip())           # дата из готового документа, пока её не правили руками, — меняется
                 r["auto"] = True
                 self._write(r, text)
         self._recalc()

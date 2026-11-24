@@ -304,6 +304,8 @@ RE_SUM = re.compile(r"(?<![\d,.])(\d[\d  ]*?)(,\d{2})?\s*\(\s*([^()\d]{0,160}?)
 RE_SUM_UNIT = re.compile(r"\s*(?:(?:российск\w*|белорусск\w*)\s+)?руб\w*\.?(?:\s*\d{2}\s*коп\w*\.?)?\s*", re.I)
 RE_BLANK = re.compile(r"_{3,}")
 RE_CITY = re.compile(r"пригон\w*\s+транспортного\s+средства\s+в\s+г\.\s*([А-ЯЁ][А-ЯЁа-яё\- ]{1,40}?),\s*Российск")
+# дата, уже вписанная в готовый документ: «20» ноября 2026 года — чтобы её можно было поменять
+RE_DATE_SET = re.compile(r"«\s*(\d{1,2})\s*»\s*(" + "|".join(MONTHS) + r")\s*(\d{4})(?:\s*(г\.|года|год))?")
 RE_DATE_LINE = re.compile(r"^(г\.\s*\S.*?\S)(\s{8,})(«[^»]{1,4}»\s+\S+\s+\d{4}\s+года)(\s*)$")
 LINE_BREAK = " "                                  # перенос строки внутри абзаца (в файле — <w:br/>)
 RE_INITIALS = re.compile(r"[А-ЯЁ][а-яё]+\s+[А-ЯЁ]\.\s?[А-ЯЁ]\.")
@@ -452,6 +454,11 @@ class WordDoc:
             for m in RE_DATE.finditer(text):
                 out.append(Field("date", i, m.start(), m.end(), self._snip(text, m.start(), m.end(), "date"),
                                  meta={"tail": m.group(2) or ""}))
+                taken.append(m.span())
+            for m in RE_DATE_SET.finditer(text):
+                cur = f"{int(m.group(1)):02d}.{MONTHS.index(m.group(2)) + 1:02d}.{m.group(3)}"
+                out.append(Field("date", i, m.start(), m.end(), self._snip(text, m.start(), m.end(), "date"),
+                                 current=cur, meta={"tail": m.group(4) or "", "set": True}))
                 taken.append(m.span())
             for m in RE_SUM.finditer(text):
                 words = m.group(3)
@@ -658,6 +665,9 @@ class WordDoc:
         old = self.text(i)
         if old == new:
             return
+        if LINE_BREAK in new or re.fullmatch(r"\s*\+?\d[\d() \-]{6,}\d\s*", new):   # переносы придут из нового текста (или остался один номер) — прежние убираем
+            for br in [x for x in self.pars[i].iter(f"{{{W}}}br") if not x.get(f"{{{W}}}type")]:
+                br.getparent().remove(br)
         a = 0
         while a < min(len(old), len(new)) and old[a] == new[a]:
             a += 1
