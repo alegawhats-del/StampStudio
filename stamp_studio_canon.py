@@ -608,7 +608,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.22.3"
+APP_VERSION = "6.22.4"
 EDITION = "canon"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -10498,6 +10498,8 @@ class WordFillPage(QDialog):
                 if not val and self._num_mode() == "auto":
                     cnt = self._counter()
                     val = SW.next_number(cnt.get("last", ""), AI.today().year, cnt.get("reset", True))
+            if val and r["kind"] == "cell" and r["key"].startswith("sum_") and SW.parse_number(str(val)) is not None:
+                val = re.sub(r"\s*00 коп\.\s*$", "", SW.money_cell(str(val)))
             if val and r.get("de"):
                 val = self._de_text(r, val)
             if val and (not r["edit"].text().strip() or r["auto"] or (not only_empty)):
@@ -10552,7 +10554,7 @@ class WordFillPage(QDialog):
         for tot in self.rows:
             if not tot.get("total") or tot["edit"] is None or not (not tot["edit"].text().strip() or tot["auto"]):
                 continue
-            parts = [r for r in self.rows if r is not tot and (r["kind"] == "sum" or r["key"] == "sum_invoice")
+            parts = [r for r in self.rows if r is not tot and (r["kind"] == "sum" or (r["kind"] == "cell" and r["key"].startswith("sum_")))
                      and not r.get("total")
                      and r.get("table") and r.get("table") == tot.get("table") and r["edit"] is not None]
             lead = lambda t: (re.match(r"\s*\d[\d \u00a0]*(?:[.,]\d{1,2})?", t) or re.match("", t)).group(0)
@@ -10793,8 +10795,8 @@ class WordFillPage(QDialog):
             elif row["key"] == "contact":
                 ed.setPlaceholderText("ФИО; телефон — подставятся сами, встанут в две строки")
                 ed.textEdited.connect(lambda t, r=row: self._typed(r, t))
-            elif row["key"] == "sum_invoice":
-                ed.setPlaceholderText("число — пропись подставится; или своё, например: 15 000 EUR")
+            elif row["kind"] == "cell" and row["key"].startswith("sum_"):     # сумма в ячейке таблицы: число → с прописью
+                ed.setPlaceholderText("число — пропись подставится; или своё: Бесплатно, 15 000 EUR")
                 ed.textEdited.connect(lambda t, r=row: self._typed(r, t))
                 ed.editingFinished.connect(lambda r=row, e=ed: self._invoice_done(r, e))
             else:
