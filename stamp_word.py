@@ -1251,6 +1251,20 @@ def derive(values):
     vol, typ = out.get("engine_volume", ""), out.get("engine_type", "")
     if (vol or typ) and not out.get("engine_combo"):
         out["engine_combo"] = " / ".join(x for x in (vol, typ) if x)
+    y = re.search(r"(?:19|20)\d{2}", str(out.get("year") or ""))     # для ДКП на немецком: год, объём в см³, пробег числом
+    if y:
+        out["de_year"], out["de_year2"] = y.group(0), y.group(0)[2:]
+    vol = str(out.get("engine_volume") or "")
+    cc = re.search(r"(\d[\d \u00a0]{2,6})\s*(?:см|cm|куб)", vol)
+    if cc:
+        out["de_volume"] = re.sub(r"\D", "", cc.group(1))
+    else:
+        lit = re.search(r"\d+[.,]\d+", vol)
+        if lit:
+            out["de_volume"] = str(int(round(float(lit.group(0).replace(",", ".")) * 1000)))
+    km = re.sub(r"\D", "", str(out.get("mileage") or ""))
+    if km:
+        out["de_km"] = f"{int(km):,}".replace(",", " ")
     if out.get("sum_car") and not out.get("sum_invoice"):       # договор таможенного представителя идёт следом за основным
         try:
             out["sum_invoice"] = re.sub(r"\s*00 коп\.\s*$", "", money_cell(out["sum_car"]))

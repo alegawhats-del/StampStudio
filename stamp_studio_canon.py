@@ -608,7 +608,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.22.0"
+APP_VERSION = "6.22.1"
 EDITION = "canon"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -10251,6 +10251,13 @@ class WordFillPage(QDialog):
                     if re.search(pat, lab):
                         key, de_kind = k_, dk
                         break
+                if not key:                              # числа из основного договора: год, объём, пробег
+                    if re.search(r"hubraum", lab):
+                        key = "de_volume"
+                    elif re.search(r"kilometer|laufleistung", lab):
+                        key = "de_km"
+                    elif re.search(r"herstellungsjahr|baujahr|erstzulassung", lab) or re.search(r"\d{2}/\d{0,2}\s*$", low):
+                        key = "de_year2" if len(text) <= 2 else "de_year"
             title = SW.KEY_TITLES.get(key) if key and key != "doc_no" and not german else None
             title = title or (labels[0] if labels else "") or "Поле"
             title = title[:1].upper() + title[1:]
