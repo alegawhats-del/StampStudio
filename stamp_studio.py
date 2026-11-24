@@ -608,7 +608,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.22.2"
+APP_VERSION = "6.22.3"
 EDITION = "main"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -10019,6 +10019,86 @@ class WordFillPage(QDialog):
             b = b.next()
         return out
 
+    def _filled_rows(self, taken, rows):
+        """Готовый (уже заполненный) документ: значения в таблице характеристик и в реквизитах заказчика
+        становятся полями с ключом — их можно поправить, и правка уйдёт в карточку клиента."""
+        have = {r["key"] for r in rows if r["key"]}
+        out, seen = [], set()
+        doc = self.view.document()
+        whole = doc.toPlainText()
+        skip = ("phone", "phone2", "contract_date", "contact", "delivery_term", "engine_combo")
+
+        def add(label, key, a, e, text):
+            if not key or key in have or key in seen or key in skip or key.startswith("sum_") or not text.strip():
+                return
+            if any(x < e and a < y for x, y in taken):
+                return
+            spans = [(a, e)]
+            if len(text) >= 8:                           # то же значение в других местах документа меняется вместе
+                c = doc.find(text, 0, QTextDocument.FindCaseSensitively)
+                while not c.isNull() and len(spans) < 12:
+                    s_, e_ = c.selectionStart(), c.selectionEnd()
+                    if (s_, e_) != (a, e) and not any(x < e_ and s_ < y for x, y in taken + spans):
+                        spans.append((s_, e_))
+                    c = doc.find(text, e_, QTextDocument.FindCaseSensitively)
+                spans.sort()
+            label = re.sub(r"^\d+\.?\s+", "", label).strip(" :")
+            row = self._new_row(f"{label}: «{text[:40]}»" + (f" ×{len(spans)}" if len(spans) > 1 else ""),
+                                key, "filled", spans)
+            row["current"] = text
+            seen.add(key)
+            taken.extend(spans)
+            out.append(row)
+
+        def cell_text(cell):
+            b1, b2 = cell.firstCursorPosition().block(), cell.lastCursorPosition().block()
+            parts = []
+            while b1.isValid():
+                parts.append(b1.text())
+                if b1 == b2:
+                    break
+                b1 = b1.next()
+            return " ".join(p for p in parts if p.strip())
+
+        tables, b = set(), doc.begin()
+        while b.isValid():
+            tbl = QTextCursor(b).currentTable()
+            if tbl is not None and tbl.firstPosition() not in tables:
+                tables.add(tbl.firstPosition())
+                cols = tbl.columns()
+                for r_ in range(tbl.rows() if cols >= 2 else 0):
+                    lc, vc = tbl.cellAt(r_, cols - 2), tbl.cellAt(r_, cols - 1)
+                    if lc.columnSpan() != 1 or vc.columnSpan() != 1 or (lc.row(), lc.column()) == (vc.row(), vc.column()):
+                        continue
+                    vb = vc.firstCursorPosition().block()
+                    if vb != vc.lastCursorPosition().block() or vb.blockFormat().property(WORD_PAR) is None:
+                        continue
+                    text = vb.text()
+                    if not text.strip() or re.search(r"_{3,}", text):
+                        continue
+                    lab = cell_text(lc)
+                    a = vb.position() + len(text) - len(text.lstrip())
+                    add(lab, SW.guess_label(lab), a, vb.position() + len(text.rstrip()), text.strip())
+            text = b.text()
+            if b.blockFormat().property(WORD_PAR) is not None and text.strip():
+                m = re.match(r"^\s*([^:]{3,40}):\s*(\S.*?)\s*$", text)
+                if m and not re.search(r"_{3,}", m.group(2)):
+                    add(m.group(1), SW.guess_label(m.group(1)), b.position() + m.start(2), b.position() + m.end(2), m.group(2))
+                elif text.strip().rstrip(":").strip().upper() == "ЗАКАЗЧИК" and tbl is not None:
+                    nb = b.next()
+                    for _ in range(3):                   # под «ЗАКАЗЧИК:» в реквизитах — ФИО
+                        if not nb.isValid():
+                            break
+                        t2 = nb.text().strip()
+                        if t2:
+                            if re.fullmatch(r"[А-ЯЁ][а-яё\-]+(?: [А-ЯЁ][а-яё\-]+){1,3}", t2):
+                                a = nb.position() + len(nb.text()) - len(nb.text().lstrip())
+                                add("ФИО заказчика", "fio", a, a + len(t2), t2)
+                            break
+                        nb = nb.next()
+            b = b.next()
+        return out
+
     def _phone_filled(self, row):
         """Под подписью «Моб. телефон:» уже стоят номера → (начало, конец, первый, второй); иначе None."""
         b = row["cursors"][0].block()
@@ -10223,6 +10303,8 @@ class WordFillPage(QDialog):
             fc["hint"] = "Москва или Санкт-Петербург — поменяется по всему тексту"
             rows.append(fc)
             taken += spans
+        if not tpl_is(self.path):                        # готовый документ: вписанные данные — тоже поля, правки идут в карточку
+            rows += self._filled_rows(taken, rows)
         rows += self._highlight_rows(taken)
         if self.wd.highlights:                           # в шаблоне поля помечены жёлтым — догадки о подписях не нужны
             rows = [r for r in rows if r["kind"] not in ("tail", "cell")]
@@ -11165,8 +11247,9 @@ class WordFillPage(QDialog):
             elif key == "passport_issued" and r["key"] in ("passport_date", "passport_by"):
                 d_, by_ = split_issued(text)
                 val = (d_ if r["key"] == "passport_date" else by_) or None
-            if val is not None and (not r["edit"].text().strip() or r["auto"]):
-                r["edit"].setText(val)
+            if val is not None and (not r["edit"].text().strip() or r["auto"]
+                                    or (r["current"] and r["edit"].text().strip() == r["current"] and not tpl_is(self.path))):
+                r["edit"].setText(val)                    # в готовом документе значение, которое не правили руками, идёт следом
                 r["auto"] = True
                 self._write(r, val)
 
