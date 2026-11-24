@@ -608,7 +608,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.22.4"
+APP_VERSION = "6.22.5"
 EDITION = "canon"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -12418,6 +12418,15 @@ class ActPage(QDialog):
         self.btn_clear.clicked.connect(lambda *_: self.clear_form())
         win._themed_buttons.append((self.btn_clear, "trash", False))
         head.addWidget(self.btn_clear)
+        self.btn_card = QPushButton(" Из карточки")
+        self.btn_card.setIcon(draw_icon("datalist", win._icon_color()))
+        self.btn_card.setIconSize(QSize(15, 15))
+        self.btn_card.setToolTip("Подставить данные автомобиля из карточки клиента в открытой папке\n"
+                                 "(то, что уже вписано в договор). Заполняются только пустые поля.\n"
+                                 "После создания акта недостающие данные автомобиля дописываются в карточку.")
+        self.btn_card.clicked.connect(lambda *_: self.from_card())
+        win._themed_buttons.append((self.btn_card, "datalist", False))
+        head.addWidget(self.btn_card)
         self.btn_ai = QPushButton(" Перевести ИИ")
         self.btn_ai.setToolTip("Перевести через ИИ то, чего нет в словаре программы: значения полей и комментарий")
         self.btn_ai.clicked.connect(self.translate_ai)
@@ -12724,6 +12733,11 @@ class ActPage(QDialog):
             self.ed_number.setText(str(act_next_number()))
         if ready and not self._sections:
             self._load_sections()
+        folder = self.win.current_dir() or ""
+        if folder != getattr(self, "_card_dir", None):   # новая папка клиента — данные автомобиля из его карточки
+            self._card_dir = folder
+            if not self.form_filled():
+                self.from_card(auto=True)
 
     def _load_sections(self):
         while self.tr_lay.count():
@@ -12911,6 +12925,88 @@ class ActPage(QDialog):
 
     # ---------------------------------------------------------- данные формы
     CAR_DEFAULTS = {"seats": "5", "doors": "5", "owners": "1"}
+    BRANDS2 = ("land rover", "alfa romeo", "aston martin", "great wall", "mercedes benz", "rolls royce", "li auto",
+               "range rover")
+    CARD_PAIRS = (("color", "color"), ("fuel", "engine_type"), ("gear", "gearbox"), ("body", "body"))
+
+    @classmethod
+    def card_car(cls, card):
+        """Данные автомобиля из карточки клиента — в том виде, как они стоят в форме акта."""
+        out = {}
+        car = " ".join(str(card.get("car") or "").split())
+        if car:
+            n = 2 if any(car.lower().startswith(b + " ") for b in cls.BRANDS2) else 1
+            parts = car.split(" ")
+            out["brand"], out["model"] = " ".join(parts[:n]), " ".join(parts[n:])
+        y = re.search(r"(?:19|20)\d{2}", str(card.get("year") or ""))
+        if y:
+            out["year"] = y.group(0)
+        km = re.sub(r"\D", "", str(card.get("mileage") or ""))
+        if km:
+            out["mileage"] = f"{int(km):,}".replace(",", " ")
+        vin = re.sub(r"\s+", "", str(card.get("vin") or "")).upper()
+        if vin:
+            out["vin"] = vin
+        vol = str(card.get("engine_volume") or "")
+        lit = re.search(r"\d+[.,]\d+", vol)
+        if lit:
+            out["liters"] = lit.group(0).replace(",", ".")
+        cc = re.search(r"(\d[\d \u00a0]{2,6})\s*(?:см|cm|куб)", vol)
+        if cc:
+            out["ccm"] = f"{int(re.sub(r'\D', '', cc.group(1))):,}".replace(",", " ")
+        return out
+
+    def from_card(self, auto=False):
+        """Заполнить пустые поля автомобиля из карточки клиента в открытой папке."""
+        folder = self.win.current_dir() or ""
+        card = SW.card_load(folder, fallback=False) if folder and os.path.isdir(folder) else {}
+        vals = self.card_car(card)
+        n = 0
+        for k, v in vals.items():
+            e = self.ed.get(k)
+            if e is not None and v and not e.text().strip():
+                e.setText(v)
+                n += 1
+        if "vin" in vals:
+            self._vin_edited(self.ed["vin"].text())
+        for key, ck in self.CARD_PAIRS:
+            ru = str(card.get(ck) or "").strip()
+            cd, cr = self.pair[key]
+            if ru and not cr.currentText().strip() and not cd.currentText().strip():
+                self._set_pair(cr, ru)
+                self._pair_changed(key, "ru")
+                n += 1
+        who = card.get("fio_short") or card.get("fio") or os.path.basename(folder.rstrip("\\/"))
+        if n:
+            self.win.show_toast(f"✔  Данные автомобиля взяты из карточки клиента: {who}", 3800)
+        elif not auto:
+            self.win.show_toast("В карточке клиента этой папки нет новых данных автомобиля"
+                                if card else "В открытой папке нет карточки клиента", 3800)
+        return n
+
+    def to_card(self, d, folder):
+        """Акт сделан в папке клиента — недостающие данные автомобиля дописываются в его карточку."""
+        try:
+            card = SW.card_load(folder, fallback=False)
+            if not card:
+                return 0                                   # папка без карточки — ничего не заводим
+            new = {}
+            car = " ".join(x for x in (d.get("brand", ""), d.get("model", "")) if x)
+            km = re.sub(r"\D", "", d.get("mileage", ""))
+            vol = " ".join(x for x in (d.get("liters", ""), re.sub(r"\D", "", d.get("ccm", ""))) if x)
+            for key, val in (("car", car), ("year", d.get("year", "")), ("vin", d.get("vin", "")),
+                             ("mileage", (f"{int(km):,}".replace(",", " ") + " км") if km else ""),
+                             ("engine_volume", volume_text(vol) if vol else ""),
+                             ("color", d.get("color_ru", "")), ("engine_type", d.get("fuel_ru", "")),
+                             ("gearbox", d.get("gear_ru", "")), ("body", d.get("body_ru", ""))):
+                if val and not str(card.get(key) or "").strip():
+                    new[key] = val
+            if new:
+                card.update(new)
+                SW.card_save(folder, card)
+            return len(new)
+        except Exception:
+            return 0
 
     def form_filled(self):
         """Есть ли в форме данные автомобиля (то, что стирает «Очистить»)."""
@@ -13175,6 +13271,8 @@ class ActPage(QDialog):
         self.win.reload_files()
         self.win.open_word(de_path, quiet=True)                  # оригинал → PDF (через Word) и на страницу
         note = self.win.act_finish(d, m)
+        if self.to_card(d, folder):
+            note = (note + "  " if note else "") + "Карточка клиента дополнена данными автомобиля."
         self.win.ai_mode(False)
         self.win.show_toast(f"✔  Акт № {got} создан. {note}", 6500)
         if ru_pdf:
