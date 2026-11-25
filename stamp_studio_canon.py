@@ -608,7 +608,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.22.7"
+APP_VERSION = "6.22.8"
 EDITION = "canon"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -5591,7 +5591,7 @@ def scan_look_page(page, dpi=190, preset="normal", color=True, seed=0, back_page
     # 5. один край листа темнее (крышка сканера прижата неравномерно)
     try:
         grad = Image.linear_gradient("L").resize((W, H))          # сверху 0 → снизу 255
-        side = rnd.choice((0, 1, 2, 3))
+        side = random.Random(seed // 1000).choice((0, 1, 2, 3))      # крышка одна на весь документ — край один и тот же
         if side == 1:
             grad = grad.transpose(Image.FLIP_TOP_BOTTOM)
         elif side == 2:
@@ -5605,7 +5605,12 @@ def scan_look_page(page, dpi=190, preset="normal", color=True, seed=0, back_page
         pass
 
     try:
-        med = ImageStat.Stat(paper.resize((64, 64))).median
+        # тон бумаги — самый частый светлый тон листа. Медиана уменьшенной картинки не годится: на странице,
+        # плотно забитой текстом, она темнее бумаги, и такая страница выходила светлее соседних
+        med = []
+        for ch in paper.resize((max(64, W // 4), max(64, H // 4)), Image.NEAREST).split():
+            h_ = ch.histogram()
+            med.append(max(range(120, 255), key=lambda v: h_[v - 1] + 2 * h_[v] + h_[v + 1]))
         offs = [int(SCAN_PAPER_TONE[i] - med[i]) for i in range(3)]
         if any(offs):
             lut = []
@@ -9416,6 +9421,14 @@ class WordFillPage(QDialog):
         self.b_tpl.clicked.connect(self.to_templates)
         win._themed_buttons.append((self.b_tpl, "datalist", False))
         head.addWidget(self.b_tpl)
+        self.b_drafts = QPushButton(" Черновики")
+        self.b_drafts.setIcon(draw_icon("pen", win._icon_color()))
+        self.b_drafts.setIconSize(QSize(15, 15))
+        self.b_drafts.setCursor(Qt.PointingHandCursor)
+        self.b_drafts.setToolTip("Отложенные документы: выберите — и продолжайте заполнение с того же места")
+        self.b_drafts.clicked.connect(self.drafts_menu)
+        win._themed_buttons.append((self.b_drafts, "pen", False))
+        head.addWidget(self.b_drafts)
         ttl = QLabel("РЕДАКТОР WORD")
         ttl.setObjectName("paneltitle")
         head.addWidget(ttl)
@@ -9682,6 +9695,7 @@ class WordFillPage(QDialog):
             it.setToolTip(text + (f"\nПапка: {d.get('folder')}" if folder else ""))
             self.lst_draft.addItem(it)
         has = self.lst_draft.count() > 0
+        self._drafts_sync()
         self.cap_draft.setVisible(has)
         self.lst_draft.setVisible(has)
         self._tpl_fit()
@@ -9741,6 +9755,18 @@ class WordFillPage(QDialog):
         return super().eventFilter(obj, ev)
 
     # ---- черновики: отложить заполнение и вернуться
+    def _draft_state(self):
+        """Отпечаток заполнения — чтобы понять, менялось ли что-то после сохранения в черновик."""
+        return json.dumps([sorted((str(k), v) for k, v in self.view.changed_paragraphs().items()),
+                           getattr(self, "_extras_data", []), list(getattr(self, "_inst_data", ())),
+                           getattr(self, "_tradein_data", {})], ensure_ascii=False, sort_keys=True, default=str)
+
+    def _unsaved(self):
+        """Есть несохранённое: правки в документе, которых нет ни в файле, ни в черновике."""
+        if self.wd is None or not self.view.changed_paragraphs():
+            return False
+        return not (getattr(self, "_draft_id", "") and getattr(self, "_draft_sig", None) == self._draft_state())
+
     def draft_keep(self, close=True):
         """Запомнить заполнение. close — закрыть документ и показать список, где черновик лежит первым."""
         if getattr(self, "wd", None) is None or not self.path:
@@ -9760,6 +9786,8 @@ class WordFillPage(QDialog):
         except Exception as e:
             QMessageBox.warning(self, "Черновик", f"Не удалось сохранить черновик:\n{e}")
             return
+        self._draft_sig = self._draft_state()
+        self._drafts_sync()
         if not close:
             self.win.show_toast("✔  Черновик сохранён", 2500)
             return
@@ -9771,7 +9799,68 @@ class WordFillPage(QDialog):
             if self.lst_draft.item(i).data(Qt.UserRole) == did:
                 self.lst_draft.setCurrentRow(i)
                 break
-        self.win.show_toast("✔  Черновик сохранён. Он вверху, в списке «Черновики» — двойной щелчок, чтобы продолжить", 6000)
+        self.win.show_toast("✔  Черновик сохранён. Вернуться к нему — кнопка «Черновики» вверху или список на этом экране", 6000)
+
+    @staticmethod
+    def _draft_title(d):
+        when = datetime.datetime.fromtimestamp(d.get("time", 0)).strftime("%d.%m %H:%M")
+        return "  ·  ".join(x for x in (d.get("name", ""), d.get("title", ""), when) if x)
+
+    def _drafts_sync(self):
+        """Число черновиков на кнопке «Черновики»."""
+        n = len(draft_list())
+        self.b_drafts.setText(f" Черновики · {n}" if n else " Черновики")
+
+    def drafts_menu(self):
+        """Список черновиков отдельным меню: щелчок — открыть; внизу — удаление."""
+        ds = draft_list()
+        col = self.win._icon_color()
+        m = QMenu(self)
+        if not ds:
+            a = m.addAction("Черновиков пока нет")
+            a.setEnabled(False)
+            m.addSeparator()
+            a = m.addAction("Откройте документ и нажмите «В черновик» внизу справа")
+            a.setEnabled(False)
+        for d in ds:
+            folder = os.path.basename(str(d.get("folder") or "").rstrip("\\/"))
+            a = m.addAction(draw_icon("pen", col), self._draft_title(d), lambda did=d["id"]: self.draft_pick(did))
+            a.setToolTip(f"Папка: {d.get('folder')}" if folder else "")
+        if ds:
+            m.addSeparator()
+            sub = m.addMenu(draw_icon("trash", col), "Удалить черновик")
+            for d in ds:
+                sub.addAction(self._draft_title(d), lambda did=d["id"]: self.draft_remove(did))
+            if len(ds) > 1:
+                sub.addSeparator()
+                sub.addAction(draw_icon("trash", col), "Удалить все черновики", lambda: self.draft_remove(None))
+        m.setToolTipsVisible(True)
+        self._menu_show(m, self.b_drafts.mapToGlobal(QPoint(0, self.b_drafts.height() + 2)))
+
+    def draft_pick(self, did):
+        """Открыть черновик из меню; открытый несохранённый документ сначала предлагается отложить."""
+        if did != getattr(self, "_draft_id", "") and self._unsaved():
+            how = self._ask_unsaved()
+            if how == "keep":
+                self.draft_keep(close=False)
+            elif how != "drop":
+                return
+        self.draft_open(did)
+
+    def draft_remove(self, did):
+        ds = draft_list()
+        if did is None:
+            if QMessageBox.question(self, "Черновики", f"Удалить все черновики ({len(ds)})?",
+                                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+                return
+        for d in ds:
+            if did is None or d["id"] == did:
+                draft_delete(d["id"])
+                if d["id"] == getattr(self, "_draft_id", ""):
+                    self._draft_id = ""
+        self._drafts_sync()
+        if self.empty.isVisible():
+            self.tpl_reload()
 
     def draft_open(self, did):
         d = next((x for x in draft_list() if x["id"] == did), None)
@@ -9826,6 +9915,7 @@ class WordFillPage(QDialog):
         self._extras_preview()
         self._draft_pars(d.get("pars") or {})
         self._later()
+        self._draft_sig = self._draft_state()
         self.win.show_toast("Черновик открыт — продолжайте заполнение", 3000)
 
     def _draft_pars(self, pars):
@@ -9864,7 +9954,7 @@ class WordFillPage(QDialog):
         m = QMenu(self)
         m.addAction(draw_icon("pen", col), "Продолжить заполнение", lambda: self.draft_open(did))
         m.addSeparator()
-        m.addAction(draw_icon("trash", col), "Удалить черновик", lambda: (draft_delete(did), self.tpl_reload()))
+        m.addAction(draw_icon("trash", col), "Удалить черновик", lambda: self.draft_remove(did))
         self._menu_show(m, self.lst_draft.viewport().mapToGlobal(pos))
 
     def tpl_add_dialog(self):
@@ -9952,7 +10042,7 @@ class WordFillPage(QDialog):
 
     def to_templates(self):
         """Закрыть документ и вернуться к списку шаблонов."""
-        if self.wd is not None and self.view.changed_paragraphs():
+        if self._unsaved():
             how = self._ask_unsaved()
             if how == "keep":
                 self.draft_keep()
@@ -10202,6 +10292,7 @@ class WordFillPage(QDialog):
         self.path = path
         self._extras_data = []                       # доп. услуги — у каждого документа свои
         self._draft_id = ""
+        self._draft_sig = None
         self._inst_data = ("", "", False)
         self._tradein_data = {"on": False, "values": {}}
         self.lbl_doc.setText(os.path.basename(path))
@@ -11536,6 +11627,7 @@ class WordFillPage(QDialog):
         saved = SW.card_save(out_dir, card) if card else True
         draft_delete(getattr(self, "_draft_id", ""))
         self._draft_id = ""
+        self._drafts_sync()
         self.wd = None                              # следующий документ открывается с чистого шаблона
         self.win.cloud_soon()
         self.win.reload_files()
