@@ -715,6 +715,51 @@ def internet_time(timeout=8):
 OFFICE_EXT = (".docx", ".doc", ".rtf", ".odt")
 
 
+WORD_PIDS = set()        # процессы Word, запущенные программой и ещё не закрытые ею
+
+
+def _winword_pids():
+    """Номера процессов WINWORD.EXE (Windows). Пусто, если узнать не удалось."""
+    try:
+        import subprocess
+        out = subprocess.run(["tasklist", "/FI", "IMAGENAME eq WINWORD.EXE", "/FO", "CSV", "/NH"],
+                             capture_output=True, text=True, timeout=8,
+                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout
+        return {int(m.group(1)) for m in re.finditer(r'"WINWORD\.EXE","(\d+)"', out, re.I)}
+    except Exception:
+        return set()
+
+
+def word_kill_hung():
+    """Word не ответил: закрыть те его скрытые процессы, которые запустила сама программа. Окна Word,
+    открытые человеком, не трогаются."""
+    pids, n = set(WORD_PIDS), 0
+    WORD_PIDS.clear()
+    for pid in pids:
+        try:
+            import subprocess
+            subprocess.run(["taskkill", "/PID", str(pid), "/F"], capture_output=True, timeout=8,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            n += 1
+        except Exception:
+            pass
+    return n
+
+
+def docx_simple_pdf(path):
+    """PDF из .docx без Word — вид упрощённый, текст полный."""
+    import fitz
+    src = fitz.open(path)
+    try:
+        try:
+            src.layout(width=595, height=842, fontsize=11)
+        except Exception:
+            pass
+        return src.convert_to_pdf()
+    finally:
+        src.close()
+
+
 def _word_com_pdf(path):
     """PDF из документа через установленный Microsoft Word — вид точно как при печати."""
     import tempfile
@@ -724,8 +769,12 @@ def _word_com_pdf(path):
     tmp = tempfile.mkdtemp(prefix="stampstudio_w_")
     out = os.path.join(tmp, "doc.pdf")
     word = None
+    mine = set()
     try:
+        before = _winword_pids()
         word = win32com.client.DispatchEx("Word.Application")
+        mine = _winword_pids() - before
+        WORD_PIDS.update(mine)
         word.Visible = False
         word.DisplayAlerts = 0
         d = word.Documents.Open(os.path.abspath(path), ConfirmConversions=False, ReadOnly=True,
@@ -740,6 +789,7 @@ def _word_com_pdf(path):
         try:
             if word is not None:
                 word.Quit()
+                WORD_PIDS.difference_update(mine)
         except Exception:
             pass
         try:

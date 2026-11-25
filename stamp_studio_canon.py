@@ -608,7 +608,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.22.8"
+APP_VERSION = "6.22.9"
 EDITION = "canon"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -10440,6 +10440,7 @@ class WordFillPage(QDialog):
             if r.get("fixed") and r["current"] and r["edit"] is not None:
                 self._write(r, r["current"])
         self._apply_card()
+        self._price_from_contract()
         if getattr(self, "_phone_refill", False):       # номера из готового документа — снова двумя строками
             self._phone_refill = False
             self._phone_sync()
@@ -11248,6 +11249,43 @@ class WordFillPage(QDialog):
         if new != edit.text():
             edit.setText(new)
             self._typed(row, new)
+
+    def _price_from_contract(self):
+        """ДКП: цена в евро (COE-Wert) — «Стоимость автомобиля» из основного договора по курсу Google, без копеек."""
+        row = next((r for r in self.rows if r.get("calc") == "price" and r["edit"] is not None), None)
+        if row is None or row["edit"].text().strip():
+            return
+        card = getattr(self, "card", None) or {}
+        rub = INST._d(str(card.get("sum_car") or "")) if SW.parse_number(str(card.get("sum_car") or "")) is not None else None
+        if rub is None or rub <= 0:
+            return
+        old = getattr(self, "_price_thread", None)
+        if old is not None and old.isRunning():
+            return
+        token = self.wd
+        th = RatesThread(None, "google", self)
+        self._price_thread = th
+
+        def done(rates, err, row=row, rub=rub, token=token):
+            if self.wd is not token or row not in self.rows or row["edit"] is None:
+                return                                   # документ уже другой
+            if rates is None or not rates.get("rub_eur"):
+                self.win.show_toast("Курс евро не получен — цену в евро (COE-Wert) впишите вручную", 5000)
+                return
+            if row["edit"].text().strip() and not row["auto"]:
+                return                                   # пока шла загрузка, цену вписали руками
+            eur = int((rub * INST._d(str(rates["rub_eur"]))).quantize(INST._d("1"), rounding="ROUND_HALF_UP"))
+            text = f"{eur:,}".replace(",", " ")
+            row["edit"].setText(text)
+            row["auto"] = True
+            self._write(row, text)
+            self._recalc()
+            self._count()
+            self.win.show_toast(f"Цена в евро: {INST.money(rub).replace(',00', '')} ₽ → {text} € "
+                                f"по курсу {rates.get('source', 'Google')} на {rates.get('date', '')}", 6500)
+
+        th.done.connect(done)
+        th.start()
 
     def _contact_sync(self):
         """«Контактное лицо при получении» — ФИО заказчика и его первый телефон, пока поле не поправили руками."""
@@ -16347,6 +16385,13 @@ class MainWindow(QMainWindow):
         self._install_from_url(r["url"], f"версию {r['version']}")
 
     def closeEvent(self, event):
+        for th in getattr(self, "_word_stuck", []):       # потоки, где Word так и не ответил
+            try:
+                if th.isRunning():
+                    th.terminate()
+                    th.wait(800)
+            except Exception:
+                pass
         try:
             s = settings_load()
             if hasattr(self, "left_dock"):
@@ -17764,29 +17809,7 @@ class MainWindow(QMainWindow):
 
     def act_translation_pdf(self, ru_docx):
         """Перевод акта → готовый PDF рядом с файлом Word. Возвращает путь или '' (если Word не справился)."""
-        box = {}
-
-        class _T(QThread):
-            def run(self_t):
-                try:
-                    box["res"] = AI.office_to_pdf(ru_docx)
-                except Exception as e:
-                    box["err"] = str(e)
-
-        th = _T(self)
-        prog = QProgressDialog("Готовлю перевод акта…", None, 0, 0, self)
-        prog.setWindowTitle("Акт осмотра")
-        prog.setWindowModality(Qt.WindowModal)
-        prog.setMinimumDuration(300)
-        prog.setCancelButton(None)
-        loop = QEventLoop(self)
-        th.finished.connect(loop.quit)
-        th.start()
-        if th.isRunning():
-            loop.exec()
-        th.wait()
-        prog.close()
-        prog.deleteLater()
+        box = self.word_pdf_wait(ru_docx, "Готовлю перевод акта…", "Акт осмотра")
         data, how = box.get("res") or (None, "")
         if not data or how != "word":                 # без Word вёрстка бланка не сохраняется — такой PDF не нужен
             return ""
@@ -19311,8 +19334,14 @@ class MainWindow(QMainWindow):
         else:
             self._open_image_paths([path])
 
-    def open_word(self, path, quiet=False):
-        """Открыть документ Word: в программе появляется его копия-PDF, сам файл не меняется."""
+    WORD_WAIT_MS = 75000          # столько ждём Word, потом открываем документ без него
+    WORD_SKIP_MS = 12000          # через столько появляется кнопка «Не ждать Word»
+
+    def word_pdf_wait(self, path, text, title):
+        """Документ Word → PDF в фоне с окном ожидания. Пока оно на экране, остальная программа закрыта для
+        щелчков (иначе поверх открывались другие окна, и всё выглядело зависшим). Word не ответил за
+        отведённое время или нажато «Не ждать Word» — его скрытый процесс закрывается, .docx открывается
+        упрощённо. Возвращает {"res": (bytes, how)} или {"err": текст}."""
         box = {}
 
         class _T(QThread):
@@ -19322,20 +19351,64 @@ class MainWindow(QMainWindow):
                 except Exception as e:
                     box["err"] = str(e)
 
-        th = _T(self)
-        prog = QProgressDialog("Открываю документ Word…", None, 0, 0, self)
-        prog.setWindowTitle("Word")
-        prog.setWindowModality(Qt.WindowModal)
-        prog.setMinimumDuration(300)
+        th = _T()
+        prog = QProgressDialog(text, None, 0, 0, self)
+        prog.setWindowTitle(title)
+        prog.setWindowModality(Qt.ApplicationModal)
+        prog.setMinimumDuration(0)
         prog.setCancelButton(None)
+        prog.setAutoClose(False)
+        prog.setAutoReset(False)
         loop = QEventLoop(self)
+        gave_up = {"on": False}
+
+        def give_up():
+            gave_up["on"] = True
+            loop.quit()
+
+        def offer_skip():
+            if th.isRunning():
+                b = QPushButton("Не ждать Word")
+                b.setCursor(Qt.PointingHandCursor)
+                prog.setCancelButton(b)
+                prog.setLabelText(text + "\nWord отвечает дольше обычного.")
+                prog.canceled.connect(give_up)
+
         th.finished.connect(loop.quit)
+        QTimer.singleShot(self.WORD_SKIP_MS, prog, offer_skip)
+        QTimer.singleShot(self.WORD_WAIT_MS, loop, give_up)
         th.start()
+        prog.show()
         if th.isRunning():
             loop.exec()
-        th.wait()
-        prog.close()
+        prog.hide()
         prog.deleteLater()
+        if th.isRunning():                              # Word так и не ответил
+            if not hasattr(self, "_word_stuck"):
+                self._word_stuck = []
+            self._word_stuck.append(th)                  # поток доработает сам; держим ссылку, чтобы его не удалили
+            try:
+                AI.word_kill_hung()
+            except Exception:
+                pass
+            if str(path).lower().endswith(".docx"):
+                try:
+                    return {"res": (AI.docx_simple_pdf(path), "simple"), "stuck": True}
+                except Exception as e:
+                    return {"err": f"Word не ответил, а без него документ не открылся: {e}"}
+            return {"err": "Microsoft Word не ответил. Закройте окна Word, если они открыты, и попробуйте ещё раз."}
+        th.wait()
+        return box
+
+    def open_word(self, path, quiet=False):
+        """Открыть документ Word: в программе появляется его копия-PDF, сам файл не меняется."""
+        if getattr(self, "_word_opening", False):          # предыдущий документ ещё открывается
+            return
+        self._word_opening = True
+        try:
+            box = self.word_pdf_wait(path, "Открываю документ Word…", "Word")
+        finally:
+            self._word_opening = False
         if "res" not in box:
             QMessageBox.critical(self, "Word", "Не удалось открыть документ:\n" + box.get("err", "неизвестная ошибка"))
             return
@@ -19349,9 +19422,13 @@ class MainWindow(QMainWindow):
         self._set_document(doc, path + " (из Word)")
         msg = ("Word открыт как копия: можно проверять ИИ, ставить печать и сохранять в PDF. "
                "Править и заполнять — кнопка «Редактор» под списком файлов")
-        if how != "word":
+        if box.get("stuck"):
+            msg += ". Word не ответил — вид упрощённый, текст полный"
+            self.show_toast("Word не ответил — документ открыт в упрощённом виде. Чтобы увидеть его как в Word, "
+                            "откройте файл ещё раз", 7000)
+        elif how != "word":
             msg += ". Microsoft Word не найден — вид упрощённый, текст полный"
-        if not quiet:
+        if not quiet and not box.get("stuck"):
             self.show_toast("✔  Word открыт как копия — сам файл не меняется", 3600)
         self.statusBar().showMessage(msg, 10000)
 
