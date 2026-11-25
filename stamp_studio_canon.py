@@ -608,7 +608,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.22.6"
+APP_VERSION = "6.22.7"
 EDITION = "canon"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -9515,9 +9515,9 @@ class WordFillPage(QDialog):
         self.b_draft.setIconSize(QSize(14, 14))
         self.b_draft.setMinimumHeight(36)
         self.b_draft.setCursor(Qt.PointingHandCursor)
-        self.b_draft.setToolTip("Отложить заполнение: всё, что уже вписано, запомнится.\n"
-                                "Продолжить — раздел Word, список «Черновики» под шаблонами")
-        self.b_draft.clicked.connect(self.draft_keep)
+        self.b_draft.setToolTip("Отложить заполнение: всё, что уже вписано, запомнится, документ закроется.\n"
+                                "Продолжить — раздел Word, список «Черновики» вверху: двойной щелчок")
+        self.b_draft.clicked.connect(lambda *_: self.draft_keep())
         self.win._themed_buttons.append((self.b_draft, "pen", False))
         foot.addWidget(self.b_draft)
         self.b_save = QPushButton("Сохранить как Word…")
@@ -9544,6 +9544,29 @@ class WordFillPage(QDialog):
         v = QVBoxLayout(w)
         v.setContentsMargins(0, 0, 0, 0)
         v.setSpacing(10)
+        self.cap_draft = QLabel("ЧЕРНОВИКИ")
+        self.cap_draft.setObjectName("paneltitle")
+        self.cap_draft.setToolTip("Начатые документы: двойной щелчок — продолжить заполнение с того же места.\n"
+                                  "Правая кнопка — удалить черновик")
+        v.addWidget(self.cap_draft)
+        self.lst_draft = QListWidget()
+        self.lst_draft.setObjectName("tpllist")
+        self.lst_draft.setViewMode(QListWidget.ListMode)
+        self.lst_draft.setFlow(QListWidget.LeftToRight)
+        self.lst_draft.setResizeMode(QListWidget.Adjust)
+        self.lst_draft.setMovement(QListWidget.Static)
+        self.lst_draft.setWrapping(True)
+        self.lst_draft.setSpacing(0)
+        self.lst_draft.setIconSize(QSize(22, 22))
+        self.lst_draft.setTextElideMode(Qt.ElideRight)
+        self.lst_draft.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.lst_draft.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.lst_draft.setToolTip(self.cap_draft.toolTip())
+        self.lst_draft.itemDoubleClicked.connect(lambda it: self.draft_open(it.data(Qt.UserRole)))
+        self.lst_draft.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.lst_draft.customContextMenuRequested.connect(self._draft_menu)
+        self.lst_draft.viewport().installEventFilter(self)
+        v.addWidget(self.lst_draft, 0)
         th = QHBoxLayout()
         th.setSpacing(8)
         cap = QLabel("ШАБЛОНЫ")
@@ -9582,29 +9605,6 @@ class WordFillPage(QDialog):
         self.lst_tpl.setContextMenuPolicy(Qt.CustomContextMenu)
         self.lst_tpl.customContextMenuRequested.connect(self._tpl_menu)
         v.addWidget(self.lst_tpl, 0)
-        self.cap_draft = QLabel("ЧЕРНОВИКИ")
-        self.cap_draft.setObjectName("paneltitle")
-        self.cap_draft.setToolTip("Начатые документы: двойной щелчок — продолжить заполнение с того же места.\n"
-                                  "Правая кнопка — удалить черновик")
-        v.addWidget(self.cap_draft)
-        self.lst_draft = QListWidget()
-        self.lst_draft.setObjectName("tpllist")
-        self.lst_draft.setViewMode(QListWidget.ListMode)
-        self.lst_draft.setFlow(QListWidget.LeftToRight)
-        self.lst_draft.setResizeMode(QListWidget.Adjust)
-        self.lst_draft.setMovement(QListWidget.Static)
-        self.lst_draft.setWrapping(True)
-        self.lst_draft.setSpacing(0)
-        self.lst_draft.setIconSize(QSize(22, 22))
-        self.lst_draft.setTextElideMode(Qt.ElideRight)
-        self.lst_draft.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.lst_draft.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.lst_draft.setToolTip(self.cap_draft.toolTip())
-        self.lst_draft.itemDoubleClicked.connect(lambda it: self.draft_open(it.data(Qt.UserRole)))
-        self.lst_draft.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.lst_draft.customContextMenuRequested.connect(self._draft_menu)
-        self.lst_draft.viewport().installEventFilter(self)
-        v.addWidget(self.lst_draft, 0)
         self.zone = DropZone()
         self.zone.exts = (".docx",)
         zl = QVBoxLayout(self.zone)
@@ -9741,7 +9741,8 @@ class WordFillPage(QDialog):
         return super().eventFilter(obj, ev)
 
     # ---- черновики: отложить заполнение и вернуться
-    def draft_keep(self):
+    def draft_keep(self, close=True):
+        """Запомнить заполнение. close — закрыть документ и показать список, где черновик лежит первым."""
         if getattr(self, "wd", None) is None or not self.path:
             return
         fields = [{"i": i, "key": r["key"], "label": r["label"], "text": r["edit"].text(), "auto": bool(r.get("auto"))}
@@ -9759,7 +9760,18 @@ class WordFillPage(QDialog):
         except Exception as e:
             QMessageBox.warning(self, "Черновик", f"Не удалось сохранить черновик:\n{e}")
             return
-        self.win.show_toast("✔  Черновик сохранён — продолжить можно в разделе Word, список «Черновики»", 4200)
+        if not close:
+            self.win.show_toast("✔  Черновик сохранён", 2500)
+            return
+        did = self._draft_id
+        self.wd = None
+        self.path = ""
+        self.show_empty(True)
+        for i in range(self.lst_draft.count()):
+            if self.lst_draft.item(i).data(Qt.UserRole) == did:
+                self.lst_draft.setCurrentRow(i)
+                break
+        self.win.show_toast("✔  Черновик сохранён. Он вверху, в списке «Черновики» — двойной щелчок, чтобы продолжить", 6000)
 
     def draft_open(self, did):
         d = next((x for x in draft_list() if x["id"] == did), None)
@@ -9926,11 +9938,26 @@ class WordFillPage(QDialog):
             QMessageBox.warning(self, "Шаблон", f"Не удалось удалить:\n{e}")
         self.tpl_reload()
 
+    def _ask_unsaved(self):
+        """Документ не сохранён: 'keep' — в черновик, 'drop' — закрыть так, '' — остаться."""
+        box = QMessageBox(QMessageBox.Question, "Редактор Word",
+                          "Документ не сохранён.\n\nОтложить его в черновик, чтобы потом продолжить с того же места?",
+                          QMessageBox.NoButton, self)
+        b_keep = box.addButton("В черновик", QMessageBox.AcceptRole)
+        b_drop = box.addButton("Закрыть без сохранения", QMessageBox.DestructiveRole)
+        box.addButton("Отмена", QMessageBox.RejectRole)
+        box.setDefaultButton(b_keep)
+        box.exec()
+        return "keep" if box.clickedButton() is b_keep else "drop" if box.clickedButton() is b_drop else ""
+
     def to_templates(self):
         """Закрыть документ и вернуться к списку шаблонов."""
         if self.wd is not None and self.view.changed_paragraphs():
-            if QMessageBox.question(self, "Редактор Word", "Документ не сохранён. Закрыть его без сохранения?",
-                                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+            how = self._ask_unsaved()
+            if how == "keep":
+                self.draft_keep()
+                return
+            if how != "drop":
                 return
         self.wd = None
         self.path = ""
@@ -10552,7 +10579,12 @@ class WordFillPage(QDialog):
     def _recalc(self):
         """«Итого» и «Общая стоимость» — сумма остальных сумм той же таблицы; составные значения."""
         for tot in self.rows:
-            if not tot.get("total") or tot["edit"] is None or not (not tot["edit"].text().strip() or tot["auto"]):
+            if not tot.get("total") or tot["edit"] is None:
+                continue
+            # готовый документ: итог, который не правили руками, сдвигается на ту же разницу, что и слагаемые
+            ready = bool(tot["current"]) and not tpl_is(self.path) and not tot["auto"] \
+                and tot["edit"].text().strip() in (tot["current"], tot.get("moved", "\0"))
+            if not (not tot["edit"].text().strip() or tot["auto"] or ready):
                 continue
             parts = [r for r in self.rows if r is not tot and (r["kind"] == "sum" or (r["kind"] == "cell" and r["key"].startswith("sum_")))
                      and not r.get("total")
@@ -10571,6 +10603,18 @@ class WordFillPage(QDialog):
             if not nums or any(x is None for x in nums):
                 continue
             kop = sum(w * 100 + f for w, f in nums)
+            if ready:
+                was = SW.parse_number(tot["current"])
+                if "base" not in tot or was is None:
+                    tot["base"] = kop                     # сумма слагаемых на момент открытия
+                    continue
+                kop = was[0] * 100 + was[1] + (kop - tot["base"])
+                text = SW.format_number(kop // 100) + (f",{kop % 100:02d}" if kop % 100 else "")
+                if tot["edit"].text().strip() != text and kop >= 0:
+                    tot["edit"].setText(text)
+                    tot["moved"] = text
+                    self._write(tot, text)
+                continue
             text = SW.format_number(kop // 100) + (f",{kop % 100:02d}" if kop % 100 else "")
             if tot["edit"].text().strip() != text:
                 tot["edit"].setText(text)
@@ -14600,7 +14644,9 @@ class InstallmentPage(QDialog):
         box = QGroupBox("Суммы, российские рубли")
         f = QFormLayout(box)
         f.setSpacing(7)
-        self.ed_cost = edit("стоимость автомобиля")
+        self.ed_cost = edit("вся стоимость по договору, с вознаграждением")
+        self.ed_cost.setToolTip("Общая стоимость по договору: автомобиль, таможня, доставка и вознаграждение исполнителя.\n"
+                                "Берётся из карточки клиента; можно вписать свою")
         self.ed_cost.textEdited.connect(lambda *_: self._auto_amount())
         self.ed_customs = edit("необязательно — попадёт в приложение")
         self.ed_first = edit("первый взнос")
@@ -14725,8 +14771,14 @@ class InstallmentPage(QDialog):
         except Exception:
             card = {}
         took = []
+        nums = {k: (INST._d(str(card.get(k) or "")) if SW.parse_number(str(card.get(k) or "")) is not None else None) for k in ("sum_total", "sum_car", "sum_customs", "sum_fee", "sum_delivery")}
+        full = nums["sum_total"]                          # вся стоимость по договору, с вознаграждением исполнителя
+        if full is None and nums["sum_car"] is not None:
+            full = sum(v for v in nums.values() if v is not None)
+        card = dict(card)
+        card["_full"] = INST.money(full).replace(",00", "") if full is not None else ""
         for ed, key, name in ((self.ed_no, "contract_no", "номер договора"), (self.ed_date, "contract_date", "дата"),
-                              (self.ed_cost, "sum_car", "стоимость"), (self.ed_customs, "sum_customs", "пошлина")):
+                              (self.ed_cost, "_full", "общая стоимость"), (self.ed_customs, "sum_customs", "пошлина")):
             val = str(card.get(key) or "").strip()
             if key.startswith("sum_") and SW.parse_number(val) is None:
                 val = ""

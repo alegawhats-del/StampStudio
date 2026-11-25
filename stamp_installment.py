@@ -127,6 +127,10 @@ def payment_phrase(res):
     return f"{money(body[0])} ₽"
 
 
+HEAD_FILL = "FDF4EC"       # шапка таблицы платежей — бледно-персиковая
+TOTAL_FILL = "EDF7EE"      # строка «Итого» — бледно-зелёная
+
+
 def summary(res):
     if res.get("error"):
         return ""
@@ -199,6 +203,18 @@ def _table(doc, res, font_pt=9.5):
         for c, key in enumerate(("debt", "principal", "interest", "payment"), 1):
             put(t.cell(k, c), money(x[key]))
     last = len(rows) + 1
+
+    def shade(row, color):                              # бледная заливка строки: шапка и итог
+        for cell in t.rows[row].cells:
+            tcpr = cell._tc.get_or_add_tcPr()
+            sh = OxmlElement("w:shd")
+            sh.set(qn("w:val"), "clear")
+            sh.set(qn("w:color"), "auto")
+            sh.set(qn("w:fill"), color)
+            tcpr.append(sh)
+
+    shade(0, HEAD_FILL)
+    shade(last, TOTAL_FILL)
     put(t.cell(last, 0), "Итого", bold=True, align=WD_ALIGN_PARAGRAPH.CENTER)
     put(t.cell(last, 2), money(res["principal_total"]), bold=True)
     put(t.cell(last, 3), money(res["interest_total"]), bold=True)
@@ -230,7 +246,7 @@ def build_docx(template, data, res, out_path):
             _set_par(p, f"Сумма первого взноса – {num(data.get('first'))} российских рублей." if num(data.get("first")) else "")
         elif re.match(r"Сумма [\d\s ,]+российских рублей в рассрочку", t):
             _set_par(p, f"Сумма {money(res['amount'])} российских рублей в рассрочку под {rate_phrase(res)} "
-                        f"на {months_text(res['months'])}. График платежей — {kind}.")
+                        f"на {months_text(res['months'])}.")
         elif t.startswith("Сумма платежа в месяц"):
             _set_par(p, f"Сумма платежа в месяц: {payment_phrase(res)}")
         elif t.startswith("Сумма рассрочки"):
