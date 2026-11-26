@@ -608,7 +608,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.22.12"
+APP_VERSION = "6.22.13"
 EDITION = "main"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -857,6 +857,38 @@ def tpl_seed() -> int:
         st["tpl_seeded"] = done
         settings_save(st)
     return n
+
+
+TPL_OLD_DIR = os.path.join(LIB_DIR, "templates_backup")
+TPL_OLD_KEEP = 10
+
+
+def tpl_backups(path):
+    """Прежние версии шаблона, свежая первой."""
+    stem = os.path.splitext(os.path.basename(path))[0]
+    try:
+        names = [n for n in os.listdir(TPL_OLD_DIR) if n.lower().endswith(".docx") and n.startswith(stem + " @")]
+    except OSError:
+        return []
+    return [os.path.join(TPL_OLD_DIR, n) for n in sorted(names, reverse=True)]
+
+
+def tpl_backup(path):
+    """Копия шаблона перед правкой; хранится несколько последних."""
+    os.makedirs(TPL_OLD_DIR, exist_ok=True)
+    stem = os.path.splitext(os.path.basename(path))[0]
+    base = os.path.join(TPL_OLD_DIR, f"{stem} @{time.strftime('%Y%m%d-%H%M%S')}")
+    out, k = base + ".docx", 1
+    while os.path.exists(out):
+        k += 1
+        out = f"{base}-{k}.docx"
+    shutil.copy2(path, out)
+    for old in tpl_backups(path)[TPL_OLD_KEEP:]:
+        try:
+            os.remove(old)
+        except OSError:
+            pass
+    return out
 
 
 def tpl_is(path) -> bool:
@@ -9437,6 +9469,7 @@ class WordFillPage(QDialog):
         head.addWidget(self.b_drafts)
         ttl = QLabel("РЕДАКТОР WORD")
         ttl.setObjectName("paneltitle")
+        self.lbl_ttl = ttl
         head.addWidget(ttl)
         self.lbl_doc = QLabel("")
         self.lbl_doc.setObjectName("hint")
@@ -9485,6 +9518,7 @@ class WordFillPage(QDialog):
         self.ed_all_date.textChanged.connect(self._spread_date)
         drow.addWidget(self.ed_all_date, 1)
         b_today = QPushButton("Сегодня")
+        self.b_today = b_today
         b_today.clicked.connect(lambda: self.ed_all_date.setText(AI.today().strftime("%d.%m.%Y")))
         drow.addWidget(b_today)
         side.addLayout(drow)
@@ -9705,7 +9739,7 @@ class WordFillPage(QDialog):
         self.cap_draft.setVisible(has)
         self.lst_draft.setVisible(has)
         self._tpl_fit()
-        self.lbl_tpl.setText("двойной щелчок — открыть  ·  правая кнопка — переименовать, постоянные реквизиты" if items else
+        self.lbl_tpl.setText("двойной щелчок — открыть  ·  правая кнопка — изменить шаблон, переименовать" if items else
                              "пока пусто — добавьте файл Word; то, что в нём меняется, выделите жёлтым")
 
     TPL_ROW = 40
@@ -9776,6 +9810,9 @@ class WordFillPage(QDialog):
     def draft_keep(self, close=True):
         """Запомнить заполнение. close — закрыть документ и показать список, где черновик лежит первым."""
         if getattr(self, "wd", None) is None or not self.path:
+            return
+        if self._tpl_mode:                               # у шаблона черновика нет — правки пишутся в сам шаблон
+            self.tpl_save(close)
             return
         fields = [{"i": i, "key": r["key"], "label": r["label"], "text": r["edit"].text(), "auto": bool(r.get("auto"))}
                   for i, r in enumerate(self.rows) if r["edit"] is not None and r["edit"].text().strip()]
@@ -9991,12 +10028,112 @@ class WordFillPage(QDialog):
         col = self.win._icon_color()
         m = QMenu(self)
         m.addAction(draw_icon("word", col), "Открыть", lambda: self.win.word_fill(path))
+        m.addAction(draw_icon("pen", col), "Изменить шаблон…", lambda: self.tpl_edit(path))
+        if self.tpl_fixed_fields_safe(path):
+            m.addAction(draw_icon("datalist", col), "Постоянные реквизиты шаблона…", lambda: self.tpl_fixed_dialog(path))
         m.addAction(draw_icon("pen", col), "Переименовать…", lambda: self.tpl_rename_dialog(path))
         m.addAction(draw_icon("refresh", col), "Заменить файлом…", lambda: self.tpl_replace_dialog(path))
-        m.addAction(draw_icon("datalist", col), "Постоянные реквизиты шаблона…", lambda: self.tpl_fixed_dialog(path))
+        if tpl_backups(path):
+            m.addAction(draw_icon("refresh", col), "Вернуть прежнюю версию", lambda: self.tpl_undo(path))
         m.addSeparator()
         m.addAction(draw_icon("trash", col), "Удалить из шаблонов", lambda: self.tpl_delete(path))
         self._menu_show(m, self.lst_tpl.viewport().mapToGlobal(pos))
+
+    _tpl_mode = False
+
+    def tpl_fixed_fields_safe(self, path):
+        try:
+            return self.tpl_fixed_fields(path)
+        except Exception:
+            return []
+
+    def tpl_edit(self, path):
+        """Править сам шаблон: текст меняется прямо в документе и сохраняется в шаблон, а не в папку клиента."""
+        if not os.path.exists(path):
+            return
+        self._tpl_next = True
+        self.wd = None                                   # перечитать с диска, даже если этот шаблон уже открыт
+        self.win.word_fill(path)
+        self._tpl_next = False
+
+    def _tpl_ui(self):
+        """Вид редактора: обычное заполнение или правка шаблона."""
+        on = self._tpl_mode
+        self.lbl_ttl.setText("ПРАВКА ШАБЛОНА" if on else "РЕДАКТОР WORD")
+        self.b_save.setText("Сохранить шаблон" if on else "Сохранить как Word…")
+        self.b_save.setToolTip("Записать правки в сам шаблон. Прежняя версия сохраняется — её можно вернуть\n"
+                               "правой кнопкой по шаблону: «Вернуть прежнюю версию»." if on else
+                               "Сохранить документ новым файлом Word. Исходный файл остаётся нетронутым.")
+        for w in (self.sc, self.ed_all_date, self.b_today):
+            w.setEnabled(not on)
+        if on:
+            self.lbl_cnt.setText("поля шаблона — здесь только для справки")
+            self.sc.setToolTip("Идёт правка шаблона: поля не заполняются. Меняйте текст прямо в документе слева.")
+        else:
+            self.sc.setToolTip("")
+
+    def tpl_save(self, close=True):
+        """Записать правки в сам шаблон (с копией прежней версии). True — записано."""
+        if self.wd is None or not self.path:
+            return False
+        edits = self.view.changed_paragraphs()
+        if not edits:
+            QMessageBox.information(self, "Шаблон", "В шаблоне пока ничего не изменено.")
+            return False
+        path = self.path
+        tmp = path + ".new"
+        try:
+            tpl_backup(path)
+            fresh = SW.WordDoc(path)
+            fresh.apply(None, None, edits)               # без finish и без снятия выделений: поля шаблона остаются полями
+            fresh.doc.save(tmp)
+            SW.WordDoc(tmp)                              # файл читается — только тогда он встаёт на место шаблона
+            os.replace(tmp, path)
+        except Exception as e:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            QMessageBox.warning(self, "Шаблон", f"Не удалось сохранить шаблон:\n{e}")
+            return False
+        name = os.path.splitext(os.path.basename(path))[0]
+        if close:
+            self.wd = None
+            self.path = ""
+            self._tpl_mode = False
+            self._tpl_ui()
+            self.show_empty(True)
+        else:
+            self._tpl_next = True
+            self.load(path)
+            self._tpl_next = False
+            self.show_empty(False)
+        self.win.show_toast(f"✔  Шаблон «{name}» сохранён", 3500)
+        return True
+
+    def tpl_undo(self, path):
+        """Вернуть шаблон к версии до последней правки."""
+        olds = tpl_backups(path)
+        if not olds:
+            return
+        name = os.path.splitext(os.path.basename(path))[0]
+        when = time.strftime("%d.%m.%Y %H:%M", time.localtime(os.path.getmtime(olds[0])))
+        box = QMessageBox(QMessageBox.Question, "Шаблон",
+                          f"Вернуть шаблон «{name}» к версии от {when}?\n\nНынешний текст шаблона будет заменён.",
+                          QMessageBox.NoButton, self)
+        b_ok = box.addButton("Вернуть", QMessageBox.AcceptRole)
+        box.addButton("Отмена", QMessageBox.RejectRole)
+        box.exec()
+        if box.clickedButton() is not b_ok:
+            return
+        try:
+            shutil.copy2(olds[0], path)
+            os.remove(olds[0])
+        except OSError as e:
+            QMessageBox.warning(self, "Шаблон", f"Не удалось вернуть прежнюю версию:\n{e}")
+            return
+        self.tpl_reload()
+        self.win.show_toast(f"✔  Шаблон «{name}» возвращён к версии от {when}", 3500)
 
     @staticmethod
     def tpl_fixed_fields(path):
@@ -10115,6 +10252,15 @@ class WordFillPage(QDialog):
 
     def _ask_unsaved(self):
         """Документ не сохранён: 'keep' — в черновик, 'drop' — закрыть так, '' — остаться."""
+        if self._tpl_mode:
+            box = QMessageBox(QMessageBox.Question, "Шаблон", "Шаблон изменён.\n\nСохранить правки в шаблон?",
+                              QMessageBox.NoButton, self)
+            b_keep = box.addButton("Сохранить шаблон", QMessageBox.AcceptRole)
+            b_drop = box.addButton("Не сохранять", QMessageBox.DestructiveRole)
+            box.addButton("Отмена", QMessageBox.RejectRole)
+            box.setDefaultButton(b_keep)
+            box.exec()
+            return "keep" if box.clickedButton() is b_keep else "drop" if box.clickedButton() is b_drop else ""
         box = QMessageBox(QMessageBox.Question, "Редактор Word",
                           "Документ не сохранён.\n\nОтложить его в черновик, чтобы потом продолжить с того же места?",
                           QMessageBox.NoButton, self)
@@ -10136,6 +10282,9 @@ class WordFillPage(QDialog):
                 return
         self.wd = None
         self.path = ""
+        if self._tpl_mode:
+            self._tpl_mode = False
+            self._tpl_ui()
         self.show_empty(True)
 
     def pick(self):
@@ -10151,6 +10300,9 @@ class WordFillPage(QDialog):
         self.body_w.setVisible(not on)
         for wdg in (self.b_save, self.b_draft, self.chk_pdf, self.lbl_client, self.b_card, self.b_dir, self.b_tpl):
             wdg.setVisible(not on)
+        if not on and self._tpl_mode:                    # шаблон — не документ клиента: ни черновика, ни карточки
+            for wdg in (self.b_draft, self.chk_pdf, self.lbl_client, self.b_card, self.b_dir):
+                wdg.setVisible(False)
         if on:
             self.tpl_reload()
             self.zone._paint()
@@ -10375,6 +10527,7 @@ class WordFillPage(QDialog):
     def load(self, path):
         self.wd = SW.WordDoc(path)
         self.path = path
+        self._tpl_mode = bool(getattr(self, "_tpl_next", False)) and tpl_is(path)
         self._extras_data = []                       # доп. услуги — у каждого документа свои
         self._draft_id = ""
         self._draft_sig = None
@@ -10521,6 +10674,12 @@ class WordFillPage(QDialog):
         self.rows = rows
         self.client_dir = self.win.current_dir() if tpl_is(path) else os.path.dirname(path)   # шаблон — в папку клиента
         self._build_panel()
+        self._tpl_ui()
+        if self._tpl_mode:                               # правка шаблона: в документ ничего не подставляется
+            self._paint_marks()
+            self.lbl_info.setText("Правка шаблона: меняйте текст прямо в документе — щёлкните и печатайте, или «Найти и "
+                                  "заменить». Подсвеченные места остаются полями. Потом — «Сохранить шаблон».")
+            return
         for r in rows:                                   # запомненные постоянные реквизиты — сразу в документ
             if r.get("fixed") and r["current"] and r["edit"] is not None:
                 self._write(r, r["current"])
@@ -11649,6 +11808,9 @@ class WordFillPage(QDialog):
     # ---- сохранение
     def save(self):
         if not self.wd:
+            return
+        if self._tpl_mode:
+            self.tpl_save()
             return
         for r in self.rows:                                # второго телефона нет — образец «+7(000) 000-00-00» убирается
             if r["key"] == "phone" and r["kind"] == "dummy" and r["edit"] is not None and not r["edit"].text().strip():
