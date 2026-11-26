@@ -608,7 +608,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.22.13"
+APP_VERSION = "6.22.14"
 EDITION = "main"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -12001,7 +12001,7 @@ class WordFillPage(QDialog):
         for nm, am in getattr(self, "_extras_data", []):
             if bool(nm) != bool(am):
                 out.append((f"доп. услуга «{nm or am}»: нужны и название, и сумма — иначе строка не попадёт в документ", None))
-            elif am and SW.parse_number(am) is None:
+            elif am and SW.parse_number(am) is None and re.search(r"\d", am):   # «Бесплатно» словом — так и задумано
                 out.append((f"доп. услуга «{nm}»: сумма «{am}» — не число, в итог не войдёт", None))
         uniq, seen = [], set()
         for t, r in out:                                  # одно и то же из двух мест документа — один раз
