@@ -36,7 +36,7 @@ DICT = {
              ("CVT", "Вариатор"), ("Automatikgetriebe", "АКПП"), ("Manuell", "МКПП"),
              ("Handschaltung", "МКПП"), ("DSG", "Робот")],
     "body": [("Crossover", "Кроссовер"), ("SUV", "Внедорожник"), ("Limousine", "Седан"), ("Kombi", "Универсал"),
-             ("Schrägheck", "Хэтчбек"), ("Coupé", "Купе"), ("Cabrio", "Кабриолет"), ("Van", "Минивэн"),
+             ("Schrägheck", "Хэтчбек"), ("Fließheck", "Лифтбек"), ("Coupé", "Купе"), ("Cabrio", "Кабриолет"), ("Van", "Минивэн"),
              ("Kleinbus", "Микроавтобус"), ("Pickup", "Пикап"), ("Transporter", "Фургон"),
              ("SUV", "Кроссовер"), ("Geländewagen", "Внедорожник")],
     "fuel": [("Benzin", "Бензин"), ("Diesel", "Дизель"), ("Benzin/Hybrid", "Бензин/Гибрид"),
@@ -639,7 +639,7 @@ def selftest():
     assert variants("drive", 1) == ["Полный", "Передний", "Задний"] and "Vorderradantrieb" in variants("drive", 0)
     keep = dict(EXTRA)
     try:
-        assert learn("body", "Fließheck", "Лифтбек") and not learn("body", "suv", "кроссовер") and not learn("body", "Crossover", "Кроссовер")
+        assert learn("body", "Roadster", "Родстер") and not learn("body", "suv", "кроссовер") and not learn("body", "Crossover", "Кроссовер")
         assert translate("body", "Кроссовер", "de") == "Crossover" and variants("body", 0).count("SUV") == 1 and translate("body", "SUV", "ru") == "Внедорожник"
         assert learn("color", "Himmelblau", "Небесный") and translate("color", "небесный", "de") == "Himmelblau"
     finally:
