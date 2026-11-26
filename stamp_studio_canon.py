@@ -608,7 +608,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.22.10"
+APP_VERSION = "6.22.11"
 EDITION = "canon"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -5961,6 +5961,11 @@ class SheetPlaceDialog(QDialog):
         lr.addWidget(self.rb_new)
         lr.addStretch(1)
         side.addWidget(box_r)
+        self.chk_scan = QCheckBox("Сразу сделать «как скан»")
+        self.chk_scan.setToolTip("После размещения лист сразу обрабатывается «как скан» — обычный, цветной, 190 dpi.\n"
+                                 "Не нужно отдельно нажимать «Как скан». Галочка запоминается.")
+        self.chk_scan.setChecked(bool(settings_load().get("sheet_scan", False)))
+        side.addWidget(self.chk_scan)
         side.addStretch(1)
 
         bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
@@ -19725,6 +19730,11 @@ class MainWindow(QMainWindow):
             return
         t = dlg.template()
         to_new = dlg.rb_new.isChecked()
+        as_scan = dlg.chk_scan.isChecked()
+        st_ = settings_load()
+        if bool(st_.get("sheet_scan", False)) != as_scan:
+            st_["sheet_scan"] = as_scan
+            settings_save(st_)
         sw, sh = t["sheet"]
         QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
@@ -19746,6 +19756,13 @@ class MainWindow(QMainWindow):
                         pg.insert_image(pg.rect, stream=made[i])
                     else:
                         new.insert_pdf(self.doc, from_page=i, to_page=i)
+            if as_scan:                                   # сразу «как скан» — те же листы, обычный цветной скан
+                QApplication.processEvents()
+                import random as _rnd
+                scanned = build_scan_look_doc(new, None if to_new else sorted(made), 190, "normal", True,
+                                              _rnd.randint(1, 999999), show_bed=False, show_back=False)
+                new.close()
+                new = scanned
         except Exception as e:
             QApplication.restoreOverrideCursor()
             src.close()
@@ -19754,7 +19771,7 @@ class MainWindow(QMainWindow):
         QApplication.restoreOverrideCursor()
         src.close()
         if to_new:
-            self._scan_look_save_new(new, len(pages), suffix="на листе")
+            self._scan_look_save_new(new, len(pages), suffix="на листе скан" if as_scan else "на листе")
             return
         n = self.doc.page_count
         self.doc.insert_pdf(new)
@@ -19770,7 +19787,8 @@ class MainWindow(QMainWindow):
         self.refresh_page_list(idx)
         self.show_page(idx)
         self._update_ui_state()
-        self.show_toast(f"✔  Размещено на листе — страниц: {len(pages)}. Сохраните (Ctrl+S)")
+        self.show_toast(f"✔  Размещено на листе{' и сделано «как скан»' if as_scan else ''} — страниц: {len(pages)}. "
+                        f"Сохраните (Ctrl+S)")
 
     def scan_look(self):
         """Сделать документ «как напечатали и отсканировали»."""
