@@ -608,7 +608,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.22.14"
+APP_VERSION = "6.22.15"
 EDITION = "main"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -889,6 +889,58 @@ def tpl_backup(path):
         except OSError:
             pass
     return out
+
+
+TPL_FIXES = 1                                        # номер набора правок; новый набор — число больше
+_INCORP = "Республика Беларусь, Фрунзенский район, г. Минск, ул. Бельского, 4, пом. 1Н"
+TPL_FIX_RULES = (
+    (re.compile(r"(?:Республика Беларусь,\s*)?(?:г\.\s*)?Минск, ул\. Одоевского,? 115\s?А,? (?:помещение|пом\.) 256"), _INCORP),
+    (re.compile(r"Республика Беларусь, г\. Минск, ул\. Бельского, д\. 4, пом\. 1Н"), _INCORP),
+    (re.compile(r"ул\. Сторожевская, (?:д\. )?8(?![\d/])(?!, ком)"), "ул. Сторожевская, д. 8, ком. 105/3"),
+    (re.compile(r"Minsk, ul\. Storozhevskaya 8(?!\d)(?!, Raum)"), "Minsk, ul. Storozhevskaya 8, Raum 105/3"),
+)
+
+
+def tpl_fix_texts(force=False) -> int:
+    """Сменившиеся адреса компаний — во всех шаблонах пользователя, в том числе переименованных и правленых.
+    Меняется только сам адрес; прежняя версия шаблона сохраняется. Делается один раз на набор правок."""
+    st = settings_load()
+    if not force and int(st.get("tpl_fix") or 0) >= TPL_FIXES:
+        return 0
+    n = 0
+    try:
+        names = [x for x in os.listdir(TPL_DIR) if x.lower().endswith(".docx") and not x.startswith("~$")]
+    except OSError:
+        names = []
+    for name in names:
+        path = os.path.join(TPL_DIR, name)
+        tmp = path + ".new"
+        try:
+            wd = SW.WordDoc(path)
+            k = 0
+            for i in range(len(wd.pars)):
+                old = wd.text(i)
+                new = old
+                for pat, to in TPL_FIX_RULES:
+                    new = pat.sub(to, new)
+                if new != old:
+                    wd._set_text(i, new)
+                    k += 1
+            if k:
+                tpl_backup(path)
+                wd.doc.save(tmp)
+                SW.WordDoc(tmp)
+                os.replace(tmp, path)
+                n += 1
+        except Exception:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+    st = settings_load()
+    st["tpl_fix"] = TPL_FIXES
+    settings_save(st)
+    return n
 
 
 def tpl_is(path) -> bool:
@@ -9708,6 +9760,9 @@ class WordFillPage(QDialog):
     def tpl_reload(self):
         self.lst_tpl.clear()
         tpl_seed()
+        fixed = tpl_fix_texts()
+        if fixed:
+            QTimer.singleShot(600, lambda: self.win.show_toast(f"✔  В шаблонах обновлены адреса компаний: {fixed}", 5000))
         items = tpl_list()
         ic = draw_icon("word", self.win._icon_color())
         for name, path in items:
