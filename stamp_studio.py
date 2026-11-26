@@ -608,7 +608,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.22.11"
+APP_VERSION = "6.22.12"
 EDITION = "main"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -9705,7 +9705,7 @@ class WordFillPage(QDialog):
         self.cap_draft.setVisible(has)
         self.lst_draft.setVisible(has)
         self._tpl_fit()
-        self.lbl_tpl.setText("двойной щелчок — открыть  ·  правая кнопка — переименовать" if items else
+        self.lbl_tpl.setText("двойной щелчок — открыть  ·  правая кнопка — переименовать, постоянные реквизиты" if items else
                              "пока пусто — добавьте файл Word; то, что в нём меняется, выделите жёлтым")
 
     TPL_ROW = 40
@@ -9993,9 +9993,88 @@ class WordFillPage(QDialog):
         m.addAction(draw_icon("word", col), "Открыть", lambda: self.win.word_fill(path))
         m.addAction(draw_icon("pen", col), "Переименовать…", lambda: self.tpl_rename_dialog(path))
         m.addAction(draw_icon("refresh", col), "Заменить файлом…", lambda: self.tpl_replace_dialog(path))
+        m.addAction(draw_icon("datalist", col), "Постоянные реквизиты шаблона…", lambda: self.tpl_fixed_dialog(path))
         m.addSeparator()
         m.addAction(draw_icon("trash", col), "Удалить из шаблонов", lambda: self.tpl_delete(path))
         self._menu_show(m, self.lst_tpl.viewport().mapToGlobal(pos))
+
+    @staticmethod
+    def tpl_fixed_fields(path):
+        """Постоянные (выделенные не жёлтым) места шаблона: [(подпись, образец)] — без повторов, по порядку."""
+        wd = SW.WordDoc(path)
+        seen, out = set(), []
+        for h in wd.highlights:
+            if h.get("fixed") and h["text"] not in seen:
+                seen.add(h["text"])
+                label = re.sub(r"\s+", " ", (h.get("label") or h.get("before") or "")).strip(" :")
+                out.append((label[-48:] or h["text"][:48], h["text"]))
+        return out
+
+    def tpl_fixed_dialog(self, path):
+        """Отдельное окно: поменять постоянные реквизиты шаблона (продавец, счёт и т. п.), не создавая документ."""
+        try:
+            fields = self.tpl_fixed_fields(path)
+        except Exception as e:
+            QMessageBox.warning(self, "Шаблон", f"Не удалось прочитать шаблон:\n{e}")
+            return
+        name = os.path.splitext(os.path.basename(path))[0]
+        if not fields:
+            QMessageBox.information(self, "Постоянные реквизиты",
+                                    f"В шаблоне «{name}» нет постоянных реквизитов.\n\n"
+                                    "Постоянным становится место, выделенное в Word любым цветом, кроме жёлтого "
+                                    "(например, зелёным): его вписывают один раз, и программа подставляет его сама.")
+            return
+        tid = os.path.basename(path).lower()
+        memo = dict((settings_load().get("tpl_fixed") or {}).get(tid, {}))
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Постоянные реквизиты шаблона")
+        dlg.setMinimumWidth(560)
+        v = QVBoxLayout(dlg)
+        v.setContentsMargins(18, 16, 18, 14)
+        v.setSpacing(8)
+        cap = QLabel(name)
+        cap.setObjectName("paneltitle")
+        v.addWidget(cap)
+        tip = QLabel("Эти данные одинаковы во всех документах из этого шаблона. Поменяйте здесь — и они будут "
+                     "подставляться сами. Документ при этом не создаётся.")
+        tip.setObjectName("hint")
+        tip.setWordWrap(True)
+        v.addWidget(tip)
+        form = QFormLayout()
+        form.setSpacing(8)
+        edits = []
+        for label, sample in fields:
+            e = QLineEdit(str(memo.get(sample, "")))
+            e.setPlaceholderText(f"в шаблоне: {sample}")
+            e.setToolTip(f"В шаблоне на этом месте стоит образец: {sample}")
+            e.setMinimumHeight(34)
+            form.addRow(label + ":", e)
+            edits.append((sample, e))
+        v.addLayout(form)
+        bb = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
+        bb.button(QDialogButtonBox.Save).setText("Сохранить")
+        bb.button(QDialogButtonBox.Cancel).setText("Отмена")
+        bb.accepted.connect(dlg.accept)
+        bb.rejected.connect(dlg.reject)
+        v.addWidget(bb)
+        self._fixed_dlg = dlg
+        if dlg.exec() != QDialog.Accepted:
+            return
+        st = settings_load()
+        box = st.setdefault("tpl_fixed", {}).setdefault(tid, {})
+        for sample, e in edits:
+            val = e.text().strip()
+            if val:
+                box[sample] = val
+            else:
+                box.pop(sample, None)
+        settings_save(st)
+        if getattr(self, "wd", None) is not None and self.path and self._tpl_id() == tid:   # шаблон открыт — обновить поля
+            for r in self.rows:
+                if r.get("fixed") and r["edit"] is not None and r["sample"] in box and r["edit"].text() != box[r["sample"]]:
+                    r["edit"].setText(box[r["sample"]])
+                    self._typed(r, box[r["sample"]], spread=False)
+        self.win.show_toast(f"✔  Постоянные реквизиты шаблона «{name}» сохранены", 3500)
 
     def tpl_rename_dialog(self, path):
         old = os.path.splitext(os.path.basename(path))[0]
