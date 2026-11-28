@@ -608,7 +608,7 @@ QProgressBar::chunk { background: #d69a33; border-radius: 3px; }
 SETTINGS_JSON = os.path.join(LIB_DIR, "settings.json")
 
 # ---------------------------------------------------------------- версия и обновления
-APP_VERSION = "6.22.16"
+APP_VERSION = "6.22.17"
 EDITION = "canon"                 # main — основная, canon — для сканеров Canon
 APP_TITLE = "Stamp Studio" + (" Canon" if EDITION == "canon" else "")
 GITHUB_URL = "https://github.com/alegawhats-del/StampStudio"
@@ -12781,7 +12781,7 @@ class LkpBoard(QWidget):
                          else "Износ, %  (только число)")
             if name in ACT.PERCENT_BOXES:                # окошко у колеса: сюда пишется износ в процентах
                 e.setPlaceholderText("%")
-                e.setToolTip("Износ диска и колодок, %. Впишите число — знак «%» добавится сам. Не меряли — «-/-»")
+                e.setToolTip("Износ диска и колодок, %. Впишите число — знак «%» добавится сам. Не меряли — «-»")
                 e.editingFinished.connect(lambda ed=e: ed.setText(ACT.percent_value(ed.text())))
             if old.get(name):
                 e.setText(old[name])
@@ -12838,10 +12838,16 @@ class LkpBoard(QWidget):
             v = str((vals or {}).get(k, ""))
             e.setText(ACT.percent_value(v) if k in ACT.PERCENT_BOXES else v)
 
-    def fill_empty(self, text="-/-"):
+    def fill_empty(self, text=None):
+        """Прочерк в пустые окошки: элемент кузова — «-/-», износ диска и колодок у колеса — «-»."""
         for k, e in self.edits.items():
             if k.startswith("b") and not e.text().strip():
-                e.setText(text)
+                e.setText(text or ("-" if k in ACT.PERCENT_BOXES else "-/-"))
+
+    def fill_gaps(self):
+        """Замеры вписаны, но часть окошек пропущена — в них встаёт прочерк. Пустая схема не трогается."""
+        if any(e.text().strip() for k, e in self.edits.items() if k.startswith("b")):
+            self.fill_empty()
 
 
 class ActPage(QDialog):
@@ -13156,7 +13162,8 @@ class ActPage(QDialog):
             self.cmb_kind.addItem(t, k)
         row.addWidget(self.cmb_kind)
         b = QPushButton("Прочерк в пустые окошки")
-        b.setToolTip("Вписать «-/-» во все окошки, где замера нет")
+        b.setToolTip("Вписать прочерк во все окошки, где замера нет: «-/-» для элементов кузова, «-» для колодок.\n"
+                     "Если замеры вписаны не все, при создании акта это делается само.")
         b.clicked.connect(lambda: self.board.fill_empty())
         row.addWidget(b)
         b = QPushButton("Очистить")
@@ -13682,6 +13689,7 @@ class ActPage(QDialog):
 
     # ---------------------------------------------------------- создание акта
     def make(self):
+        self.board.fill_gaps()                           # пропущенные окошки при заполненной схеме — прочерк
         d = self.form_data()
         err, warn = self.problems(d)
         if err:
